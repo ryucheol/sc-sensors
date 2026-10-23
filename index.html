@@ -144,6 +144,20 @@ function decodeRecord(dv) {
 }
 function decodeCurrent(dv) { return { temp: dv.getInt16(0, true) / 100, hum: dv.getUint8(2), volt: dv.getUint16(3, true) / 1000 }; }
 
+// CORS 우회용 JSONP: 시트의 센서별 마지막 시각을 브라우저에서 읽는다(<script> 주입).
+function jsonp(url) {
+  return new Promise((resolve, reject) => {
+    const cb = '__cb' + Math.random().toString(36).slice(2);
+    const s = document.createElement('script');
+    const timer = setTimeout(() => { cleanup(); reject(new Error('timeout')); }, 15000);
+    function cleanup() { clearTimeout(timer); try { delete window[cb]; } catch (e) {} s.remove(); }
+    window[cb] = (data) => { cleanup(); resolve(data); };
+    s.onerror = () => { cleanup(); reject(new Error('load error')); };
+    s.src = url + (url.includes('?') ? '&' : '?') + 'callback=' + cb;
+    document.body.appendChild(s);
+  });
+}
+
 // 연결 후 앵커/최신/현재값까지 확보한 컨텍스트 반환
 async function connectAndProbe(device) {
   const server = await device.gatt.connect();
@@ -231,10 +245,29 @@ async function runSync(ctx, label) {
   try {
     const { device, server, svc, counterS, anchorNowMs, bootEpoch, latest, cur } = ctx;
 
-    let startIdx = 0;
-    const known = loadSensors()[device.id];
-    if (known && Math.abs((known.bootEpoch || 0) - bootEpoch) < 300) startIdx = (known.lastIdx | 0) + 1;
-    log(`[${label}] 최신 idx=${latest.idx}, 시작 idx=${startIdx} (${startIdx === 0 ? '전체' : '증분'})`);
+    // 시작 인덱스: 시트의 해당 센서 마지막 시각을 우선(폰 바뀌어도 시트 기준으로 증분). 조회 실패 시 로컬 상태.
+    let startIdx = 0, src = '전체';
+    const cfgUrl = $('#webappUrl').value.trim();
+    let sheetDone = false;
+    if (cfgUrl) {
+      try {
+        const info = await jsonp(cfgUrl + '?sensor=' + encodeURIComponent(label));
+        const lastIso = info && info.bySensor && info.bySensor[label] && info.bySensor[label].last;
+        if (lastIso) {
+          const Tms = Date.parse(lastIso);
+          const idxOfLast = (counterS - (anchorNowMs - Tms) / 1000) / 3600 - 1;
+          startIdx = Math.max(0, Math.round(idxOfLast) - 1); // 2시간 겹침(서버가 중복제거)
+          src = '시트(' + lastIso.slice(0, 16) + ') 이후';
+          sheetDone = true;
+        }
+      } catch (e) { log(`[${label}] 시트 마지막시각 조회 실패 → 로컬 기준: ${e.message || e}`); }
+    }
+    if (!sheetDone) {
+      const known = loadSensors()[device.id];
+      if (known && Math.abs((known.bootEpoch || 0) - bootEpoch) < 300) { startIdx = (known.lastIdx | 0) + 1; src = '로컬 증분'; }
+    }
+    startIdx = Math.min(startIdx, latest.idx + 1);
+    log(`[${label}] 최신 idx=${latest.idx}, 시작 idx=${startIdx} (${src})`);
 
     let maxIdx = startIdx - 1;
     const records = [];
