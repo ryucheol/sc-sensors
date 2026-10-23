@@ -1,0 +1,270 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>농막 샤오미 센서 → 구글시트</title>
+<style>
+  :root { color-scheme: light; }
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: -apple-system, system-ui, "Segoe UI", Roboto, sans-serif;
+         background: #f5f6f8; color: #1a1a1a; padding: 16px; max-width: 640px; margin: 0 auto; }
+  h1 { font-size: 1.25rem; margin: 0 0 4px; }
+  .sub { color: #666; font-size: .85rem; margin: 0 0 16px; }
+  .card { background: #fff; border: 1px solid #e3e5e8; border-radius: 12px; padding: 14px; margin-bottom: 12px; }
+  .card h2 { font-size: 1rem; margin: 0 0 10px; }
+  label { display: block; font-size: .8rem; color: #555; margin: 8px 0 3px; }
+  input, select, button { font-size: 1rem; }
+  input[type=text], input[type=url], select { width: 100%; padding: 9px 10px; border: 1px solid #ccc;
+         border-radius: 8px; background: #fff; }
+  button { cursor: pointer; border: none; border-radius: 9px; padding: 11px 14px; font-weight: 600; }
+  .primary { background: #2f6df6; color: #fff; width: 100%; }
+  .primary:disabled { background: #9db8ef; cursor: default; }
+  .ghost { background: #eef1f5; color: #333; }
+  .row { display: flex; gap: 8px; align-items: center; }
+  .row > * { flex: 1; }
+  .reading { font-size: .85rem; color: #333; margin-top: 8px; min-height: 1.2em; }
+  .reading b { color: #000; }
+  .ok { color: #137333; } .err { color: #c5221f; } .muted { color: #888; }
+  #log { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: .72rem; white-space: pre-wrap;
+         background: #0f1115; color: #d6dae0; border-radius: 10px; padding: 10px; max-height: 240px;
+         overflow-y: auto; margin-top: 6px; }
+  details summary { cursor: pointer; font-size: .85rem; color: #2f6df6; }
+  .pill { display: inline-block; font-size: .7rem; padding: 2px 7px; border-radius: 999px; background: #eef1f5; color: #555; }
+</style>
+</head>
+<body>
+  <h1>농막 샤오미 센서 → 구글시트</h1>
+  <p class="sub">안드로이드 크롬에서 열어 사용. 시간별(최고/최저) 이력을 센서에서 읽어 시트에 증분 업로드합니다.
+     <br>※ 쓰기 전 <b>Mi Home 앱을 완전히 종료</b>하세요(센서는 한 번에 한 기기만 연결).</p>
+
+  <div class="card">
+    <h2>① 설정 <span class="pill">기기에 저장됨</span></h2>
+    <label>Apps Script 웹앱 URL (비우면 업로드 없이 미리보기)</label>
+    <input id="webappUrl" type="url" placeholder="https://script.google.com/macros/s/.../exec" autocomplete="off">
+    <label>공유 시크릿 (Code.gs의 SECRET와 동일하게)</label>
+    <input id="secret" type="text" placeholder="예: nongmak-2026" autocomplete="off">
+  </div>
+
+  <div class="card">
+    <h2>② 센서 동기화</h2>
+    <p class="sub" style="margin:0 0 10px">각 센서를 선택하고 [연결 & 동기화]를 누르세요. 브라우저가 기기 목록을 띄우면
+       <b>LYWSD03MMC</b>를 고릅니다(3개가 같은 이름이라, 위치 라벨은 아래에서 지정).</p>
+    <div id="sensors"></div>
+  </div>
+
+  <div class="card">
+    <h2>③ 로그</h2>
+    <details open><summary>진행 로그 보기</summary><div id="log"></div></details>
+  </div>
+
+<script>
+"use strict";
+
+// ── LYWSD03MMC GATT (실기기 덤프로 확인) ──
+const SERVICE      = 'ebe0ccb0-7a0a-4b0c-8a1a-6ff2997da3a6';
+const CHAR_TIME    = 'ebe0ccb7-7a0a-4b0c-8a1a-6ff2997da3a6'; // u32 부팅 후 초 (기기 시계 미설정)
+const CHAR_LATEST  = 'ebe0ccbb-7a0a-4b0c-8a1a-6ff2997da3a6'; // 최신 이력 레코드 (바로 읽기)
+const CHAR_INDEX   = 'ebe0ccba-7a0a-4b0c-8a1a-6ff2997da3a6'; // 시작 인덱스 포인터 (write 후 ccbc가 거기부터 스트림)
+const CHAR_HISTORY = 'ebe0ccbc-7a0a-4b0c-8a1a-6ff2997da3a6'; // 이력 notify (ccba에 설정된 idx부터 스트림)
+const CHAR_CURRENT = 'ebe0ccc1-7a0a-4b0c-8a1a-6ff2997da3a6'; // 현재값 (LCD 대조용)
+
+const LABELS = ['바닥외부', '내부1층', '다락'];
+const IDLE_TIMEOUT_MS = 10000;
+
+const $ = s => document.querySelector(s);
+const logEl = $('#log');
+function log(msg, cls) {
+  const t = new Date().toLocaleTimeString('ko-KR');
+  const line = `[${t}] ${msg}`;
+  logEl.textContent += (logEl.textContent ? '\n' : '') + line;
+  logEl.scrollTop = logEl.scrollHeight;
+  if (cls) console.log(line);
+}
+
+// ── 설정 저장/복원 ──
+for (const id of ['webappUrl', 'secret']) {
+  const el = $('#' + id);
+  try { el.value = localStorage.getItem('cfg_' + id) || ''; } catch (e) {}
+  el.addEventListener('change', () => { try { localStorage.setItem('cfg_' + id, el.value.trim()); } catch (e) {} });
+}
+
+// ── 센서 카드 생성 ──
+const sensorsEl = $('#sensors');
+LABELS.forEach((label, i) => {
+  const card = document.createElement('div');
+  card.style.cssText = 'border-top:1px solid #eee;padding-top:10px;margin-top:10px';
+  card.innerHTML = `
+    <div class="row">
+      <select id="label${i}">
+        ${LABELS.map(l => `<option ${l === label ? 'selected' : ''}>${l}</option>`).join('')}
+      </select>
+      <button class="primary" id="sync${i}">연결 &amp; 동기화</button>
+    </div>
+    <div class="reading" id="reading${i}"></div>`;
+  sensorsEl.appendChild(card);
+  $('#sync' + i).addEventListener('click', () => syncSensor(i));
+});
+
+// ── 이력 레코드 디코딩 (14바이트: idx u32, ts u32, maxT i16/10, maxH u8, minT i16/10, minH u8) ──
+function decodeRecord(dv) {
+  return {
+    idx:  dv.getUint32(0, true),
+    ts:   dv.getUint32(4, true),            // 부팅 후 초 ((idx+1)*3600)
+    maxT: dv.getInt16(8, true) / 10,
+    maxH: dv.getUint8(10),
+    minT: dv.getInt16(11, true) / 10,
+    minH: dv.getUint8(13),
+  };
+}
+function decodeCurrent(dv) {
+  return { temp: dv.getInt16(0, true) / 100, hum: dv.getUint8(2), volt: dv.getUint16(3, true) / 1000 };
+}
+
+async function syncSensor(i) {
+  const btn = $('#sync' + i);
+  const readingEl = $('#reading' + i);
+  const label = $('#label' + i).value;
+  btn.disabled = true;
+  let wakeLock = null;
+  let device = null;
+  try {
+    readingEl.textContent = '기기 선택 대기…';
+    log(`[${label}] requestDevice…`);
+    device = await navigator.bluetooth.requestDevice({
+      filters: [{ namePrefix: 'LYWSD03MMC' }],
+      optionalServices: [SERVICE],
+    });
+    try { wakeLock = await navigator.wakeLock.request('screen'); } catch (e) {}
+
+    log(`[${label}] 연결 중 (${device.id?.slice(0, 8) || '?'})…`);
+    const server = await device.gatt.connect();
+    const svc = await server.getPrimaryService(SERVICE);
+
+    // 시각 앵커: 기기 카운터 + 폰 현재시각을 '동시에' 확보
+    const cTime = await svc.getCharacteristic(CHAR_TIME);
+    const counterS = (await cTime.readValue()).getUint32(0, true);
+    const anchorNowMs = Date.now();
+    const bootEpoch = Math.round(anchorNowMs / 1000 - counterS); // 기기 부팅 시각(초). 배터리 교체 전까지 안정.
+
+    // 최신 레코드 (스트림 종료 기준 + LCD 대조)
+    const latest = decodeRecord(await (await svc.getCharacteristic(CHAR_LATEST)).readValue());
+    let cur = null;
+    try { cur = decodeCurrent(await (await svc.getCharacteristic(CHAR_CURRENT)).readValue()); } catch (e) {}
+    if (cur) readingEl.innerHTML = `현재값(LCD 대조): <b>${cur.temp.toFixed(1)}℃ / ${cur.hum}%</b> · 배터리 ${cur.volt.toFixed(2)}V`;
+
+    // 증분 시작 인덱스 결정 (이전 동기화 상태). 부팅시각이 바뀌면(배터리 교체 등) 전체 재수집.
+    let startIdx = 0;
+    try {
+      const st = JSON.parse(localStorage.getItem('syncState') || '{}')[device.id];
+      if (st && Math.abs((st.bootEpoch || 0) - bootEpoch) < 300) startIdx = (st.lastIdx | 0) + 1;
+    } catch (e) {}
+    log(`[${label}] 최신 idx=${latest.idx}, 시작 idx=${startIdx} (${startIdx === 0 ? '전체' : '증분'})`);
+
+    if (startIdx > latest.idx) {
+      log(`[${label}] 새 레코드 없음.`, 'ok');
+      readingEl.innerHTML += `<br><span class="ok">새 데이터 없음</span>`;
+      try { await server.disconnect(); } catch (e) {}
+      return;
+    }
+
+    // 시작 인덱스로 seek: ccba에 startIdx write (비파괴적 포인터) → 이후 ccbc가 거기부터 스트림.
+    try {
+      const cIndex = await svc.getCharacteristic(CHAR_INDEX);
+      const ibuf = new ArrayBuffer(4); new DataView(ibuf).setUint32(0, startIdx, true);
+      await cIndex.writeValue(ibuf);
+    } catch (e) { log(`[${label}] seek write 실패(전체부터 진행): ${e.message || e}`, 'err'); }
+
+    // 이력 스트림 수집
+    const cHist = await svc.getCharacteristic(CHAR_HISTORY);
+    const records = [];
+    let maxIdx = startIdx - 1;
+    await new Promise(async (resolve, reject) => {
+      let idle = null;
+      const kick = () => { clearTimeout(idle); idle = setTimeout(() => { log(`[${label}] 10초 무수신 → 종료`); done(); }, IDLE_TIMEOUT_MS); };
+      const onVal = e => {
+        const r = decodeRecord(e.target.value);
+        records.push(r);
+        if (r.idx > maxIdx) maxIdx = r.idx;
+        if (records.length % 100 === 0) log(`[${label}] …${records.length}개 (idx ${r.idx})`);
+        if (r.idx >= latest.idx) { log(`[${label}] 최신 도달 (idx ${r.idx})`); done(); }
+        else kick();
+      };
+      const onDisc = () => { log(`[${label}] 연결 끊김`, 'err'); done(); };
+      let finished = false;
+      function done() {
+        if (finished) return; finished = true;
+        clearTimeout(idle);
+        cHist.removeEventListener('characteristicvaluechanged', onVal);
+        device.removeEventListener('gattserverdisconnected', onDisc);
+        resolve();
+      }
+      device.addEventListener('gattserverdisconnected', onDisc);
+      cHist.addEventListener('characteristicvaluechanged', onVal); // 구독 '전에' 리스너 부착
+      kick();
+      try { await cHist.startNotifications(); } catch (e) { reject(e); }
+    });
+
+    try { await server.disconnect(); } catch (e) {}
+
+    // 동기화 상태 저장(다음 증분 시작점). 부분 수신이어도 받은 최대 idx까지 저장 → 다음에 이어받음.
+    if (maxIdx >= startIdx) {
+      try {
+        const map = JSON.parse(localStorage.getItem('syncState') || '{}');
+        map[device.id] = { bootEpoch, lastIdx: maxIdx };
+        localStorage.setItem('syncState', JSON.stringify(map));
+      } catch (e) {}
+    }
+
+    // 절대 시각 계산 + 업로드 페이로드
+    const rows = records.map(r => {
+      const wallEndMs = anchorNowMs - (counterS - r.ts) * 1000;
+      const hourMs = Math.round(wallEndMs / 3600000) * 3600000;
+      return { idx: r.idx, time: new Date(hourMs).toISOString(), maxT: r.maxT, minT: r.minT, maxH: r.maxH, minH: r.minH };
+    });
+    rows.sort((a, b) => a.idx - b.idx);
+    const span = rows.length ? `${rows[0].time.slice(0,16)} ~ ${rows[rows.length-1].time.slice(0,16)}` : '-';
+    log(`[${label}] 수집 ${rows.length}개 (${span})`, 'ok');
+    readingEl.innerHTML += `<br><span class="ok">이력 ${rows.length}개 수집</span> (${span})`;
+
+    // 라벨 매핑 저장 (device.id + bootEpoch 교차검증용)
+    try {
+      const map = JSON.parse(localStorage.getItem('sensorMap') || '{}');
+      map[device.id] = { label, bootEpoch };
+      localStorage.setItem('sensorMap', JSON.stringify(map));
+    } catch (e) {}
+
+    // 업로드
+    const url = $('#webappUrl').value.trim();
+    const secret = $('#secret').value.trim();
+    if (!url) {
+      log(`[${label}] URL 미설정 → 업로드 생략(미리보기만).`, 'muted');
+      readingEl.innerHTML += ` · <span class="muted">업로드 안 함</span>`;
+      return;
+    }
+    const payload = { secret, sensor: label, bootEpoch, records: rows };
+    log(`[${label}] 업로드 중 (${rows.length}개)…`);
+    // Apps Script는 CORS 프리플라이트를 피하려 text/plain + no-cors. 응답은 불투명(opaque)이라
+    // 성공여부는 doGet 또는 시트로 확인.
+    await fetch(url, { method: 'POST', mode: 'no-cors', headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: JSON.stringify(payload) });
+    log(`[${label}] 전송됨(no-cors, 불투명 응답). 시트/doGet로 반영 확인.`, 'ok');
+    readingEl.innerHTML += ` · <span class="ok">전송됨</span>`;
+  } catch (err) {
+    log(`[${label}] 오류: ${err && err.message ? err.message : err}`, 'err');
+    readingEl.innerHTML += `<br><span class="err">오류: ${err && err.message ? err.message : err}</span>`;
+  } finally {
+    try { if (device && device.gatt && device.gatt.connected) device.gatt.disconnect(); } catch (e) {}
+    try { if (wakeLock) await wakeLock.release(); } catch (e) {}
+    btn.disabled = false;
+  }
+}
+
+// 환경 점검
+if (!('bluetooth' in navigator)) {
+  log('⚠ 이 브라우저는 Web Bluetooth 미지원입니다. 안드로이드 크롬(또는 데스크톱 크롬)에서 여세요.', 'err');
+} else {
+  log('준비 완료. Mi Home 종료 후 센서를 동기화하세요.');
+}
+</script>
+</body>
+</html>
