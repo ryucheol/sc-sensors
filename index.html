@@ -244,6 +244,7 @@ async function runSync(ctx, label) {
   try { wakeLock = await navigator.wakeLock.request('screen'); } catch (e) {}
   try {
     const { device, server, svc, counterS, anchorNowMs, bootEpoch, latest, cur } = ctx;
+    const known = loadSensors()[device.id];
 
     // 시작 인덱스: 시트의 해당 센서 마지막 시각을 우선(폰 바뀌어도 시트 기준으로 증분). 조회 실패 시 로컬 상태.
     let startIdx = 0, src = '전체';
@@ -263,7 +264,6 @@ async function runSync(ctx, label) {
       } catch (e) { log(`[${label}] 시트 마지막시각 조회 실패 → 로컬 기준: ${e.message || e}`); }
     }
     if (!sheetDone) {
-      const known = loadSensors()[device.id];
       if (known && Math.abs((known.bootEpoch || 0) - bootEpoch) < 300) { startIdx = (known.lastIdx | 0) + 1; src = '로컬 증분'; }
     }
     startIdx = Math.min(startIdx, latest.idx + 1);
