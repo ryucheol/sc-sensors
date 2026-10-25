@@ -36,7 +36,8 @@ SENSORS = [
 ]
 
 SCAN_SEC = 8.0       # 최대 대기. 3개 다 찾으면 즉시 중단(조기 종료)
-INTER_SENSOR = 2.0   # 센서 간 연결 간격(초) - BLE 어댑터 회복용
+INTER_SENSOR = 1.0   # 센서 간 연결 간격(초)
+SERVICE = "ebe0ccb0-7a0a-4b0c-8a1a-6ff2997da3a6"  # 이 서비스만 탐색 → 연결 대폭 단축
 C_CUR = "ebe0ccc1-7a0a-4b0c-8a1a-6ff2997da3a6"   # 현재값: temp(i16/100) humi(u8) volt(u16/1000)
 
 
@@ -69,7 +70,8 @@ async def scan_for(macs, timeout):
 
 
 async def read_current(dev):
-    async with BleakClient(dev) as c:
+    # services=[SERVICE] -> 그 서비스만 탐색해 연결 시간을 크게 줄임
+    async with BleakClient(dev, services=[SERVICE]) as c:
         v = await c.read_gatt_char(C_CUR)
     return decode_current(v)
 
@@ -99,25 +101,23 @@ async def main():
     now_ms = time.time() * 1000
     now_iso = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     readings = []
-    first = True
     print()
+    # 찾은 센서들을 '동시에' 연결/읽기(병렬) → 전체 시간을 크게 단축
+    tasks = {}
     for s in SENSORS:
         dev = by_mac.get(s["mac"].upper())
         if dev is None:
             print(f"  [{s['label']}] 못 찾음(범위/전원)")
-            continue
-        if not first:
-            await asyncio.sleep(INTER_SENSOR)   # 센서 간 간격(어댑터 회복)
-        first = False
-        ts = time.perf_counter()
+        else:
+            tasks[s["label"]] = asyncio.create_task(read_current(dev))
+    for label, task in tasks.items():
         try:
-            temp, hum, volt = await read_current(dev)
-            dt = time.perf_counter() - ts
-            print(f"  [{s['label']}] {temp:.1f}℃ / {hum}% · {volt:.2f}V   (읽기 {dt:.1f}s)")
-            readings.append({"sensor": s["label"], "temp": round(temp, 1), "hum": hum,
+            temp, hum, volt = await task
+            print(f"  [{label}] {temp:.1f}℃ / {hum}% · {volt:.2f}V")
+            readings.append({"sensor": label, "temp": round(temp, 1), "hum": hum,
                              "volt": round(volt, 3), "time_ms": now_ms})
         except Exception as e:
-            print(f"  [{s['label']}] 오류: {e}")
+            print(f"  [{label}] 오류: {e}")
 
     t_up = 0.0
     if readings and not args.dry_run:

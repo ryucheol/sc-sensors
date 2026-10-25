@@ -1,0 +1,17 @@
+[Unit]
+Description=Farmhut BLE sensor gateway (passive current + periodic history)
+After=bluetooth.target network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# User/경로는 당신 Pi에 맞게 수정 (Bookworm은 설치 시 만든 사용자명)
+User=pi
+WorkingDirectory=/home/pi/smart-cabin
+EnvironmentFile=/home/pi/smart-cabin/gateway.env
+ExecStart=/usr/bin/python3 /home/pi/smart-cabin/passive_gateway.py
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

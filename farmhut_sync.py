@@ -104,7 +104,7 @@ async def sync_sensor(sensor, sheet_last_ms, dry_run):
     if dev is None:
         return (False, f"[{label}] 못 찾음(전원/범위 확인)")
 
-    async with BleakClient(dev) as client:
+    async with BleakClient(dev, services=[SERVICE]) as client:   # 서비스 하나만 탐색 → 연결 단축
         tv = await client.read_gatt_char(C_TIME)
         counter_s = struct.unpack_from("<I", tv, 0)[0]
         now_ms = time.time() * 1000

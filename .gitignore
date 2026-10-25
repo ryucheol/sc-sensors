@@ -4,6 +4,10 @@ config.json
 config.local.*
 secret*.txt
 *.local
+# 비콘 복호화용 bindkey/token (비밀 — 절대 커밋 금지)
+sensor_keys.json
+# Pi 게이트웨이 환경파일(SECRET 포함)
+gateway.env
 
 # 파이썬
 __pycache__/
