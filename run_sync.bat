@@ -1,19 +1,20 @@
 @echo off
 chcp 65001 >nul
 REM ==============================================================
-REM  Farmhut sensor sync launcher
-REM   - If FARMHUT_SECRET is not set, ask for it, then run.
-REM   - Python does the retry (failed sensors only). No loop here.
-REM   - No secret stored in this file  ->  safe to commit.
+REM  Farmhut HISTORY sync launcher
+REM   - First run: asks for SECRET, saves it (setx) for next time.
+REM   - Next runs (new terminal): no prompt, uses saved FARMHUT_SECRET.
+REM   - Python retries failed sensors only.
+REM   - No secret stored in this file (saved to user env) -> safe to commit.
 REM  Usage:  run_sync.bat            (upload)
 REM          run_sync.bat --dry-run  (preview only)
-REM  Tip:  to skip the prompt, set it once (persists):
-REM          setx FARMHUT_SECRET your-secret
 REM ==============================================================
-setlocal
+setlocal EnableDelayedExpansion
 
 if not defined FARMHUT_SECRET (
-  set /p "FARMHUT_SECRET=Enter SECRET (same as Code.gs): "
+  set /p "FARMHUT_SECRET=Enter SECRET: "
+  setx FARMHUT_SECRET "!FARMHUT_SECRET!" >nul
+  echo Saved. Next new terminal will not ask.
 )
 
 set "PY=C:\Users\ryuch\AppData\Local\Programs\Python\Python39\python.exe"
