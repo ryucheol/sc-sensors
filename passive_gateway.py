@@ -34,7 +34,7 @@ SECRET = os.environ.get("FARMHUT_SECRET", "CHANGE-ME")
 CFG = os.path.join(os.path.dirname(os.path.abspath(__file__)), "sensor_keys.json")
 
 CURRENT_INTERVAL = float(os.environ.get("GW_CURRENT_INTERVAL", 600))    # '농막_현재' 하트비트 주기(초): 변화 없어도 최소 이 간격마다 1회
-CURRENT_COOLDOWN = float(os.environ.get("GW_CURRENT_COOLDOWN", 30))     # 변화 시 업로드 최소 간격(초) — 잦은 쓰기 방지
+CURRENT_COOLDOWN = float(os.environ.get("GW_CURRENT_COOLDOWN", 60))     # 변화 시 업로드 최소 간격(초) — 잦은 쓰기 방지
 HISTORY_INTERVAL = float(os.environ.get("GW_HISTORY_INTERVAL", 86400))  # 이력 동기화(연결) 주기: 시작 시 1회 + 하루 1회
 AVG_BUCKET = float(os.environ.get("GW_AVG_BUCKET", 3600))               # 시간별 평균 집계 단위(초)=1시간
 AVG_CHECK = 20.0                                                        # 버킷 경계 점검 간격(초)
