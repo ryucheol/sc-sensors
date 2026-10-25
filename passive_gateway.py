@@ -37,7 +37,7 @@ CURRENT_INTERVAL = float(os.environ.get("GW_CURRENT_INTERVAL", 600))    # '농�
 HISTORY_INTERVAL = float(os.environ.get("GW_HISTORY_INTERVAL", 86400))  # 이력 동기화(연결) 주기: 시작 시 1회 + 하루 1회
 AVG_BUCKET = float(os.environ.get("GW_AVG_BUCKET", 3600))               # 시간별 평균 집계 단위(초)=1시간
 AVG_CHECK = 20.0                                                        # 버킷 경계 점검 간격(초)
-BEACON_LOG = os.environ.get("GW_BEACON_LOG", "all").lower()             # 수신 로그: all(모두)|change(변화만)|off
+BEACON_LOG = os.environ.get("GW_BEACON_LOG", "change").lower()          # 수신 로그: change(값 바뀔 때만, 기본)|all(반복까지 모두)|off
 SCAN_TIMEOUT = 15.0
 IDLE_TIMEOUT = 10.0
 OVERLAP = 2
