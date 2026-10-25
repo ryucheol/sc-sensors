@@ -18,6 +18,7 @@
 var SECRET = 'CHANGE-ME';          // ← index.html 의 '공유 시크릿'과 동일하게
 var SHEET_NAME = '농막_시간별';
 var CURRENT_SHEET = '농막_현재';   // 현재값 스냅샷(센서별 1행, 덮어쓰기)
+var AVG_SHEET = '농막_평균';       // 게이트웨이가 passive로 계산한 시간가중 평균(파생값)
 // 컬럼: A시각 B센서 C최고온도 D최저온도 E최고습도 F최저습도 G센서idx H업로드시각
 
 function _sheet() {
@@ -81,6 +82,49 @@ function _postCurrent(body) {
   return _json({ ok: true, mode: 'current', updated: n });
 }
 
+function _avgSheet() {
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var sh = ss.getSheetByName(AVG_SHEET);
+  if (!sh) {
+    sh = ss.insertSheet(AVG_SHEET);
+    sh.appendRow(['시각', '센서', '평균온도(°C)', '평균습도(%)', '기록시각']);
+    sh.setFrozenRows(1);
+  }
+  return sh;
+}
+
+// (센서|정시) 중복 제거하며 시간별 평균 행을 append. readings=[{sensor,time_ms,temp,hum}]
+function _postAvg(body) {
+  var sh = _avgSheet();
+  var readings = body.readings || [];
+  var existing = {};
+  var last = sh.getLastRow();
+  if (last >= 2) {
+    var vals = sh.getRange(2, 1, last - 1, 2).getValues();  // A시각 B센서
+    for (var i = 0; i < vals.length; i++) {
+      var t = vals[i][0], s = vals[i][1];
+      if (!t || !s) continue;
+      var ms0 = (t instanceof Date) ? t.getTime() : new Date(t).getTime();
+      if (!isNaN(ms0)) existing[_hourKey(s, ms0)] = true;
+    }
+  }
+  var rows = [], now = new Date(), seen = {};
+  for (var j = 0; j < readings.length; j++) {
+    var r = readings[j];
+    var ms = Number(r.time_ms);
+    if (isNaN(ms)) continue;
+    var key = _hourKey(r.sensor, ms);
+    if (existing[key] || seen[key]) continue;
+    seen[key] = true;
+    rows.push([new Date(ms), r.sensor, (r.temp == null ? '' : r.temp), (r.hum == null ? '' : r.hum), now]);
+  }
+  if (rows.length) {
+    var start = sh.getLastRow() + 1;
+    sh.getRange(start, 1, rows.length, rows[0].length).setValues(rows);
+  }
+  return _json({ ok: true, mode: 'avg', added: rows.length, skipped: readings.length - rows.length });
+}
+
 function doPost(e) {
   var lock = LockService.getScriptLock();
   lock.waitLock(30000);
@@ -90,6 +134,7 @@ function doPost(e) {
       return _json({ ok: false, error: 'bad secret' });
     }
     if (body.mode === 'current') return _postCurrent(body);
+    if (body.mode === 'avg') return _postAvg(body);
     var sensor = String(body.sensor || '').trim();
     var records = body.records || [];
     if (!sensor || !records.length) return _json({ ok: true, added: 0, skipped: 0, note: 'empty' });
