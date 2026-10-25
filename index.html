@@ -50,11 +50,15 @@
   </div>
 
   <div class="card">
-    <h2>② 센서</h2>
-    <div id="sensorList"></div>
-    <button id="addBtn" class="primary wide" data-guard style="margin-top:12px">+ 센서 연결 / 식별</button>
-    <p class="hint" id="addHint">버튼을 누르면 기기 목록이 뜹니다. 아무 LYWSD03MMC나 고르면 연결 후
-       <b>현재 온·습도</b>를 보여주니, 그걸 눈앞 센서 LCD와 대조해 위치를 지정하세요.</p>
+    <h2>② 센서 동기화</h2>
+    <p class="sub">버튼을 누르면 기기 선택 창이 뜹니다. <b>이름 끝 두 자리</b>가 안내와 같은 기기를 고르세요. (먼저 Mi Home 종료)</p>
+    <div id="locBtns"></div>
+    <button id="allBtn" class="primary wide" data-guard style="margin-top:4px">전체 차례로 동기화</button>
+    <div id="sensorList" style="margin-top:12px"></div>
+    <details style="margin-top:10px"><summary>끝자리를 모를 때: 현재값 대조로 추가</summary>
+      <button id="addBtn" class="ghost wide" data-guard style="margin-top:8px">+ 연결해서 현재값 보고 위치 지정</button>
+      <p class="hint" id="addHint"></p>
+    </details>
   </div>
 
   <div class="card" id="identify" hidden>
@@ -85,6 +89,12 @@ const CHAR_INDEX   = 'ebe0ccba-7a0a-4b0c-8a1a-6ff2997da3a6';
 const CHAR_HISTORY = 'ebe0ccbc-7a0a-4b0c-8a1a-6ff2997da3a6';
 const CHAR_CURRENT = 'ebe0ccc1-7a0a-4b0c-8a1a-6ff2997da3a6';
 const LABELS = ['바닥외부', '내부1층', '다락'];
+// 위치 ↔ MAC 끝 두 자리 (미홈/페어링 화면에서 확인). 선택 창에서 이 끝자리로 사람이 고름.
+const SENSOR_MAP = [
+  { label: '내부1층', suffix: 'BE' },
+  { label: '바닥외부', suffix: '13' },
+  { label: '다락',     suffix: '21' },
+];
 const IDLE_TIMEOUT_MS = 10000;
 
 const $ = s => document.querySelector(s);
@@ -169,6 +179,41 @@ async function connectAndProbe(device) {
   let cur = null;
   try { cur = decodeCurrent(await (await svc.getCharacteristic(CHAR_CURRENT)).readValue()); } catch (e) {}
   return { device, server, svc, counterS, anchorNowMs, bootEpoch, latest, cur };
+}
+
+// 끝자리 안내로 한 센서 동기화 (busy 관리 없음 - 호출측에서)
+async function _syncOne(label, suffix) {
+  log(`[${label}] 선택 창에서 끝 두 자리 '${suffix}'인 기기를 고르세요.`);
+  let device;
+  try {
+    device = await navigator.bluetooth.requestDevice({ filters: [{ namePrefix: 'LYWSD03MMC' }], optionalServices: [SERVICE] });
+  } catch (e) { log(`[${label}] 선택 취소/실패: ${e.message || e}`); return; }
+  const prev = loadSensors()[device.id];
+  if (prev && prev.label !== label) log(`⚠ 이 기기는 이전에 '${prev.label}'로 기억됨 → 이번엔 '${label}'로 저장(의도 맞는지 확인).`);
+  log(`[${label}] 연결 중 (${device.id.slice(0, 8)})…`);
+  const ctx = await connectAndProbe(device);
+  if (ctx.cur) log(`[${label}] 현재값 ${ctx.cur.temp.toFixed(1)}℃ / ${ctx.cur.hum}% (참고)`);
+  await runSync(ctx, label);
+}
+
+async function syncByLocation(label, suffix) {
+  if (busy) return;
+  setBusy(true);
+  try { await _syncOne(label, suffix); }
+  catch (e) { log(`[${label}] 오류: ${e.message || e}`); }
+  finally { setBusy(false); }
+}
+
+async function syncAll() {
+  if (busy) return;
+  setBusy(true);
+  try {
+    for (const s of SENSOR_MAP) {
+      try { await _syncOne(s.label, s.suffix); }
+      catch (e) { log(`[${s.label}] 오류: ${e.message || e}`); }
+    }
+    log('전체 차례로 동기화 끝.');
+  } finally { setBusy(false); }
 }
 
 let pending = null; // 식별 대기 중 컨텍스트
@@ -335,6 +380,16 @@ async function runSync(ctx, label) {
     try { if (wakeLock) await wakeLock.release(); } catch (e) {}
   }
 }
+
+// 위치 버튼 생성 (끝자리 안내 포함)
+const locBtnsEl = $('#locBtns');
+locBtnsEl.innerHTML = SENSOR_MAP.map((s, i) =>
+  `<button class="primary wide" data-guard data-loc="${i}" style="margin-bottom:8px">${s.label} · 끝자리 ${s.suffix}</button>`).join('');
+locBtnsEl.querySelectorAll('[data-loc]').forEach(b => b.addEventListener('click', () => {
+  const s = SENSOR_MAP[+b.getAttribute('data-loc')];
+  syncByLocation(s.label, s.suffix);
+}));
+$('#allBtn').addEventListener('click', syncAll);
 
 $('#addBtn').addEventListener('click', addSensor);
 $('#idSave').addEventListener('click', idSave);
