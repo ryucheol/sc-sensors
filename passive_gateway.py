@@ -39,6 +39,7 @@ HISTORY_INTERVAL = float(os.environ.get("GW_HISTORY_INTERVAL", 86400))  # 이력
 AVG_BUCKET = float(os.environ.get("GW_AVG_BUCKET", 3600))               # 시간별 평균 집계 단위(초)=1시간
 AVG_CHECK = 20.0                                                        # 버킷 경계 점검 간격(초)
 BEACON_LOG = os.environ.get("GW_BEACON_LOG", "change").lower()          # 수신 로그: change(값 바뀔 때만, 기본)|all(반복까지 모두)|off
+HUMI_DEADBAND = float(os.environ.get("GW_HUMI_DEADBAND", 1.0))          # 습도 데드밴드(%): 마지막 '변화'값 대비 이 미만이면 변화로 안 침(로그·업로드 트리거만. 평균은 전 샘플 사용)
 SCAN_TIMEOUT = 15.0
 IDLE_TIMEOUT = 10.0
 OVERLAP = 2
@@ -356,6 +357,7 @@ async def avg_uploader(cfg, avg_state):
 async def passive_loop(cfg, latest, avg_state, dirty):
     by_mac = {v["mac"].upper(): (label, bytes.fromhex(v["key"])) for label, v in cfg.items()}
     loop = asyncio.get_running_loop()   # 콜백이 다른 스레드(WinRT)일 수 있어 threadsafe 로 깨움
+    sig = {label: {} for label in cfg}  # 마지막으로 '변화'로 인정된 값(데드밴드 기준점)
 
     def cb(dev, adv):
         mac = (dev.address or "").upper()
@@ -384,10 +386,12 @@ async def passive_loop(cfg, latest, avg_state, dirty):
             else:
                 parts.append(f"T {vals['temp']:.1f}℃")
         if "humi" in vals:
-            st["humi"].update(vals["humi"], now)
-            if "humi" not in prev or vals["humi"] != prev["humi"]:
-                d = (vals["humi"] - prev["humi"]) if "humi" in prev else 0.0
+            st["humi"].update(vals["humi"], now)   # 평균은 모든 샘플 사용(데드밴드 무관)
+            base = sig[label].get("humi")
+            if base is None or abs(vals["humi"] - base) >= HUMI_DEADBAND:
+                d = (vals["humi"] - base) if base is not None else 0.0
                 parts.append(f"H {vals['humi']:.1f}%({d:+.1f})*"); is_change = True
+                sig[label]["humi"] = vals["humi"]
             else:
                 parts.append(f"H {vals['humi']:.1f}%")
         if "batt" in vals:
