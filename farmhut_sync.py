@@ -44,8 +44,9 @@ SENSORS = [
 
 SCAN_TIMEOUT = 12.0
 IDLE_TIMEOUT = 10.0
-MAX_ROUNDS = 3   # 실패한 센서만 최대 몇 라운드까지 재시도할지
-OVERLAP = 2      # 시트 마지막 시각보다 몇 시간 겹쳐 받을지(서버가 중복 제거)
+MAX_ROUNDS = 3       # 실패한 센서만 최대 몇 라운드까지 재시도할지
+OVERLAP = 2          # 시트 마지막 시각보다 몇 시간 겹쳐 받을지(서버가 중복 제거)
+INTER_SENSOR = 2.0   # 센서 간 연결 간격(초) - BLE 어댑터 회복용(연속 연결 실패 감소)
 
 # ─────────────── GATT ───────────────
 SERVICE  = "ebe0ccb0-7a0a-4b0c-8a1a-6ff2997da3a6"
@@ -214,7 +215,9 @@ async def main():
             print(f"\n=== 재시도 라운드 {rnd}/{MAX_ROUNDS} — 실패 센서 {len(pending)}개 ===")
             await asyncio.sleep(3)
         still = []
-        for s in pending:
+        for i, s in enumerate(pending):
+            if i > 0:
+                await asyncio.sleep(INTER_SENSOR)   # 센서 간 간격(어댑터 회복)
             print(f"\n--- {s['label']} ({s['mac']})"
                   + (f"  [라운드 {rnd}]" if rnd > 1 else "") + " ---")
             ok, msg = await attempt_sensor(s, sheet_last_ms, args.dry_run)

@@ -35,7 +35,8 @@ SENSORS = [
     {"mac": "A4:C1:38:32:8C:21", "label": "다락"},
 ]
 
-SCAN_SEC = 8.0   # 최대 대기. 3개 다 찾으면 즉시 중단(조기 종료)
+SCAN_SEC = 8.0       # 최대 대기. 3개 다 찾으면 즉시 중단(조기 종료)
+INTER_SENSOR = 2.0   # 센서 간 연결 간격(초) - BLE 어댑터 회복용
 C_CUR = "ebe0ccc1-7a0a-4b0c-8a1a-6ff2997da3a6"   # 현재값: temp(i16/100) humi(u8) volt(u16/1000)
 
 
@@ -98,12 +99,16 @@ async def main():
     now_ms = time.time() * 1000
     now_iso = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     readings = []
+    first = True
     print()
     for s in SENSORS:
         dev = by_mac.get(s["mac"].upper())
         if dev is None:
             print(f"  [{s['label']}] 못 찾음(범위/전원)")
             continue
+        if not first:
+            await asyncio.sleep(INTER_SENSOR)   # 센서 간 간격(어댑터 회복)
+        first = False
         ts = time.perf_counter()
         try:
             temp, hum, volt = await read_current(dev)
