@@ -360,6 +360,8 @@ async def passive_loop(cfg, latest, avg_state, dirty):
     by_mac = {v["mac"].upper(): (label, bytes.fromhex(v["key"])) for label, v in cfg.items()}
     loop = asyncio.get_running_loop()   # 콜백이 다른 스레드(WinRT)일 수 있어 threadsafe 로 깨움
     sig = {label: {} for label in cfg}  # 마지막으로 '변화'로 인정된 값(데드밴드 기준점)
+    order = [l for l in ("바닥외부", "내부1층", "다락") if l in cfg]
+    order += [l for l in cfg if l not in order]   # 로그 표시 순서(바닥·1층·다락)
 
     def cb(dev, adv):
         mac = (dev.address or "").upper()
@@ -378,32 +380,38 @@ async def passive_loop(cfg, latest, avg_state, dirty):
         now = time.time()
         prev = latest[label]
         st = avg_state[label]
-        parts = []
         is_change = False
+        temp_d = humi_d = None   # 이번 비콘에서 바뀐 값의 증분(바뀐 센서만 표시)
         if "temp" in vals:
             st["temp"].update(vals["temp"], now)
             if "temp" not in prev or vals["temp"] != prev["temp"]:
-                d = (vals["temp"] - prev["temp"]) if "temp" in prev else 0.0
-                parts.append(f"T {vals['temp']:.1f}℃({d:+.1f})*"); is_change = True
-            else:
-                parts.append(f"T {vals['temp']:.1f}℃")
+                temp_d = (vals["temp"] - prev["temp"]) if "temp" in prev else 0.0
+                is_change = True
         if "humi" in vals:
             st["humi"].update(vals["humi"], now)   # 평균은 모든 샘플 사용(데드밴드 무관)
             base = sig[label].get("humi")
             if base is None or abs(vals["humi"] - base) >= HUMI_DEADBAND:
-                d = (vals["humi"] - base) if base is not None else 0.0
-                parts.append(f"H {vals['humi']:.1f}%({d:+.1f})*"); is_change = True
+                humi_d = (vals["humi"] - base) if base is not None else 0.0
+                is_change = True
                 sig[label]["humi"] = vals["humi"]
-            else:
-                parts.append(f"H {vals['humi']:.1f}%")
-        if "batt" in vals:
-            parts.append(f"bat {vals['batt']}%")
         vals["ts"] = now
         prev.update(vals)
         if is_change:
             loop.call_soon_threadsafe(dirty.set)   # 변화 → '농막_현재' 업로더 깨움(쿨다운은 업로더가 관리)
-        if BEACON_LOG == "all" or (BEACON_LOG == "change" and is_change):
-            log(f"[수신] {label}  {'  '.join(parts)}  rssi {adv.rssi}")
+        if BEACON_LOG == "off" or (BEACON_LOG == "change" and not is_change):
+            return
+        # 한 줄 스냅샷: 온도 3개 | 습도 3개 (순서 바닥·1층·다락, 바뀐 센서만 괄호에 증분)
+        temps, humis = [], []
+        for L in order:
+            v = latest[L]
+            t, h = v.get("temp"), v.get("humi")
+            ts = f"{t:.1f}" if t is not None else "-"
+            hs = f"{round(h)}" if h is not None else "-"
+            if L == label:
+                if temp_d is not None: ts += f"({temp_d:+.1f})"
+                if humi_d is not None: hs += f"({humi_d:+.1f})"
+            temps.append(ts); humis.append(hs)
+        log(f"[수신] {' '.join(temps)} | {' '.join(humis)}")
 
     while True:  # 스캐너가 죽으면 재시작
         try:
