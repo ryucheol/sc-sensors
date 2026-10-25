@@ -99,10 +99,10 @@ def log_open(msg):
     _mid_dots = True
 
 
-def dot():
-    """진행 중인 '점 줄'에 점 하나 추가."""
+def mark(ch):
+    """진행 중인 수신 줄에 표식 한 글자 추가(센서 번호: 바닥0 · 1층1 · 다락2)."""
     global _mid_dots
-    print(".", end="", flush=True)
+    print(ch, end="", flush=True)
     _mid_dots = True
 
 
@@ -445,17 +445,18 @@ async def passive_loop(cfg, latest, avg_state, dirty):
         if BEACON_LOG == "all":            # 모든 고유 비콘을 전체값 한 줄로
             log(snap(label, temp_d, humi_d))
             return
-        # 기본(change): 값이 바뀌면 새 줄, 값 그대로인 고유 비콘은 점(.)만 추가
+        # 기본(change): 값이 바뀌면 새 줄, 고유 비콘마다 '수신 센서 번호'(바닥0·1층1·다락2) 추가
+        mk = str(order.index(label))
         if is_change or dstate["line"] is None:
             dstate["line"] = snap(label, temp_d, humi_d)
             dstate["dots"] = 1
             log_open(f'{dstate["line"]} ')   # 개행 없이 줄 시작
-            dot()                            # 이 비콘 = 점 1개
+            mark(mk)                          # 이 비콘 = 센서 번호 1개
         else:
             dstate["dots"] += 1
             if dstate["dots"] % 60 == 0:     # 60개마다 줄 바꿔 재출력(가독성)
                 log_open(f'{dstate["line"]} ')
-            dot()
+            mark(mk)
 
     while True:  # 스캐너가 죽으면 재시작
         try:
