@@ -80,8 +80,30 @@ C_INDEX = "ebe0ccba-7a0a-4b0c-8a1a-6ff2997da3a6"
 C_HIST = "ebe0ccbc-7a0a-4b0c-8a1a-6ff2997da3a6"
 
 
+_mid_dots = False   # 점(.)이 이어지는 줄이 진행 중인지
+
+
 def log(msg):
-    print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] {msg}", flush=True)
+    """일반 로그 — 진행 중인 '점 줄'이 있으면 먼저 개행으로 닫는다."""
+    global _mid_dots
+    pre = "\n" if _mid_dots else ""
+    _mid_dots = False
+    print(f"{pre}[{time.strftime('%Y-%m-%d %H:%M:%S')}] {msg}", flush=True)
+
+
+def log_open(msg):
+    """'점 줄' 시작: 타임스탬프+메시지를 개행 없이 출력(뒤에 점이 이어붙음)."""
+    global _mid_dots
+    pre = "\n" if _mid_dots else ""
+    print(f"{pre}[{time.strftime('%Y-%m-%d %H:%M:%S')}] {msg}", end="", flush=True)
+    _mid_dots = True
+
+
+def dot():
+    """진행 중인 '점 줄'에 점 하나 추가."""
+    global _mid_dots
+    print(".", end="", flush=True)
+    _mid_dots = True
 
 
 def load_cfg():
@@ -362,15 +384,35 @@ async def passive_loop(cfg, latest, avg_state, dirty):
     sig = {label: {} for label in cfg}  # 마지막으로 '변화'로 인정된 값(데드밴드 기준점)
     order = [l for l in ("바닥외부", "내부1층", "다락") if l in cfg]
     order += [l for l in cfg if l not in order]   # 로그 표시 순서(바닥·1층·다락)
+    last_cnt = {}                        # 센서별 마지막 프레임 카운터(sd[4]) — 중복 전송 판별
+    dstate = {"line": None, "dots": 0}   # 점 누적용(값 그대로인 고유 비콘마다 점 1개)
+
+    def snap(changed, td, hd):
+        """온도3 | 습도3 스냅샷(순서 바닥·1층·다락, 바뀐 센서만 괄호에 증분)."""
+        temps, humis = [], []
+        for L in order:
+            v = latest[L]
+            t, h = v.get("temp"), v.get("humi")
+            ts = f"{t:.1f}" if t is not None else "-"
+            hs = f"{round(h)}" if h is not None else "-"
+            if L == changed:
+                if td is not None: ts += f"({td:+.1f})"
+                if hd is not None: hs += f"({hd:+.1f})"
+            temps.append(ts); humis.append(hs)
+        return f"[수신] {' '.join(temps)} | {' '.join(humis)}"
 
     def cb(dev, adv):
         mac = (dev.address or "").upper()
         if mac not in by_mac:
             return
         sd = adv.service_data.get(FE95)
-        if not sd:
+        if not sd or len(sd) < 5:
             return
         label, key = by_mac[mac]
+        cnt = sd[4]                       # 프레임 카운터(광고 이벤트마다 +1)
+        if last_cnt.get(label) == cnt:    # 같은 counter = 일부러 반복 전송 → 무시
+            return
+        last_cnt[label] = cnt
         pt = decrypt_mibeacon(sd, key)
         if pt is None:
             return
@@ -398,20 +440,22 @@ async def passive_loop(cfg, latest, avg_state, dirty):
         prev.update(vals)
         if is_change:
             loop.call_soon_threadsafe(dirty.set)   # 변화 → '농막_현재' 업로더 깨움(쿨다운은 업로더가 관리)
-        if BEACON_LOG == "off" or (BEACON_LOG == "change" and not is_change):
+        if BEACON_LOG == "off":
             return
-        # 한 줄 스냅샷: 온도 3개 | 습도 3개 (순서 바닥·1층·다락, 바뀐 센서만 괄호에 증분)
-        temps, humis = [], []
-        for L in order:
-            v = latest[L]
-            t, h = v.get("temp"), v.get("humi")
-            ts = f"{t:.1f}" if t is not None else "-"
-            hs = f"{round(h)}" if h is not None else "-"
-            if L == label:
-                if temp_d is not None: ts += f"({temp_d:+.1f})"
-                if humi_d is not None: hs += f"({humi_d:+.1f})"
-            temps.append(ts); humis.append(hs)
-        log(f"[수신] {' '.join(temps)} | {' '.join(humis)}")
+        if BEACON_LOG == "all":            # 모든 고유 비콘을 전체값 한 줄로
+            log(snap(label, temp_d, humi_d))
+            return
+        # 기본(change): 값이 바뀌면 새 줄, 값 그대로인 고유 비콘은 점(.)만 추가
+        if is_change or dstate["line"] is None:
+            dstate["line"] = snap(label, temp_d, humi_d)
+            dstate["dots"] = 1
+            log_open(f'{dstate["line"]} ')   # 개행 없이 줄 시작
+            dot()                            # 이 비콘 = 점 1개
+        else:
+            dstate["dots"] += 1
+            if dstate["dots"] % 60 == 0:     # 60개마다 줄 바꿔 재출력(가독성)
+                log_open(f'{dstate["line"]} ')
+            dot()
 
     while True:  # 스캐너가 죽으면 재시작
         try:
