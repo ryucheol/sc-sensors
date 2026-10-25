@@ -44,8 +44,8 @@ SENSORS = [
 
 SCAN_TIMEOUT = 12.0
 IDLE_TIMEOUT = 10.0
-CONNECT_RETRIES = 3
-OVERLAP = 2   # 시트 마지막 시각보다 몇 시간 겹쳐 받을지(서버가 중복 제거)
+MAX_ROUNDS = 3   # 실패한 센서만 최대 몇 라운드까지 재시도할지
+OVERLAP = 2      # 시트 마지막 시각보다 몇 시간 겹쳐 받을지(서버가 중복 제거)
 
 # ─────────────── GATT ───────────────
 SERVICE  = "ebe0ccb0-7a0a-4b0c-8a1a-6ff2997da3a6"
@@ -101,7 +101,7 @@ async def sync_sensor(sensor, sheet_last_ms, dry_run):
     mac, label = sensor["mac"], sensor["label"]
     dev = await BleakScanner.find_device_by_address(mac, timeout=SCAN_TIMEOUT)
     if dev is None:
-        return f"[{label}] 못 찾음(전원/범위 확인)"
+        return (False, f"[{label}] 못 찾음(전원/범위 확인)")
 
     async with BleakClient(dev) as client:
         tv = await client.read_gatt_char(C_TIME)
@@ -126,7 +126,7 @@ async def sync_sensor(sensor, sheet_last_ms, dry_run):
         start_idx = min(start_idx, latest["idx"] + 1)
 
         if start_idx > latest["idx"]:
-            return f"[{label}] 현재 {cur} · 새 레코드 없음 (최신 idx={latest['idx']})"
+            return (True, f"[{label}] 현재 {cur} · 새 레코드 없음 (최신 idx={latest['idx']})")
 
         # seek 후 스트림 수집
         await client.write_gatt_char(C_INDEX, struct.pack("<I", start_idx), response=True)
@@ -165,31 +165,26 @@ async def sync_sensor(sensor, sheet_last_ms, dry_run):
                      "maxT": r["maxT"], "minT": r["minT"], "maxH": r["maxH"], "minH": r["minH"]})
     rows.sort(key=lambda x: x["idx"])
     if not rows:
-        return f"[{label}] 현재 {cur} · 받은 새 레코드 없음"
+        return (True, f"[{label}] 현재 {cur} · 받은 새 레코드 없음")
 
     span = f"{rows[0]['time'][:16]} ~ {rows[-1]['time'][:16]}"
     if dry_run:
-        return f"[{label}] 현재 {cur} · (dry-run) {len(rows)}개 수집 [{src}] ({span}) — 업로드 안 함"
+        return (True, f"[{label}] 현재 {cur} · (dry-run) {len(rows)}개 수집 [{src}] ({span}) — 업로드 안 함")
 
     res = post_rows(label, boot_epoch, rows)
     if res.get("ok"):
-        return f"[{label}] 현재 {cur} · {len(rows)}개 수집 [{src}] → 추가 {res.get('added')} / 중복 {res.get('skipped')}"
-    return f"[{label}] 업로드 거부: {res.get('error')} (SECRET 확인)"
+        return (True, f"[{label}] 현재 {cur} · {len(rows)}개 수집 [{src}] → 추가 {res.get('added')} / 중복 {res.get('skipped')}")
+    return (False, f"[{label}] 업로드 거부: {res.get('error')} (SECRET 확인)")
 
 
-async def run_one_with_retry(sensor, sheet_last_ms, dry_run):
-    label = sensor["label"]
-    for attempt in range(1, CONNECT_RETRIES + 1):
-        try:
-            return await sync_sensor(sensor, sheet_last_ms, dry_run)
-        except BleakError as e:
-            if attempt < CONNECT_RETRIES:
-                print(f"[{label}] 연결 실패({e}) — {attempt}/{CONNECT_RETRIES}, 3초 후 재시도")
-                await asyncio.sleep(3)
-            else:
-                return f"[{label}] 실패(재시도 {CONNECT_RETRIES}회): {e}"
-        except Exception as e:
-            return f"[{label}] 오류: {e}"
+async def attempt_sensor(sensor, sheet_last_ms, dry_run):
+    """센서 1회 시도. 예외도 삼켜 (ok, msg) 로 반환."""
+    try:
+        return await sync_sensor(sensor, sheet_last_ms, dry_run)
+    except BleakError as e:
+        return (False, f"[{sensor['label']}] 연결오류: {e}")
+    except Exception as e:
+        return (False, f"[{sensor['label']}] 오류: {e}")
 
 
 async def main():
@@ -197,28 +192,44 @@ async def main():
     ap.add_argument("--dry-run", action="store_true", help="시트에 올리지 않고 받을 내용만 출력")
     args = ap.parse_args()
 
-    if not args.dry_run and SECRET == "CHANGE-ME":
-        print("[중단] SECRET 이 설정되지 않았습니다. 파일 상단 SECRET 또는 환경변수 FARMHUT_SECRET 를 설정하세요.")
-        print("       (검증만 하려면 python farmhut_sync.py --dry-run)")
+    if not args.dry_run and SECRET in ("", "CHANGE-ME"):
+        print("[중단] SECRET 이 설정되지 않았습니다. 환경변수 FARMHUT_SECRET 를 설정하세요(run_sync.bat 이 물어봅니다).")
+        print("       (검증만 하려면 --dry-run)")
         sys.exit(2)
 
     print("=== 농막 센서 자동 동기화 시작 ===")
     sheet_last_ms = get_sheet_last()
     if sheet_last_ms:
-        print("[시트] 센서별 마지막 시각 확인됨:", {k: iso_hour(v)[:16] for k, v in sheet_last_ms.items()})
+        print("[시트] 센서별 마지막 시각:", {k: iso_hour(v)[:16] for k, v in sheet_last_ms.items()})
     else:
         print("[시트] 기존 데이터 없음 → 전체 수집")
 
-    results = []
-    for s in SENSORS:
-        print(f"\n--- {s['label']} ({s['mac']}) ---")
-        msg = await run_one_with_retry(s, sheet_last_ms, args.dry_run)
-        print("  " + msg)
-        results.append(msg)
+    # 실패한 센서만 다음 라운드에서 재시도 (최대 MAX_ROUNDS 라운드)
+    results = {s["label"]: (False, f"[{s['label']}] 미시도") for s in SENSORS}
+    pending = list(SENSORS)
+    for rnd in range(1, MAX_ROUNDS + 1):
+        if not pending:
+            break
+        if rnd > 1:
+            print(f"\n=== 재시도 라운드 {rnd}/{MAX_ROUNDS} — 실패 센서 {len(pending)}개 ===")
+            await asyncio.sleep(3)
+        still = []
+        for s in pending:
+            print(f"\n--- {s['label']} ({s['mac']})"
+                  + (f"  [라운드 {rnd}]" if rnd > 1 else "") + " ---")
+            ok, msg = await attempt_sensor(s, sheet_last_ms, args.dry_run)
+            print("  " + msg)
+            results[s["label"]] = (ok, msg)
+            if not ok:
+                still.append(s)
+        pending = still
 
     print("\n=== 요약 ===")
-    for m in results:
-        print("  " + m)
+    for s in SENSORS:
+        print("  " + results[s["label"]][1])
+
+    any_fail = any(not results[s["label"]][0] for s in SENSORS)
+    sys.exit(1 if any_fail else 0)
 
 
 if __name__ == "__main__":

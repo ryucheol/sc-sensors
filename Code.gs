@@ -17,6 +17,7 @@
 
 var SECRET = 'CHANGE-ME';          // ← index.html 의 '공유 시크릿'과 동일하게
 var SHEET_NAME = '농막_시간별';
+var CURRENT_SHEET = '농막_현재';   // 현재값 스냅샷(센서별 1행, 덮어쓰기)
 // 컬럼: A시각 B센서 C최고온도 D최저온도 E최고습도 F최저습도 G센서idx H업로드시각
 
 function _sheet() {
@@ -50,6 +51,36 @@ function _existingKeys(sh) {
   return set;
 }
 
+function _currentSheet() {
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var sh = ss.getSheetByName(CURRENT_SHEET);
+  if (!sh) {
+    sh = ss.insertSheet(CURRENT_SHEET);
+    sh.appendRow(['센서', '온도(°C)', '습도(%)', '배터리(V)', '갱신시각']);
+    sh.setFrozenRows(1);
+  }
+  return sh;
+}
+
+// 현재값: 센서별 한 행을 덮어씀(없으면 추가)
+function _postCurrent(body) {
+  var sh = _currentSheet();
+  var readings = body.readings || [];
+  var last = sh.getLastRow();
+  var names = last >= 2 ? sh.getRange(2, 1, last - 1, 1).getValues().map(function (r) { return r[0]; }) : [];
+  var n = 0;
+  for (var i = 0; i < readings.length; i++) {
+    var r = readings[i];
+    var idx = names.indexOf(r.sensor);
+    var row = idx >= 0 ? idx + 2 : sh.getLastRow() + 1;
+    var t = r.time_ms ? new Date(r.time_ms) : new Date();
+    sh.getRange(row, 1, 1, 5).setValues([[r.sensor, r.temp, r.hum, r.volt, t]]);
+    if (idx < 0) names.push(r.sensor);
+    n++;
+  }
+  return _json({ ok: true, mode: 'current', updated: n });
+}
+
 function doPost(e) {
   var lock = LockService.getScriptLock();
   lock.waitLock(30000);
@@ -58,6 +89,7 @@ function doPost(e) {
     if (String(body.secret || '') !== SECRET) {
       return _json({ ok: false, error: 'bad secret' });
     }
+    if (body.mode === 'current') return _postCurrent(body);
     var sensor = String(body.sensor || '').trim();
     var records = body.records || [];
     if (!sensor || !records.length) return _json({ ok: true, added: 0, skipped: 0, note: 'empty' });
