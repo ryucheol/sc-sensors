@@ -33,7 +33,8 @@ WEBAPP_URL = "https://script.google.com/macros/s/AKfycbzEJn5u4lIAJprA69xR_yRSEeR
 SECRET = os.environ.get("FARMHUT_SECRET", "CHANGE-ME")
 CFG = os.path.join(os.path.dirname(os.path.abspath(__file__)), "sensor_keys.json")
 
-CURRENT_INTERVAL = float(os.environ.get("GW_CURRENT_INTERVAL", 600))    # '농막_현재' 갱신 주기(초)
+CURRENT_INTERVAL = float(os.environ.get("GW_CURRENT_INTERVAL", 600))    # '농막_현재' 하트비트 주기(초): 변화 없어도 최소 이 간격마다 1회
+CURRENT_COOLDOWN = float(os.environ.get("GW_CURRENT_COOLDOWN", 30))     # 변화 시 업로드 최소 간격(초) — 잦은 쓰기 방지
 HISTORY_INTERVAL = float(os.environ.get("GW_HISTORY_INTERVAL", 86400))  # 이력 동기화(연결) 주기: 시작 시 1회 + 하루 1회
 AVG_BUCKET = float(os.environ.get("GW_AVG_BUCKET", 3600))               # 시간별 평균 집계 단위(초)=1시간
 AVG_CHECK = 20.0                                                        # 버킷 경계 점검 간격(초)
@@ -243,9 +244,15 @@ async def sync_history_one(mac, label, sheet_last_ms):
 
 
 # ── 메인 루프 ───────────────────────────────────────────
-async def current_uploader(cfg, latest):
+async def current_uploader(cfg, latest, dirty):
+    """값이 바뀌면(dirty) 즉시 '농막_현재' 업로드하되, 연속 업로드는 최소 CURRENT_COOLDOWN(기본 30s) 간격.
+    변화가 없어도 CURRENT_INTERVAL(기본 10분)마다 하트비트로 1회 올려 '갱신시각'을 살려둔다."""
     while True:
-        await asyncio.sleep(CURRENT_INTERVAL)
+        try:
+            await asyncio.wait_for(dirty.wait(), timeout=CURRENT_INTERVAL)
+        except asyncio.TimeoutError:
+            pass    # 변화 없음 → 하트비트
+        dirty.clear()
         now_ms = time.time() * 1000
         readings = []
         for label in cfg:
@@ -262,6 +269,7 @@ async def current_uploader(cfg, latest):
                 log(f"[현재] {res.get('updated')}개 갱신")
             except Exception as e:
                 log(f"[현재] 업로드 오류: {e}")
+        await asyncio.sleep(CURRENT_COOLDOWN)   # 쿨다운: 이 동안의 변화는 모아서 다음 1회로
 
 
 async def history_syncer(cfg):
@@ -346,8 +354,9 @@ async def avg_uploader(cfg, avg_state):
             log(f"[평균] 업로드 오류(보류 {len(pending)}개): {e}")
 
 
-async def passive_loop(cfg, latest, avg_state):
+async def passive_loop(cfg, latest, avg_state, dirty):
     by_mac = {v["mac"].upper(): (label, bytes.fromhex(v["key"])) for label, v in cfg.items()}
+    loop = asyncio.get_running_loop()   # 콜백이 다른 스레드(WinRT)일 수 있어 threadsafe 로 깨움
 
     def cb(dev, adv):
         mac = (dev.address or "").upper()
@@ -386,6 +395,8 @@ async def passive_loop(cfg, latest, avg_state):
             parts.append(f"bat {vals['batt']}%")
         vals["ts"] = now
         prev.update(vals)
+        if is_change:
+            loop.call_soon_threadsafe(dirty.set)   # 변화 → '농막_현재' 업로더 깨움(쿨다운은 업로더가 관리)
         if BEACON_LOG == "all" or (BEACON_LOG == "change" and is_change):
             log(f"[수신] {label}  {'  '.join(parts)}  rssi {adv.rssi}")
 
@@ -412,10 +423,11 @@ async def main():
     cfg = load_cfg()
     latest = {label: {} for label in cfg}
     avg_state = {label: {"temp": TWAvg(), "humi": TWAvg()} for label in cfg}
-    log(f"게이트웨이 시작 (현재 {CURRENT_INTERVAL:.0f}s / 평균 {AVG_BUCKET:.0f}s / 이력 {HISTORY_INTERVAL:.0f}s)")
+    dirty = asyncio.Event()   # 값 변화 신호(passive → current_uploader)
+    log(f"게이트웨이 시작 (현재 변화시+{CURRENT_COOLDOWN:.0f}s쿨다운/하트비트 {CURRENT_INTERVAL:.0f}s / 평균 {AVG_BUCKET:.0f}s / 이력 {HISTORY_INTERVAL:.0f}s)")
     await asyncio.gather(
-        passive_loop(cfg, latest, avg_state),
-        current_uploader(cfg, latest),
+        passive_loop(cfg, latest, avg_state, dirty),
+        current_uploader(cfg, latest, dirty),
         avg_uploader(cfg, avg_state),
         history_syncer(cfg),
     )

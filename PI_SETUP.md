@@ -4,7 +4,7 @@
 센서 → Pi → 구글시트, 폰·PC 불필요.
 
 ## 동작 요약
-- **현재값(평소)**: 비콘(FE95) 수신 → 복호화 → 센서별 최신값 유지 → `GW_CURRENT_INTERVAL`(기본 10분)마다 `농막_현재` 갱신.
+- **현재값**: 비콘(FE95) 수신 → 복호화 → 값이 **바뀌면 즉시** `농막_현재` 갱신(최소 `GW_CURRENT_COOLDOWN`=30초 간격). 변화 없어도 `GW_CURRENT_INTERVAL`(기본 10분)마다 하트비트 1회.
 - **시간별 평균(연결 없이)**: 수신한 passive 샘플로 **시간가중 평균**을 계산 → 매 정시 `농막_평균`에 올림.
   센서가 주는 값이 아니라 게이트웨이가 만든 **파생값**이라 권위 데이터와 탭을 분리.
 - **권위 이력(연결)**: 각 센서에 연결 → 시트 마지막 이후 이력만 받아 `농막_시간별`(기기 min/max)에 올림.
@@ -61,7 +61,7 @@ journalctl -u farmhut-gateway -f
 이제 Pi를 켜두기만 하면 24시간 자동 수집·업로드. 죽어도 10초 뒤 자동 재시작.
 
 ## 주기 조정
-- `gateway.env`에 `GW_CURRENT_INTERVAL`(현재값), `GW_AVG_BUCKET`(평균 단위, 기본 3600=1시간), `GW_HISTORY_INTERVAL`(이력 연결, 기본 86400=하루)를 초 단위로 지정 → `sudo systemctl restart farmhut-gateway`.
+- `gateway.env`에 `GW_CURRENT_INTERVAL`(현재값 하트비트), `GW_CURRENT_COOLDOWN`(현재값 변화 업로드 최소 간격, 기본 30), `GW_AVG_BUCKET`(평균 단위, 기본 3600=1시간), `GW_HISTORY_INTERVAL`(이력 연결, 기본 86400=하루)를 초 단위로 지정 → `sudo systemctl restart farmhut-gateway`.
 
 ## Code.gs 재배포 (농막_평균 탭 사용 시 1회)
 `농막_평균` 업로드(`mode:'avg'`)를 추가했으므로 Apps Script를 **기존 배포에 새 버전**으로 올려야 함(새 배포 아님 — URL 유지):
