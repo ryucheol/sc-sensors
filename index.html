@@ -1,0 +1,408 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>농막 샤오미 센서 → 구글시트</title>
+<style>
+  :root { color-scheme: light; }
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: -apple-system, system-ui, "Segoe UI", Roboto, sans-serif;
+         background: #f5f6f8; color: #1a1a1a; padding: 16px; max-width: 640px; margin: 0 auto; }
+  h1 { font-size: 1.25rem; margin: 0 0 4px; }
+  .sub { color: #666; font-size: .85rem; margin: 0 0 14px; }
+  .card { background: #fff; border: 1px solid #e3e5e8; border-radius: 12px; padding: 14px; margin-bottom: 12px; }
+  .card h2 { font-size: 1rem; margin: 0 0 10px; }
+  label { display: block; font-size: .8rem; color: #555; margin: 8px 0 3px; }
+  input, select, button { font-size: 1rem; }
+  input[type=text], input[type=url], select { width: 100%; padding: 9px 10px; border: 1px solid #ccc;
+         border-radius: 8px; background: #fff; }
+  button { cursor: pointer; border: none; border-radius: 9px; padding: 11px 14px; font-weight: 600; }
+  button:disabled { opacity: .5; cursor: default; }
+  .primary { background: #2f6df6; color: #fff; }
+  .wide { width: 100%; }
+  .ghost { background: #eef1f5; color: #333; }
+  .danger { background: #fff; color: #c5221f; border: 1px solid #f1c3c0; }
+  .row { display: flex; gap: 8px; align-items: center; }
+  .sensor { border-top: 1px solid #eee; padding: 10px 0; }
+  .sensor:first-child { border-top: none; }
+  .big { font-size: 1.15rem; font-weight: 700; color: #000; }
+  .muted { color: #888; } .ok { color: #137333; } .err { color: #c5221f; }
+  #identify { background: #fffbe9; border: 1px solid #f0d98a; }
+  #log { font-family: ui-monospace, Menlo, monospace; font-size: .72rem; white-space: pre-wrap;
+         background: #0f1115; color: #d6dae0; border-radius: 10px; padding: 10px; max-height: 220px;
+         overflow-y: auto; margin-top: 6px; }
+  details summary { cursor: pointer; font-size: .85rem; color: #2f6df6; }
+  .hint { font-size: .78rem; color: #8a6d00; margin: 6px 0 0; }
+</style>
+</head>
+<body>
+  <h1>농막 샤오미 센서 → 구글시트</h1>
+  <p class="sub">안드로이드 크롬 전용. <b>연결해서 현재값을 LCD와 대조한 뒤 위치를 지정</b>하므로 라벨이 꼬이지 않습니다.
+     한 번에 하나씩 처리됩니다. ※ 먼저 <b>Mi Home 앱을 완전히 종료</b>하세요.</p>
+
+  <div class="card">
+    <h2>① 설정</h2>
+    <label>Apps Script 웹앱 URL</label>
+    <input id="webappUrl" type="url" placeholder="https://script.google.com/macros/s/.../exec" autocomplete="off">
+    <label>공유 시크릿</label>
+    <input id="secret" type="text" placeholder="예: nongmak-2026" autocomplete="off">
+  </div>
+
+  <div class="card">
+    <h2>② 센서 동기화</h2>
+    <p class="sub">버튼을 누르면 기기 선택 창이 뜹니다. <b>이름 끝 두 자리</b>가 안내와 같은 기기를 고르세요. (먼저 Mi Home 종료)</p>
+    <div id="locBtns"></div>
+    <button id="allBtn" class="primary wide" data-guard style="margin-top:4px">전체 차례로 동기화</button>
+    <div id="sensorList" style="margin-top:12px"></div>
+    <details style="margin-top:10px"><summary>끝자리를 모를 때: 현재값 대조로 추가</summary>
+      <button id="addBtn" class="ghost wide" data-guard style="margin-top:8px">+ 연결해서 현재값 보고 위치 지정</button>
+      <p class="hint" id="addHint"></p>
+    </details>
+  </div>
+
+  <div class="card" id="identify" hidden>
+    <h2>③ 이 센서의 위치는?</h2>
+    <div id="idReading" class="big"></div>
+    <p class="hint">위 값이 지금 보고 있는 센서 LCD와 같은가요? 같으면 그 위치를 고르세요.</p>
+    <label>위치</label>
+    <select id="idLabel"></select>
+    <div class="row" style="margin-top:12px">
+      <button id="idSave" class="primary" style="flex:2">이 위치로 저장 &amp; 동기화</button>
+      <button id="idCancel" class="ghost" style="flex:1">취소</button>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>④ 로그</h2>
+    <details open><summary>진행 로그</summary><div id="log"></div></details>
+    <button id="resetBtn" class="danger wide" data-guard style="margin-top:10px">기억된 센서/동기화 상태 초기화</button>
+  </div>
+
+<script>
+"use strict";
+
+const SERVICE      = 'ebe0ccb0-7a0a-4b0c-8a1a-6ff2997da3a6';
+const CHAR_TIME    = 'ebe0ccb7-7a0a-4b0c-8a1a-6ff2997da3a6';
+const CHAR_LATEST  = 'ebe0ccbb-7a0a-4b0c-8a1a-6ff2997da3a6';
+const CHAR_INDEX   = 'ebe0ccba-7a0a-4b0c-8a1a-6ff2997da3a6';
+const CHAR_HISTORY = 'ebe0ccbc-7a0a-4b0c-8a1a-6ff2997da3a6';
+const CHAR_CURRENT = 'ebe0ccc1-7a0a-4b0c-8a1a-6ff2997da3a6';
+const LABELS = ['바닥외부', '내부1층', '다락'];
+// 위치 ↔ MAC 끝 두 자리 (미홈/페어링 화면에서 확인). 선택 창에서 이 끝자리로 사람이 고름.
+const SENSOR_MAP = [
+  { label: '내부1층', suffix: 'BE' },
+  { label: '바닥외부', suffix: '13' },
+  { label: '다락',     suffix: '21' },
+];
+const IDLE_TIMEOUT_MS = 10000;
+
+const $ = s => document.querySelector(s);
+const logEl = $('#log');
+function log(msg) {
+  const t = new Date().toLocaleTimeString('ko-KR');
+  logEl.textContent += (logEl.textContent ? '\n' : '') + `[${t}] ${msg}`;
+  logEl.scrollTop = logEl.scrollHeight;
+  console.log(msg);
+}
+
+// 설정 저장/복원
+for (const id of ['webappUrl', 'secret']) {
+  const el = $('#' + id);
+  try { el.value = localStorage.getItem('cfg_' + id) || ''; } catch (e) {}
+  el.addEventListener('change', () => { try { localStorage.setItem('cfg_' + id, el.value.trim()); } catch (e) {} });
+}
+
+// 기억된 센서 저장소: { deviceId: {label, bootEpoch, lastIdx, lastValue, lastSync} }
+function loadSensors() { try { return JSON.parse(localStorage.getItem('sensors') || '{}'); } catch (e) { return {}; } }
+function saveSensors(s) { try { localStorage.setItem('sensors', JSON.stringify(s)); } catch (e) {} }
+
+// 라벨 드롭다운 채우기
+$('#idLabel').innerHTML = LABELS.map(l => `<option>${l}</option>`).join('');
+
+let busy = false;
+function setBusy(b) { busy = b; document.querySelectorAll('[data-guard]').forEach(x => x.disabled = b); }
+
+function renderSensors() {
+  const sensors = loadSensors();
+  const ids = Object.keys(sensors);
+  const el = $('#sensorList');
+  if (!ids.length) { el.innerHTML = '<p class="muted" style="margin:0">아직 등록된 센서가 없습니다. 아래 버튼으로 하나씩 연결하세요.</p>'; return; }
+  el.innerHTML = '';
+  for (const id of ids) {
+    const s = sensors[id];
+    const div = document.createElement('div');
+    div.className = 'sensor';
+    const v = s.lastValue ? `최근: ${s.lastValue}` : '';
+    div.innerHTML = `
+      <div class="row">
+        <div style="flex:1">
+          <div class="big">${s.label}</div>
+          <div class="muted" style="font-size:.78rem">${v} ${s.lastSync ? '· ' + s.lastSync : ''}</div>
+        </div>
+        <button class="ghost" data-guard data-sync="${id}">동기화</button>
+      </div>`;
+    el.appendChild(div);
+  }
+  el.querySelectorAll('[data-sync]').forEach(b => b.addEventListener('click', () => syncExisting(b.getAttribute('data-sync'))));
+}
+
+function decodeRecord(dv) {
+  return { idx: dv.getUint32(0, true), ts: dv.getUint32(4, true),
+           maxT: dv.getInt16(8, true) / 10, maxH: dv.getUint8(10),
+           minT: dv.getInt16(11, true) / 10, minH: dv.getUint8(13) };
+}
+function decodeCurrent(dv) { return { temp: dv.getInt16(0, true) / 100, hum: dv.getUint8(2), volt: dv.getUint16(3, true) / 1000 }; }
+
+// CORS 우회용 JSONP: 시트의 센서별 마지막 시각을 브라우저에서 읽는다(<script> 주입).
+function jsonp(url) {
+  return new Promise((resolve, reject) => {
+    const cb = '__cb' + Math.random().toString(36).slice(2);
+    const s = document.createElement('script');
+    const timer = setTimeout(() => { cleanup(); reject(new Error('timeout')); }, 15000);
+    function cleanup() { clearTimeout(timer); try { delete window[cb]; } catch (e) {} s.remove(); }
+    window[cb] = (data) => { cleanup(); resolve(data); };
+    s.onerror = () => { cleanup(); reject(new Error('load error')); };
+    s.src = url + (url.includes('?') ? '&' : '?') + 'callback=' + cb;
+    document.body.appendChild(s);
+  });
+}
+
+// 연결 후 앵커/최신/현재값까지 확보한 컨텍스트 반환
+async function connectAndProbe(device) {
+  const server = await device.gatt.connect();
+  const svc = await server.getPrimaryService(SERVICE);
+  const counterS = (await (await svc.getCharacteristic(CHAR_TIME)).readValue()).getUint32(0, true);
+  const anchorNowMs = Date.now();
+  const bootEpoch = Math.round(anchorNowMs / 1000 - counterS);
+  const latest = decodeRecord(await (await svc.getCharacteristic(CHAR_LATEST)).readValue());
+  let cur = null;
+  try { cur = decodeCurrent(await (await svc.getCharacteristic(CHAR_CURRENT)).readValue()); } catch (e) {}
+  return { device, server, svc, counterS, anchorNowMs, bootEpoch, latest, cur };
+}
+
+// 끝자리 안내로 한 센서 동기화 (busy 관리 없음 - 호출측에서)
+async function _syncOne(label, suffix) {
+  log(`[${label}] 선택 창에서 끝 두 자리 '${suffix}'인 기기를 고르세요.`);
+  let device;
+  try {
+    device = await navigator.bluetooth.requestDevice({ filters: [{ namePrefix: 'LYWSD03MMC' }], optionalServices: [SERVICE] });
+  } catch (e) { log(`[${label}] 선택 취소/실패: ${e.message || e}`); return; }
+  const prev = loadSensors()[device.id];
+  if (prev && prev.label !== label) log(`⚠ 이 기기는 이전에 '${prev.label}'로 기억됨 → 이번엔 '${label}'로 저장(의도 맞는지 확인).`);
+  log(`[${label}] 연결 중 (${device.id.slice(0, 8)})…`);
+  const ctx = await connectAndProbe(device);
+  if (ctx.cur) log(`[${label}] 현재값 ${ctx.cur.temp.toFixed(1)}℃ / ${ctx.cur.hum}% (참고)`);
+  await runSync(ctx, label);
+}
+
+async function syncByLocation(label, suffix) {
+  if (busy) return;
+  setBusy(true);
+  try { await _syncOne(label, suffix); }
+  catch (e) { log(`[${label}] 오류: ${e.message || e}`); }
+  finally { setBusy(false); }
+}
+
+async function syncAll() {
+  if (busy) return;
+  setBusy(true);
+  try {
+    for (const s of SENSOR_MAP) {
+      try { await _syncOne(s.label, s.suffix); }
+      catch (e) { log(`[${s.label}] 오류: ${e.message || e}`); }
+    }
+    log('전체 차례로 동기화 끝.');
+  } finally { setBusy(false); }
+}
+
+let pending = null; // 식별 대기 중 컨텍스트
+
+async function addSensor() {
+  if (busy) return;
+  try {
+    setBusy(true);
+    $('#addHint').textContent = '기기 선택 대기…';
+    const device = await navigator.bluetooth.requestDevice({ filters: [{ namePrefix: 'LYWSD03MMC' }], optionalServices: [SERVICE] });
+    log(`연결 중 (${device.id.slice(0, 8)})…`);
+    const ctx = await connectAndProbe(device);
+    pending = ctx;
+    const known = loadSensors()[device.id];
+    const curStr = ctx.cur ? `${ctx.cur.temp.toFixed(1)}℃ / ${ctx.cur.hum}% · 배터리 ${ctx.cur.volt.toFixed(2)}V` : '(현재값 읽기 실패)';
+    $('#idReading').textContent = '현재값: ' + curStr;
+    if (known) { $('#idLabel').value = known.label; log(`이미 '${known.label}'로 기억된 센서입니다(필요시 위치 변경 가능).`); }
+    $('#identify').hidden = false;
+    $('#addHint').textContent = '현재값을 LCD와 대조하고 아래에서 위치를 고르세요.';
+    log(`연결됨. 현재값 ${curStr} → 위치 지정 대기`);
+  } catch (err) {
+    log(`오류: ${err.message || err}`);
+    $('#addHint').textContent = '실패했습니다. 다시 시도하세요.';
+    if (pending) { try { pending.server.disconnect(); } catch (e) {} pending = null; }
+    setBusy(false);
+  }
+}
+
+async function idCancel() {
+  if (pending) { try { pending.server.disconnect(); } catch (e) {} pending = null; }
+  $('#identify').hidden = true;
+  $('#addHint').textContent = '';
+  setBusy(false);
+}
+
+async function idSave() {
+  if (!pending) return;
+  const label = $('#idLabel').value;
+  $('#identify').hidden = true;
+  const ctx = pending; pending = null;
+  await runSync(ctx, label);
+  setBusy(false);
+}
+
+// 기억된 센서 재동기화 (가능하면 선택창 없이 재연결)
+async function syncExisting(deviceId) {
+  if (busy) return;
+  const known = loadSensors()[deviceId];
+  if (!known) return;
+  try {
+    setBusy(true);
+    let device = null;
+    if (navigator.bluetooth.getDevices) {
+      try { const ds = await navigator.bluetooth.getDevices(); device = ds.find(d => d.id === deviceId) || null; } catch (e) {}
+    }
+    if (!device) {
+      log(`[${known.label}] 자동 재연결 불가 → 기기 선택창에서 같은 센서를 고르세요.`);
+      device = await navigator.bluetooth.requestDevice({ filters: [{ namePrefix: 'LYWSD03MMC' }], optionalServices: [SERVICE] });
+      if (device.id !== deviceId) { log(`[${known.label}] ⚠ 다른 센서를 골랐습니다. 취소합니다.`); setBusy(false); return; }
+    }
+    log(`[${known.label}] 연결 중…`);
+    const ctx = await connectAndProbe(device);
+    await runSync(ctx, known.label);
+  } catch (err) {
+    log(`오류: ${err.message || err}`);
+  } finally {
+    setBusy(false);
+  }
+}
+
+async function runSync(ctx, label) {
+  let wakeLock = null;
+  try { wakeLock = await navigator.wakeLock.request('screen'); } catch (e) {}
+  try {
+    const { device, server, svc, counterS, anchorNowMs, bootEpoch, latest, cur } = ctx;
+    const known = loadSensors()[device.id];
+
+    // 시작 인덱스: 시트의 해당 센서 마지막 시각을 우선(폰 바뀌어도 시트 기준으로 증분). 조회 실패 시 로컬 상태.
+    let startIdx = 0, src = '전체';
+    const cfgUrl = $('#webappUrl').value.trim();
+    let sheetDone = false;
+    if (cfgUrl) {
+      try {
+        const info = await jsonp(cfgUrl + '?sensor=' + encodeURIComponent(label));
+        const lastIso = info && info.bySensor && info.bySensor[label] && info.bySensor[label].last;
+        if (lastIso) {
+          const Tms = Date.parse(lastIso);
+          const idxOfLast = (counterS - (anchorNowMs - Tms) / 1000) / 3600 - 1;
+          startIdx = Math.max(0, Math.round(idxOfLast) - 1); // 2시간 겹침(서버가 중복제거)
+          src = '시트(' + lastIso.slice(0, 16) + ') 이후';
+          sheetDone = true;
+        }
+      } catch (e) { log(`[${label}] 시트 마지막시각 조회 실패 → 로컬 기준: ${e.message || e}`); }
+    }
+    if (!sheetDone) {
+      if (known && Math.abs((known.bootEpoch || 0) - bootEpoch) < 300) { startIdx = (known.lastIdx | 0) + 1; src = '로컬 증분'; }
+    }
+    startIdx = Math.min(startIdx, latest.idx + 1);
+    log(`[${label}] 최신 idx=${latest.idx}, 시작 idx=${startIdx} (${src})`);
+
+    let maxIdx = startIdx - 1;
+    const records = [];
+
+    if (startIdx <= latest.idx) {
+      try {
+        const cIndex = await svc.getCharacteristic(CHAR_INDEX);
+        const ibuf = new ArrayBuffer(4); new DataView(ibuf).setUint32(0, startIdx, true);
+        await cIndex.writeValue(ibuf);
+      } catch (e) { log(`[${label}] seek 실패(전체부터): ${e.message || e}`); }
+
+      const cHist = await svc.getCharacteristic(CHAR_HISTORY);
+      await new Promise((resolve) => {
+        let idle = null, finished = false;
+        const done = () => { if (finished) return; finished = true; clearTimeout(idle);
+          cHist.removeEventListener('characteristicvaluechanged', onVal);
+          device.removeEventListener('gattserverdisconnected', onDisc); resolve(); };
+        const kick = () => { clearTimeout(idle); idle = setTimeout(() => { log(`[${label}] 10초 무수신 → 종료`); done(); }, IDLE_TIMEOUT_MS); };
+        const onVal = e => { const r = decodeRecord(e.target.value); records.push(r);
+          if (r.idx > maxIdx) maxIdx = r.idx;
+          if (records.length % 200 === 0) log(`[${label}] …${records.length}개 (idx ${r.idx})`);
+          if (r.idx >= latest.idx) { log(`[${label}] 최신 도달 (idx ${r.idx})`); done(); } else kick(); };
+        const onDisc = () => { log(`[${label}] 연결 끊김`); done(); };
+        device.addEventListener('gattserverdisconnected', onDisc);
+        cHist.addEventListener('characteristicvaluechanged', onVal);
+        kick();
+        cHist.startNotifications().catch(e => { log(`[${label}] 구독 실패: ${e.message || e}`); done(); });
+      });
+    } else {
+      log(`[${label}] 새 레코드 없음.`);
+    }
+
+    try { await server.disconnect(); } catch (e) {}
+
+    // 기억 저장
+    const sensors = loadSensors();
+    sensors[device.id] = {
+      label, bootEpoch,
+      lastIdx: Math.max(maxIdx, known && Math.abs((known.bootEpoch || 0) - bootEpoch) < 300 ? (known.lastIdx | 0) : -1),
+      lastValue: cur ? `${cur.temp.toFixed(1)}℃/${cur.hum}%` : (known ? known.lastValue : ''),
+      lastSync: new Date().toLocaleString('ko-KR', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }),
+    };
+    saveSensors(sensors);
+    renderSensors();
+
+    // 업로드 페이로드
+    const rows = records.map(r => {
+      const hourMs = Math.round((anchorNowMs - (counterS - r.ts) * 1000) / 3600000) * 3600000;
+      return { idx: r.idx, time: new Date(hourMs).toISOString(), maxT: r.maxT, minT: r.minT, maxH: r.maxH, minH: r.minH };
+    }).sort((a, b) => a.idx - b.idx);
+
+    if (!rows.length) { log(`[${label}] 업로드할 새 데이터 없음.`); return; }
+    const url = $('#webappUrl').value.trim(), secret = $('#secret').value.trim();
+    const span = `${rows[0].time.slice(0, 16)} ~ ${rows[rows.length - 1].time.slice(0, 16)}`;
+    log(`[${label}] 수집 ${rows.length}개 (${span})`);
+    if (!url) { log(`[${label}] URL 미설정 → 업로드 생략.`); return; }
+    log(`[${label}] 업로드 중 (${rows.length}개)…`);
+    await fetch(url, { method: 'POST', mode: 'no-cors', headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+      body: JSON.stringify({ secret, sensor: label, bootEpoch, records: rows }) });
+    log(`[${label}] 전송됨. 시트/doGet로 확인.`);
+  } catch (err) {
+    log(`[${label}] 오류: ${err.message || err}`);
+    try { ctx.server.disconnect(); } catch (e) {}
+  } finally {
+    try { if (wakeLock) await wakeLock.release(); } catch (e) {}
+  }
+}
+
+// 위치 버튼 생성 (끝자리 안내 포함)
+const locBtnsEl = $('#locBtns');
+locBtnsEl.innerHTML = SENSOR_MAP.map((s, i) =>
+  `<button class="primary wide" data-guard data-loc="${i}" style="margin-bottom:8px">${s.label} · 끝자리 ${s.suffix}</button>`).join('');
+locBtnsEl.querySelectorAll('[data-loc]').forEach(b => b.addEventListener('click', () => {
+  const s = SENSOR_MAP[+b.getAttribute('data-loc')];
+  syncByLocation(s.label, s.suffix);
+}));
+$('#allBtn').addEventListener('click', syncAll);
+
+$('#addBtn').addEventListener('click', addSensor);
+$('#idSave').addEventListener('click', idSave);
+$('#idCancel').addEventListener('click', idCancel);
+$('#resetBtn').addEventListener('click', () => {
+  try { localStorage.removeItem('sensors'); localStorage.removeItem('syncState'); localStorage.removeItem('sensorMap'); } catch (e) {}
+  renderSensors();
+  log('기억된 센서/동기화 상태를 초기화했습니다. 다음 동기화는 전체(full)로 받습니다.');
+});
+
+if (!('bluetooth' in navigator)) log('⚠ 이 브라우저는 Web Bluetooth 미지원. 안드로이드 크롬에서 여세요.');
+else log('준비 완료. Mi Home 종료 후 [+ 센서 연결]부터.');
+renderSensors();
+</script>
+</body>
+</html>

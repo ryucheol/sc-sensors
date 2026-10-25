@@ -1,0 +1,18 @@
+# 비밀/로컬 설정 (커밋 금지)
+.env
+config.json
+config.local.*
+secret*.txt
+*.local
+
+# 파이썬
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# OS/에디터
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
