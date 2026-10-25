@@ -26,7 +26,7 @@ sys.stdout.reconfigure(encoding="utf-8")
 
 from bleak import BleakClient, BleakScanner
 
-WEBAPP_URL = "https://script.google.com/macros/s/AKfycbxNJ1SUfWchtcLxM0aVCLx_NsPyA9rVeBe6UfKKT70DXQlweVyzMdi1bzb8VVS-VqxhhQ/exec"
+WEBAPP_URL = "https://script.google.com/macros/s/AKfycbzEJn5u4lIAJprA69xR_yRSEeRmk2I_qe_igsAlPqEq1umHdsNkykOcF_imW3Zj5s_Rzg/exec"
 SECRET = os.environ.get("FARMHUT_SECRET", "CHANGE-ME")
 
 SENSORS = [

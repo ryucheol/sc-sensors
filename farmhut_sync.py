@@ -33,7 +33,7 @@ from bleak import BleakClient, BleakScanner
 from bleak.exc import BleakError
 
 # ─────────────── 설정 ───────────────
-WEBAPP_URL = "https://script.google.com/macros/s/AKfycbxNJ1SUfWchtcLxM0aVCLx_NsPyA9rVeBe6UfKKT70DXQlweVyzMdi1bzb8VVS-VqxhhQ/exec"
+WEBAPP_URL = "https://script.google.com/macros/s/AKfycbzEJn5u4lIAJprA69xR_yRSEeRmk2I_qe_igsAlPqEq1umHdsNkykOcF_imW3Zj5s_Rzg/exec"
 SECRET = os.environ.get("FARMHUT_SECRET", "CHANGE-ME")   # ← Code.gs 의 SECRET 과 동일하게 (또는 환경변수)
 
 SENSORS = [
