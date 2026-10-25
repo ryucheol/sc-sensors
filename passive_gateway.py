@@ -454,7 +454,8 @@ async def passive_loop(cfg, latest, avg_state, dirty):
             mark(mk)                          # 이 비콘 = 센서 번호 1개
         else:
             dstate["dots"] += 1
-            if dstate["dots"] % 60 == 0:     # 60개마다 줄 바꿔 재출력(가독성)
+            # 다른 로그([현재]·[이력] 등)에 끊겼거나 60자 넘으면 [수신] 줄을 다시 찍어 맥락 유지
+            if (not _mid_dots) or dstate["dots"] % 60 == 0:
                 log_open(f'{dstate["line"]} ')
             mark(mk)
 
