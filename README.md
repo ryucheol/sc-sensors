@@ -25,6 +25,7 @@ Xiaomi **LYWSD03MMC** 온습도계 3개의 값을 BLE로 받아 구글시트 **�
 | `passive_gateway.py` | **상주 게이트웨이**: passive 현재·평균 + 하루 1회 이력 | **라즈베리파이**(또는 PC) |
 | `PI_SETUP.md` | Pi 설치·systemd 가이드 | — |
 | `run_sync.bat` / `run_current_sync.bat` / `run_gateway.bat` | Windows 실행 런처 | PC |
+| `run_monitor.bat` | 모니터(읽기전용) 런처: 수신 로그만, 업로드·연결 없음 | PC |
 | `sensor_keys.json` | 비콘 복호화 bindkey (**비밀 · gitignore**) | 로컬 |
 | `gateway.env` / `gateway.env.example` | Pi용 `FARMHUT_SECRET` 환경파일 (**비밀 · gitignore**) | Pi |
 | `farmhut-gateway.service` | systemd 유닛(부팅 자동시작) | Pi |
@@ -82,6 +83,9 @@ python3 passive_gateway.py
 # Windows 테스트
 run_gateway.bat
 ```
+
+**모니터(읽기전용) 모드** — `GW_MONITOR=1`(또는 `run_monitor.bat`): 비콘 **수신 로그만** 출력하고 **서버 업로드·센서 연결을 하지 않음**. passive는 브로드캐스트라 실제 게이트웨이와 **동시에 켜도 안전**(값 구경·디버깅용). SECRET 불필요. 평균은 계산해서 로그만 남김.
+> 실제 업로드/연결 인스턴스는 **하나만** 돌리세요. 둘 이상이 업로드하면 Apps Script 실행시간이 배로 들고, 이력 연결은 센서가 동시 1개만 받아 서로 실패합니다(시트 중복 행은 서버의 LockService+키 중복제거로 방지됨).
 
 ## 설치 / 배포
 

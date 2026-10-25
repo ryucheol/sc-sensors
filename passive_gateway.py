@@ -40,6 +40,7 @@ AVG_BUCKET = float(os.environ.get("GW_AVG_BUCKET", 3600))               # 시간
 AVG_CHECK = 20.0                                                        # 버킷 경계 점검 간격(초)
 BEACON_LOG = os.environ.get("GW_BEACON_LOG", "change").lower()          # 수신 로그: change(값 바뀔 때만, 기본)|all(반복까지 모두)|off
 HUMI_DEADBAND = float(os.environ.get("GW_HUMI_DEADBAND", 1.0))          # 습도 데드밴드(%): 마지막 '변화'값 대비 이 미만이면 변화로 안 침(로그·업로드 트리거만. 평균은 전 샘플 사용)
+MONITOR = os.environ.get("GW_MONITOR", "0").lower() in ("1", "true", "yes", "on")   # 모니터(읽기전용): 수신 로그만, 서버 업로드·센서 연결 없음
 SCAN_TIMEOUT = 15.0
 IDLE_TIMEOUT = 10.0
 OVERLAP = 2
@@ -310,9 +311,10 @@ async def avg_uploader(cfg, avg_state):
     - 1시간 미만 버킷(테스트용)은 (센서|정시) 중복키가 충돌하므로 업로드하지 않고 로그만 남긴다."""
     start_ts = time.time()
     last_bucket = int(start_ts // AVG_BUCKET)
-    can_upload = AVG_BUCKET >= 3600
+    can_upload = AVG_BUCKET >= 3600 and not MONITOR
     if not can_upload:
-        log(f"[평균] 버킷 {AVG_BUCKET:.0f}s < 1h → 테스트모드(로그만, 업로드 안 함)")
+        why = "모니터 모드" if MONITOR else f"버킷 {AVG_BUCKET:.0f}s < 1h"
+        log(f"[평균] {why} → 로그만(업로드 안 함)")
     pending = []
     while True:
         await asyncio.sleep(AVG_CHECK)
@@ -420,20 +422,27 @@ async def passive_loop(cfg, latest, avg_state, dirty):
 
 
 async def main():
-    if SECRET in ("", "CHANGE-ME"):
+    if not MONITOR and SECRET in ("", "CHANGE-ME"):   # 모니터는 업로드 안 하므로 SECRET 불필요
         log("[중단] 환경변수 FARMHUT_SECRET 를 설정하세요.")
         sys.exit(2)
     cfg = load_cfg()
     latest = {label: {} for label in cfg}
     avg_state = {label: {"temp": TWAvg(), "humi": TWAvg()} for label in cfg}
     dirty = asyncio.Event()   # 값 변화 신호(passive → current_uploader)
-    log(f"게이트웨이 시작 (현재 변화시+{CURRENT_COOLDOWN:.0f}s쿨다운/하트비트 {CURRENT_INTERVAL:.0f}s / 평균 {AVG_BUCKET:.0f}s / 이력 {HISTORY_INTERVAL:.0f}s)")
-    await asyncio.gather(
-        passive_loop(cfg, latest, avg_state, dirty),
-        current_uploader(cfg, latest, dirty),
-        avg_uploader(cfg, avg_state),
-        history_syncer(cfg),
-    )
+    if MONITOR:
+        log("모니터 모드: 수신 로그만 — 서버 업로드 없음 · 센서 연결 없음 (평균은 계산·로그만)")
+        await asyncio.gather(
+            passive_loop(cfg, latest, avg_state, dirty),
+            avg_uploader(cfg, avg_state),   # can_upload=False → 로그만
+        )
+    else:
+        log(f"게이트웨이 시작 (현재 변화시+{CURRENT_COOLDOWN:.0f}s쿨다운/하트비트 {CURRENT_INTERVAL:.0f}s / 평균 {AVG_BUCKET:.0f}s / 이력 {HISTORY_INTERVAL:.0f}s)")
+        await asyncio.gather(
+            passive_loop(cfg, latest, avg_state, dirty),
+            current_uploader(cfg, latest, dirty),
+            avg_uploader(cfg, avg_state),
+            history_syncer(cfg),
+        )
 
 
 if __name__ == "__main__":

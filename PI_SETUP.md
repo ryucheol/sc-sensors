@@ -61,6 +61,12 @@ journalctl -u farmhut-gateway -f
 ```
 이제 Pi를 켜두기만 하면 24시간 자동 수집·업로드. 죽어도 10초 뒤 자동 재시작.
 
+## 모니터(읽기전용) 모드
+`GW_MONITOR=1 python3 passive_gateway.py` (Windows는 `run_monitor.bat`):
+- 비콘 **수신 로그만** 출력, **서버 업로드 안 함 · 센서 연결 안 함**, SECRET 불필요.
+- passive는 브로드캐스트라 **실제 게이트웨이와 동시에 켜도 안전** — 값 구경/디버깅용 2번째 창에 적합.
+- 업로드·연결하는 실제 인스턴스는 **하나만** 유지(둘 이상이면 실행시간 2배 + 이력 연결 충돌).
+
 ## 주기 조정
 - `gateway.env`에 `GW_CURRENT_INTERVAL`(현재값 하트비트), `GW_CURRENT_COOLDOWN`(현재값 변화 업로드 최소 간격, 기본 60), `GW_AVG_BUCKET`(평균 단위, 기본 3600=1시간), `GW_HISTORY_INTERVAL`(이력 연결, 기본 86400=하루)를 초 단위로 지정 → `sudo systemctl restart farmhut-gateway`.
 
