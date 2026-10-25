@@ -257,10 +257,9 @@ async def current_uploader(cfg, latest, dirty):
         readings = []
         for label in cfg:
             v = latest[label]
-            if "temp" in v or "humi" in v:
-                r = {"sensor": label, "time_ms": now_ms}
-                if "temp" in v: r["temp"] = round(v["temp"], 1)
-                if "humi" in v: r["hum"] = v["humi"]
+            if "temp" in v and "humi" in v:   # 온도·습도 둘 다 모인 뒤에만 업로드
+                r = {"sensor": label, "time_ms": now_ms,
+                     "temp": round(v["temp"], 1), "hum": v["humi"]}
                 if "batt" in v: r["volt"] = round(2.2 + 0.9 * v["batt"] / 100, 3)
                 readings.append(r)
         if readings:
