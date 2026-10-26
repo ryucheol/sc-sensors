@@ -1,13 +1,14 @@
 /*
  * Code.gs — 농막/선반 센서 데이터 수집 Apps Script 웹앱 (SITE 접두사로 여러 시트 공용).
  *
- * ★★ 버전: 2026-10-27 v5  ← 붙여넣기 전에 이 줄 확인! ★★
- *   이 버전 요약: SITE 접두사 · mode current(+접속 SSID/IP) · avg(시간평균) ·
- *                 hist(시간별 min/max upsert, 변화행만 기록) · 멱등(중복제거) 업로드.
- *   배포된 버전 확인법: 브라우저로 /exec 주소를 열면 {"version":"2026-10-27 v5", ...} 가 보임.
+ * ★★ 버전: 2026-10-27 v6  ← 붙여넣기 전에 이 줄 확인! ★★
+ *   이 버전 요약: SITE 접두사 · mode current(+SSID/IP+배터리 예상일) · avg · hist(upsert) ·
+ *                 batt(배터리 이력 → _배터리 탭) · 멱등 업로드.
+ *   배포된 버전 확인법: 브라우저로 /exec 주소를 열면 {"version":"2026-10-27 v6", ...} 가 보임.
  *   (구버전이 배포돼 있으면 version 이 다르거나 없음 → 다시 붙여넣고 새 버전 배포)
  *
  * 변경 이력:
+ *   v6 (2026-10-27) 배터리 이력(_배터리 탭) + 현재 탭 H열에 예상 소진일(임박 시 빨강)
  *   v5 (2026-10-27) 현재 탭에 접속 SSID·IP 표시(F·G열, 헤더 자동보강)
  *   v4 (2026-10-27) SITE 접두사(농막/선반 공용) · mode:hist upsert(변화행만)
  *   v3  mode:avg(시간평균) · mode:current(현재 스냅샷)
@@ -21,12 +22,13 @@
  * 특징: 중복 제거를 서버에서 처리(멱등). 중복 기준 (센서, 정시 버킷). 시각은 실제 날짜값으로 저장.
  */
 
-var CODE_VERSION = '2026-10-27 v5';   // ← /exec(doGet) 응답·붙여넣기 확인용. 고칠 때마다 갱신.
+var CODE_VERSION = '2026-10-27 v6';   // ← /exec(doGet) 응답·붙여넣기 확인용. 고칠 때마다 갱신.
 var SITE = '농막';                 // ← 장소 접두사. 두 번째 시트(예: 선반)는 '선반' 으로만 바꾸면 됨
 var SECRET = 'CHANGE-ME';          // ← 게이트웨이의 FARMHUT_SECRET 과 동일하게
 var SHEET_NAME = SITE + '_시간별';
 var CURRENT_SHEET = SITE + '_현재';   // 현재값 스냅샷(센서별 1행, 덮어쓰기)
 var AVG_SHEET = SITE + '_평균';       // 게이트웨이가 passive로 계산한 시간가중 평균(파생값)
+var BATT_SHEET = SITE + '_배터리';    // 배터리 전압·% 이력(수명 추세 → 현재 탭 예상 소진일)
 // 컬럼: A시각 B센서 C최고온도 D최저온도 E최고습도 F최저습도 G센서idx H업로드시각
 
 function _sheet() {
@@ -185,6 +187,97 @@ function _postHist(body) {
   return _json({ ok: true, mode: 'hist', added: added, updated: updated, unchanged: unchanged });
 }
 
+function _battSheet() {
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var sh = ss.getSheetByName(BATT_SHEET);
+  if (!sh) {
+    sh = ss.insertSheet(BATT_SHEET);
+    sh.appendRow(['시각', '센서', '배터리(V)', '배터리(%)', '기록시각']);
+    sh.setFrozenRows(1);
+  }
+  return sh;
+}
+
+// 배터리 이력 append(센서|정시 중복 제거) + 현재 탭에 예상 소진일 갱신. readings=[{sensor,time_ms,volt,pct}]
+function _postBatt(body) {
+  var sh = _battSheet();
+  var readings = body.readings || [];
+  var existing = {};
+  var last = sh.getLastRow();
+  if (last >= 2) {
+    var vals = sh.getRange(2, 1, last - 1, 2).getValues();
+    for (var i = 0; i < vals.length; i++) {
+      var t = vals[i][0], s = vals[i][1];
+      if (!t || !s) continue;
+      var ms0 = (t instanceof Date) ? t.getTime() : new Date(t).getTime();
+      if (!isNaN(ms0)) existing[_hourKey(s, ms0)] = true;
+    }
+  }
+  var rows = [], now = new Date(), seen = {};
+  for (var j = 0; j < readings.length; j++) {
+    var r = readings[j];
+    var ms = Number(r.time_ms);
+    if (isNaN(ms) || !r.sensor) continue;
+    var key = _hourKey(r.sensor, ms);
+    if (existing[key] || seen[key]) continue;
+    seen[key] = true;
+    rows.push([new Date(ms), r.sensor, (r.volt == null ? '' : r.volt), (r.pct == null ? '' : r.pct), now]);
+  }
+  if (rows.length) {
+    var start = sh.getLastRow() + 1;
+    sh.getRange(start, 1, rows.length, rows[0].length).setValues(rows);
+  }
+  try { _updateBatteryForecast(sh); } catch (e) {}   // 예상일 실패해도 업로드엔 영향 없게
+  return _json({ ok: true, mode: 'batt', added: rows.length });
+}
+
+// 배터리 % 추세(최소제곱)로 예상 소진일을 계산해 현재 탭 H열에 기록. 임박(≤30일)하면 빨간 굵은 글씨.
+function _updateBatteryForecast(battSh) {
+  var DEATH_PCT = 5, WARN_DAYS = 30, MIN_PTS = 5, MIN_SPAN_D = 3, WINDOW_D = 21, DAY = 86400000;
+  var last = battSh.getLastRow();
+  if (last < 2) return;
+  var n = Math.min(last - 1, 3000);                    // 최근 최대 3000행만
+  var vals = battSh.getRange(last - n + 1, 1, n, 4).getValues();  // 시각,센서,V,%
+  var now = Date.now(), cutoff = now - WINDOW_D * DAY, bySensor = {};
+  for (var i = 0; i < vals.length; i++) {
+    var t = vals[i][0], s = vals[i][1], pct = vals[i][3];
+    if (!t || !s || pct === '' || pct == null) continue;
+    var ms = (t instanceof Date) ? t.getTime() : new Date(t).getTime();
+    if (isNaN(ms) || ms < cutoff) continue;
+    (bySensor[s] = bySensor[s] || []).push([ms, Number(pct)]);
+  }
+  var cur = _currentSheet(), cl = cur.getLastRow();
+  var names = cl >= 2 ? cur.getRange(2, 1, cl - 1, 1).getValues().map(function (r) { return r[0]; }) : [];
+  if (cur.getRange(1, 8).getValue() !== '배터리 예상') cur.getRange(1, 8).setValue('배터리 예상');
+  for (var s2 in bySensor) {
+    var idx = names.indexOf(s2);
+    if (idx < 0) continue;
+    var pts = bySensor[s2], cell = cur.getRange(idx + 2, 8), msg = '', red = false;
+    if (pts.length >= MIN_PTS) {
+      var t0 = pts[0][0], spanD = (pts[pts.length - 1][0] - t0) / DAY;
+      if (spanD >= MIN_SPAN_D) {
+        var nP = pts.length, sx = 0, sy = 0, sxx = 0, sxy = 0;
+        for (var k = 0; k < nP; k++) { var x = (pts[k][0] - t0) / DAY, y = pts[k][1]; sx += x; sy += y; sxx += x * x; sxy += x * y; }
+        var denom = nP * sxx - sx * sx;
+        if (denom !== 0) {
+          var slope = (nP * sxy - sx * sy) / denom;          // %/일 (음수면 감소)
+          var curPct = pts[nP - 1][1];
+          if (slope < -0.05) {                               // 의미있게 감소 중일 때만 예측
+            var daysLeft = (curPct - DEATH_PCT) / (-slope);
+            if (daysLeft < 0) daysLeft = 0;
+            var ds = Utilities.formatDate(new Date(now + daysLeft * DAY), Session.getScriptTimeZone(), 'yyyy-MM-dd');
+            if (daysLeft <= WARN_DAYS) { msg = '⚠ ' + ds + ' 교체 (' + Math.round(daysLeft) + '일)'; red = true; }
+            else { msg = '예상 ' + ds; }
+          }
+        }
+      }
+    }
+    cell.setValue(msg);
+    cell.setFontColor(red ? 'red' : null);
+    cell.setFontWeight(red ? 'bold' : null);
+  }
+}
+
 function doPost(e) {
   var lock = LockService.getScriptLock();
   lock.waitLock(30000);
@@ -196,6 +289,7 @@ function doPost(e) {
     if (body.mode === 'current') return _postCurrent(body);
     if (body.mode === 'avg') return _postAvg(body);
     if (body.mode === 'hist') return _postHist(body);
+    if (body.mode === 'batt') return _postBatt(body);
     var sensor = String(body.sensor || '').trim();
     var records = body.records || [];
     if (!sensor || !records.length) return _json({ ok: true, added: 0, skipped: 0, note: 'empty' });

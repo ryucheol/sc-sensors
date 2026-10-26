@@ -212,6 +212,10 @@ def post_hist(readings):
     return _post({"secret": SECRET, "mode": "hist", "readings": readings})
 
 
+def post_batt(readings):
+    return _post({"secret": SECRET, "mode": "batt", "readings": readings})
+
+
 # ── store-and-forward 로컬 큐 (오프라인/재부팅/정전에도 무손실) ──
 # 농막은 인터넷이 방문 때만(폰 테더링). 모든 데이터를 로컬 SQLite에 영구 저장해 두고,
 # 인터넷이 있을 때만 시트로 보낸다(센서엔 다시 안 묻는다).
@@ -226,6 +230,9 @@ def q_connect():
     db.execute("CREATE TABLE IF NOT EXISTS hist_q ("
                "time_ms INTEGER, sensor TEXT, maxT REAL, minT REAL, maxH REAL, minH REAL, "
                "src TEXT, sent INTEGER DEFAULT 0, PRIMARY KEY(time_ms, sensor))")
+    db.execute("CREATE TABLE IF NOT EXISTS batt_q ("    # 배터리 이력(수명 추세·예상 소진일용)
+               "time_ms INTEGER, sensor TEXT, volt REAL, pct INTEGER, sent INTEGER DEFAULT 0, "
+               "PRIMARY KEY(time_ms, sensor))")
     db.commit()
     return db
 
@@ -234,6 +241,13 @@ def q_store_avg(db, batch):
     for r in batch:
         db.execute("INSERT OR IGNORE INTO avg_q(time_ms, sensor, temp, hum) VALUES(?,?,?,?)",
                    (int(r["time_ms"]), r["sensor"], r.get("temp"), r.get("hum")))
+    db.commit()
+
+
+def q_store_batt(db, batch):
+    for r in batch:
+        db.execute("INSERT OR IGNORE INTO batt_q(time_ms, sensor, volt, pct) VALUES(?,?,?,?)",
+                   (int(r["time_ms"]), r["sensor"], r.get("volt"), r.get("pct")))
     db.commit()
 
 
@@ -305,6 +319,23 @@ def q_drain(db, chunk=300):
         db.executemany("UPDATE hist_q SET sent=1 WHERE time_ms=? AND sensor=?", [(t, s) for t, s, *_ in rows])
         db.commit()
         log(f"[이력] 전송 {len(rows)} (추가 {res.get('added')}/갱신 {res.get('updated')}, 남은대기 {q_pending(db, 'hist_q')})")
+        if len(rows) < chunk:
+            break
+    while True:   # 3) 배터리 → 사이트_배터리
+        rows = db.execute("SELECT time_ms, sensor, volt, pct FROM batt_q WHERE sent=0 "
+                          "ORDER BY time_ms LIMIT ?", (chunk,)).fetchall()
+        if not rows:
+            break
+        readings = [{"sensor": s, "time_ms": t, "volt": v, "pct": p} for t, s, v, p in rows]
+        try:
+            res = post_batt(readings)
+        except Exception as e:
+            log(f"[배터리] 업로드 오류(로컬 보관): {e}"); return
+        if res.get("mode") != "batt":
+            log("[배터리] ⚠ Code.gs 재배포 필요(mode:batt) — 로컬 보관"); break
+        db.executemany("UPDATE batt_q SET sent=1 WHERE time_ms=? AND sensor=?", [(t, s) for t, s, _, _ in rows])
+        db.commit()
+        log(f"[배터리] 전송 {len(rows)} (남은대기 {q_pending(db, 'batt_q')})")
         if len(rows) < chunk:
             break
 
@@ -461,7 +492,7 @@ async def history_syncer(cfg, box, lock, db):
         await asyncio.sleep(HISTORY_INTERVAL)
 
 
-async def hourly_flusher(cfg, avg_state, db):
+async def hourly_flusher(cfg, avg_state, latest, db):
     """매 정시: passive로 모은 시간가중 avg + 시간별 min/max를 .db에 '영구 저장'.
     - avg  → avg_q(→농막_평균),  min/max → hist_q src='p'(→농막_시간별, authoritative가 덮어씀)
     - 진행 중이던 첫 버킷은 부분이라 제외. db=None(모니터/테스트)이면 로그만.
@@ -485,7 +516,7 @@ async def hourly_flusher(cfg, avg_state, db):
         bucket_end = b * AVG_BUCKET
         full = (last_bucket * AVG_BUCKET) >= start_ts   # 버킷 전체를 관측했는가(부분 버킷 제외)
         t_ms = last_bucket * AVG_BUCKET * 1000
-        avg_batch, hist_batch, parts = [], [], []
+        avg_batch, hist_batch, batt_batch, parts = [], [], [], []
         for label in cfg:
             st = avg_state[label]
             at = st["temp"].flush(bucket_end)
@@ -508,6 +539,10 @@ async def hourly_flusher(cfg, avg_state, db):
                 hist_batch.append({"sensor": label, "time_ms": t_ms,
                                    "maxT": tmax, "minT": tmin, "maxH": hmax, "minH": hmin})
                 parts.append(f"{label} {tmin if tmin is not None else '-'}~{tmax if tmax is not None else '-'}℃")
+            b_pct = latest.get(label, {}).get("batt")
+            if b_pct is not None:   # 배터리 수명 추세용(매시간 1점)
+                batt_batch.append({"sensor": label, "time_ms": t_ms,
+                                   "volt": round(2.2 + 0.9 * b_pct / 100, 3), "pct": b_pct})
         last_bucket = b
         if avg_batch or hist_batch:
             hhmm = time.strftime("%H:%M", time.localtime(t_ms / 1000))
@@ -516,6 +551,7 @@ async def hourly_flusher(cfg, avg_state, db):
             continue
         q_store_avg(db, avg_batch)
         q_store_hist(db, hist_batch, "p")   # passive 근사 min/max (authoritative 없을 때만 들어감)
+        q_store_batt(db, batt_batch)
         q_drain(db)
 
 
@@ -655,14 +691,14 @@ async def main():
         log("모니터 모드: 수신 로그만 — 서버 업로드 없음 · 센서 연결 없음 (평균은 계산·로그만)")
         await asyncio.gather(
             passive_loop(cfg, latest, avg_state, dirty, box, scan_lock),
-            hourly_flusher(cfg, avg_state, db),   # db=None → 로그만
+            hourly_flusher(cfg, avg_state, latest, db),   # db=None → 로그만
         )
     else:
         log(f"게이트웨이 시작 (현재 변화시+{CURRENT_COOLDOWN:.0f}s쿨다운/하트비트 {CURRENT_INTERVAL:.0f}s / 평균 {AVG_BUCKET:.0f}s / 이력 {HISTORY_INTERVAL:.0f}s)")
         tasks = [
             passive_loop(cfg, latest, avg_state, dirty, box, scan_lock),
             current_uploader(cfg, latest, dirty),
-            hourly_flusher(cfg, avg_state, db),
+            hourly_flusher(cfg, avg_state, latest, db),
         ]
         if db is not None:
             tasks += [history_syncer(cfg, box, scan_lock, db), drain_loop(db)]
