@@ -1,20 +1,27 @@
 /*
- * Code.gs — 농막 샤오미 센서 이력을 '농막_시간별' 탭에 증분 기록하는 Apps Script 웹앱.
+ * Code.gs — 농막/선반 센서 데이터 수집 Apps Script 웹앱 (SITE 접두사로 여러 시트 공용).
+ *
+ * ★★ 버전: 2026-10-27 v5  ← 붙여넣기 전에 이 줄 확인! ★★
+ *   이 버전 요약: SITE 접두사 · mode current(+접속 SSID/IP) · avg(시간평균) ·
+ *                 hist(시간별 min/max upsert, 변화행만 기록) · 멱등(중복제거) 업로드.
+ *   배포된 버전 확인법: 브라우저로 /exec 주소를 열면 {"version":"2026-10-27 v5", ...} 가 보임.
+ *   (구버전이 배포돼 있으면 version 이 다르거나 없음 → 다시 붙여넣고 새 버전 배포)
+ *
+ * 변경 이력:
+ *   v5 (2026-10-27) 현재 탭에 접속 SSID·IP 표시(F·G열, 헤더 자동보강)
+ *   v4 (2026-10-27) SITE 접두사(농막/선반 공용) · mode:hist upsert(변화행만)
+ *   v3  mode:avg(시간평균) · mode:current(현재 스냅샷)
+ *   v1  시간별 min/max 증분 기록(멱등)
  *
  * 배포:
- *   1) 대상 구글시트에서  확장 프로그램 > Apps Script  열기
- *   2) 이 파일 내용 전체 붙여넣기, 아래 SECRET 를 원하는 값으로 변경
- *   3) 배포 > 새 배포 > 유형: 웹 앱
- *        - 실행 계정: 나
- *        - 액세스 권한: 모든 사용자
- *   4) 생성된 /exec URL 을 index.html 설정의 "Apps Script 웹앱 URL"에 입력
+ *   1) 대상 구글시트 > 확장 프로그램 > Apps Script 열고 '이 내용 전체'를 붙여넣기(기존 것 교체)
+ *   2) 맨 위 SITE('농막' 또는 '선반') 와 SECRET 를 게이트웨이와 일치하게 설정
+ *   3) 배포 > 배포 관리 > (기존 웹앱) 새 버전 > 배포  (실행:나 / 액세스:모든 사용자, URL 유지)
  *
- * 특징:
- *   - 중복 제거를 여기(서버)서 처리 → 페이지는 시트를 읽을 필요 없음, 업로드가 멱등(idempotent).
- *   - 중복 기준: (센서, 시각의 '정시 버킷'). 페이지가 이미 정시로 반올림해 보냄.
- *   - 시각은 실제 날짜/시간 값으로 저장 → 나중에 MAXIFS 등으로 일별 집계 가능.
+ * 특징: 중복 제거를 서버에서 처리(멱등). 중복 기준 (센서, 정시 버킷). 시각은 실제 날짜값으로 저장.
  */
 
+var CODE_VERSION = '2026-10-27 v5';   // ← /exec(doGet) 응답·붙여넣기 확인용. 고칠 때마다 갱신.
 var SITE = '농막';                 // ← 장소 접두사. 두 번째 시트(예: 선반)는 '선반' 으로만 바꾸면 됨
 var SECRET = 'CHANGE-ME';          // ← 게이트웨이의 FARMHUT_SECRET 과 동일하게
 var SHEET_NAME = SITE + '_시간별';
@@ -248,7 +255,7 @@ function doGet(e) {
     }
     for (var k in summary) if (summary[k].last) summary[k].last = new Date(summary[k].last).toISOString();
   }
-  var out = { ok: true, sheet: SHEET_NAME, totalRows: Math.max(0, last - 1), bySensor: summary };
+  var out = { ok: true, version: CODE_VERSION, site: SITE, sheet: SHEET_NAME, totalRows: Math.max(0, last - 1), bySensor: summary };
   if (p.callback) {
     return ContentService.createTextOutput(p.callback + '(' + JSON.stringify(out) + ')')
       .setMimeType(ContentService.MimeType.JAVASCRIPT);
