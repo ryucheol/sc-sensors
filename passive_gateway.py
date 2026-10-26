@@ -232,12 +232,9 @@ def q_drain(db, chunk=300):
 
 
 def get_sheet_last():
-    try:
-        with urllib.request.urlopen(WEBAPP_URL, timeout=30) as r:
-            data = json.loads(r.read().decode("utf-8", "replace"))
-    except Exception as e:
-        log(f"[시트] 마지막시각 조회 실패({e})")
-        return {}
+    # 실패(오프라인 등)하면 예외를 던진다 → history_syncer가 온라인 판별에 사용.
+    with urllib.request.urlopen(WEBAPP_URL, timeout=30) as r:
+        data = json.loads(r.read().decode("utf-8", "replace"))
     import datetime
     out = {}
     for label, info in (data.get("bySensor") or {}).items():
@@ -354,6 +351,15 @@ async def history_syncer(cfg, box, lock):
     # 하루 간격이라 실패가 비싸므로, 실패한 센서만 몇 라운드 재시도 후 긴 대기.
     # ★ BlueZ는 스캔 중 연결 불가 → 연결 구간에서만 passive 스캐너를 멈췄다 재개(lock+box).
     while True:
+        # 온라인 확인: 시트에 못 닿으면(오프라인) 이력 sync 생략 — 연결=센서 배터리인데 업로드도
+        # 못 하고, 데이터는 센서 버퍼(~5개월)에 보존되므로 방문해 온라인 되면 증분으로 한 번에 복구.
+        # (빈집 동안 매일 풀버퍼를 BLE로 읽어 배터리 낭비하는 것을 방지)
+        try:
+            sheet_last = get_sheet_last()
+        except Exception as e:
+            log(f"[이력] 오프라인 — 이력 sync 생략(센서 버퍼 보존): {e}")
+            await asyncio.sleep(HISTORY_INTERVAL)
+            continue
         pending = dict(cfg)
         for rnd in range(HISTORY_RETRY_ROUNDS):
             if not pending:
@@ -361,11 +367,6 @@ async def history_syncer(cfg, box, lock):
             if rnd:
                 log(f"[이력] 실패 {len(pending)}개 재시도 {rnd}/{HISTORY_RETRY_ROUNDS - 1} ({HISTORY_RETRY_BACKOFF:.0f}s 후)")
                 await asyncio.sleep(HISTORY_RETRY_BACKOFF)   # 대기 중엔 스캐너 가동
-            try:
-                sheet_last = get_sheet_last()                # 네트워크, 스캐너 가동
-            except Exception as e:
-                log(f"[이력] 시트 조회 오류: {e}")
-                sheet_last = {}
             failed = {}
             async with lock:                                 # ← 연결 구간: 스캐너 정지
                 sc = box["scanner"]
