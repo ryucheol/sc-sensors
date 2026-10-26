@@ -212,10 +212,10 @@ def iso_hour(ms):
 
 
 async def sync_history_one(mac, label, sheet_last_ms):
-    dev = await BleakScanner.find_device_by_address(mac, timeout=SCAN_TIMEOUT)
-    if dev is None:
-        raise RuntimeError("스캔 실패(못 찾음)")
-    async with BleakClient(dev, services=[SERVICE]) as client:
+    # BlueZ(리눅스)는 동시 스캔이 안 돼, find_device_by_address(스캔)가 상주 passive 스캐너와
+    # 충돌한다(org.bluez.Error.InProgress). 주소로 직접 연결하면 추가 스캔 없이 붙는다
+    # (passive 스캐너가 이미 기기를 발견·캐시해 둠). 기기가 없으면 연결 타임아웃→상위에서 재시도.
+    async with BleakClient(mac, services=[SERVICE], timeout=SCAN_TIMEOUT) as client:
         counter_s = struct.unpack_from("<I", await client.read_gatt_char(C_TIME), 0)[0]
         now_ms = time.time() * 1000
         boot_epoch = round(now_ms / 1000 - counter_s)
