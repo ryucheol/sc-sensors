@@ -212,10 +212,10 @@ def iso_hour(ms):
 
 
 async def sync_history_one(mac, label, sheet_last_ms):
-    # BlueZ(리눅스)는 동시 스캔이 안 돼, find_device_by_address(스캔)가 상주 passive 스캐너와
-    # 충돌한다(org.bluez.Error.InProgress). 주소로 직접 연결하면 추가 스캔 없이 붙는다
-    # (passive 스캐너가 이미 기기를 발견·캐시해 둠). 기기가 없으면 연결 타임아웃→상위에서 재시도.
-    async with BleakClient(mac, services=[SERVICE], timeout=SCAN_TIMEOUT) as client:
+    dev = await BleakScanner.find_device_by_address(mac, timeout=SCAN_TIMEOUT)
+    if dev is None:
+        raise RuntimeError("스캔 실패(못 찾음)")
+    async with BleakClient(dev, services=[SERVICE]) as client:
         counter_s = struct.unpack_from("<I", await client.read_gatt_char(C_TIME), 0)[0]
         now_ms = time.time() * 1000
         boot_epoch = round(now_ms / 1000 - counter_s)
@@ -295,9 +295,10 @@ async def current_uploader(cfg, latest, dirty):
         await asyncio.sleep(CURRENT_COOLDOWN)   # 쿨다운: 이 동안의 변화는 모아서 다음 1회로
 
 
-async def history_syncer(cfg):
+async def history_syncer(cfg, box, lock):
     # 시작 직후 1회(권위 데이터 확보·공백 백필) + 이후 주기적(기본 하루 1회).
     # 하루 간격이라 실패가 비싸므로, 실패한 센서만 몇 라운드 재시도 후 긴 대기.
+    # ★ BlueZ는 스캔 중 연결 불가 → 연결 구간에서만 passive 스캐너를 멈췄다 재개(lock+box).
     while True:
         pending = dict(cfg)
         for rnd in range(HISTORY_RETRY_ROUNDS):
@@ -305,25 +306,31 @@ async def history_syncer(cfg):
                 break
             if rnd:
                 log(f"[이력] 실패 {len(pending)}개 재시도 {rnd}/{HISTORY_RETRY_ROUNDS - 1} ({HISTORY_RETRY_BACKOFF:.0f}s 후)")
-                await asyncio.sleep(HISTORY_RETRY_BACKOFF)
+                await asyncio.sleep(HISTORY_RETRY_BACKOFF)   # 대기 중엔 스캐너 가동
             try:
-                sheet_last = get_sheet_last()
+                sheet_last = get_sheet_last()                # 네트워크, 스캐너 가동
             except Exception as e:
                 log(f"[이력] 시트 조회 오류: {e}")
                 sheet_last = {}
             failed = {}
-            for label, v in pending.items():
-                try:
-                    log(await sync_history_one(v["mac"], label, sheet_last))
-                except BleakError as e:
-                    log(f"[{label}] 이력 연결오류: {e}"); failed[label] = v
-                except Exception as e:
-                    log(f"[{label}] 이력 오류: {e}"); failed[label] = v
-                await asyncio.sleep(2)   # 센서 간 간격
-            pending = failed
+            async with lock:                                 # ← 연결 구간: 스캐너 정지
+                sc = box["scanner"]
+                if sc is not None:
+                    try: await sc.stop()
+                    except Exception: pass
+                    box["scanner"] = None   # 잠금 해제 후 passive_loop가 스캐너 재시작
+                for label, v in pending.items():
+                    try:
+                        log(await sync_history_one(v["mac"], label, sheet_last))
+                    except BleakError as e:
+                        log(f"[{label}] 이력 연결오류: {e}"); failed[label] = v
+                    except Exception as e:
+                        log(f"[{label}] 이력 오류: {e}"); failed[label] = v
+                    await asyncio.sleep(1)   # 센서 간 간격
+            pending = failed                                 # 잠금 해제 → 스캐너 재개
         if pending:
             log(f"[이력] 최종 실패: {list(pending)} — 다음 주기에 재시도")
-        await asyncio.sleep(HISTORY_INTERVAL)
+        await asyncio.sleep(HISTORY_INTERVAL)                # 대기 중 스캐너 가동
 
 
 async def avg_uploader(cfg, avg_state):
@@ -378,7 +385,7 @@ async def avg_uploader(cfg, avg_state):
             log(f"[평균] 업로드 오류(보류 {len(pending)}개): {e}")
 
 
-async def passive_loop(cfg, latest, avg_state, dirty):
+async def passive_loop(cfg, latest, avg_state, dirty, box, lock):
     by_mac = {v["mac"].upper(): (label, bytes.fromhex(v["key"])) for label, v in cfg.items()}
     loop = asyncio.get_running_loop()   # 콜백이 다른 스레드(WinRT)일 수 있어 threadsafe 로 깨움
     sig = {label: {} for label in cfg}  # 마지막으로 '변화'로 인정된 값(데드밴드 기준점)
@@ -459,19 +466,23 @@ async def passive_loop(cfg, latest, avg_state, dirty):
                 log_open(f'{dstate["line"]} ')
             mark(mk)
 
-    while True:  # 스캐너가 죽으면 재시작
+    while True:  # 스캐너가 죽거나, 이력 sync로 일시정지되면 재시작
         try:
-            scanner = BleakScanner(detection_callback=cb)
-            await scanner.start()
+            async with lock:                 # 이력 sync와 같은 lock으로 스캔/연결 배타
+                scanner = BleakScanner(detection_callback=cb)
+                await scanner.start()
+                box["scanner"] = scanner
             log("[passive] 비콘 수신 시작")
-            while True:
-                await asyncio.sleep(3600)   # 유지(콜백이 백그라운드로 동작)
+            while box["scanner"] is not None:   # 이력 sync가 None으로 바꾸면 빠져나와 재시작
+                await asyncio.sleep(2)
         except Exception as e:
             log(f"[passive] 스캐너 오류, 10초 후 재시작: {e}")
-            try:
-                await scanner.stop()
-            except Exception:
-                pass
+            async with lock:
+                sc = box["scanner"]
+                if sc is not None:
+                    try: await sc.stop()
+                    except Exception: pass
+                    box["scanner"] = None
             await asyncio.sleep(10)
 
 
@@ -483,19 +494,21 @@ async def main():
     latest = {label: {} for label in cfg}
     avg_state = {label: {"temp": TWAvg(), "humi": TWAvg()} for label in cfg}
     dirty = asyncio.Event()   # 값 변화 신호(passive → current_uploader)
+    scan_lock = asyncio.Lock()        # 스캔(passive)과 연결(이력)의 BlueZ 동시사용 방지
+    box = {"scanner": None}           # 현재 passive 스캐너 핸들(이력 sync가 멈출 수 있게 공유)
     if MONITOR:
         log("모니터 모드: 수신 로그만 — 서버 업로드 없음 · 센서 연결 없음 (평균은 계산·로그만)")
         await asyncio.gather(
-            passive_loop(cfg, latest, avg_state, dirty),
+            passive_loop(cfg, latest, avg_state, dirty, box, scan_lock),
             avg_uploader(cfg, avg_state),   # can_upload=False → 로그만
         )
     else:
         log(f"게이트웨이 시작 (현재 변화시+{CURRENT_COOLDOWN:.0f}s쿨다운/하트비트 {CURRENT_INTERVAL:.0f}s / 평균 {AVG_BUCKET:.0f}s / 이력 {HISTORY_INTERVAL:.0f}s)")
         await asyncio.gather(
-            passive_loop(cfg, latest, avg_state, dirty),
+            passive_loop(cfg, latest, avg_state, dirty, box, scan_lock),
             current_uploader(cfg, latest, dirty),
             avg_uploader(cfg, avg_state),
-            history_syncer(cfg),
+            history_syncer(cfg, box, scan_lock),
         )
 
 
