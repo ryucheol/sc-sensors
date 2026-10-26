@@ -135,3 +135,41 @@ MAC 으로 직접 찾으므로 선택창/LCD 대조 없이 완전 자동. Mi Hom
 - `ebe0ccba` 에 시작 인덱스를 write 하면 `ebe0ccbc` 가 그 지점부터 스트림(비파괴적) — 실기기로 검증됨.
 - bindkey 는 Xiaomi Home 계정에서 [Xiaomi-cloud-tokens-extractor](https://github.com/PiotrMachowski/Xiaomi-cloud-tokens-extractor) 로 추출.
 - 장기 대안: pvvx/ATC 커스텀 펌웨어로 평문 비콘 방송(복호화 불필요) — 현재는 순정 유지.
+
+> 2사이트 운영(농막/선반)·사이트 전환·오프라인 store-and-forward·배터리 예상 소진일 등
+> 최신 구성·운영은 **[OPERATIONS.md](OPERATIONS.md)** 참고.
+
+## 이 프로젝트의 차별점
+
+대부분의 LYWSD03MMC DIY는 **Home Assistant/ESPHome + MQTT + 상시 네트워크 + 커스텀 펌웨어(ATC/pvvx)** 조합이다. 이 프로젝트는 다른 선택을 했다:
+
+- **클라우드·HA·MQTT·브로커 없음** — 초경량 단일 파이썬 게이트웨이가 **구글시트로 직접** 업로드. 서버·DB·대시보드 인프라 불필요(시트가 저장소+뷰+공유+차트). 샤오미 클라우드·앱도 데이터 경로에 없음.
+- **스톡(순정) 펌웨어 그대로** — 암호화 MiBeacon + bindkey로 복호화. 플래시 위험·LCD 상실 없음. (대가: 갱신 느림·배터리 ~1년 → 문서화. 수명 우선이면 pvvx 교체 가능.)
+- **오프라인 우선 + 무손실 store-and-forward** — 간헐적 인터넷(농막=방문 때 폰 테더링)을 전제. **로컬 SQLite가 진실원천**, 인터넷 될 때만 업로드(정전·재부팅·오프라인에도 worst-case 손실 ≤1시간). "상시 인터넷"을 가정하는 흔한 설정과 반대.
+- **passive + 하루 1회 권위 이력 하이브리드** — 실시간·평균은 passive(센서 배터리 0 소모), 시간별 min/max는 센서 내부버퍼에서 **증분으로 하루 1회만** 연결(배터리 절약). passive만(공백) 또는 연결만(배터리 소모)인 방식과 다름.
+- **폰 핫스팟 자동접속 + 온라인 선검사(online gate)** — 무인·간헐연결 맞춤(오프라인이면 업로드 시도조차 안 함).
+- **한 Pi로 다중 사이트** — env 파라미터화로 같은 코드가 여러 시트(농막/선반)에 재사용·전환.
+- **배터리 수명 추세·예상 소진일**(시트에 임박 시 빨강 경고), **접속망 SSID/IP 가시화**, 정전·재부팅 자립.
+
+한 줄 요약: **무인 + 간헐적 인터넷 환경을 위한, 인프라 없는 자립형 BLE→구글시트 게이트웨이.**
+
+## 관련 프로젝트 · 커뮤니티
+
+**센서 펌웨어 (수명·갱신 개선, 평문 방송)**
+- [pvvx/ATC_MiThermometer](https://github.com/pvvx/ATC_MiThermometer) — 중심 커스텀 펌웨어. 브라우저 OTA 플래시, BTHome. **Issues가 사실상 커뮤니티.**
+- [atc1441/ATC_MiThermometer](https://github.com/atc1441/ATC_MiThermometer) — 원조.
+- ⚠ 신형 HW **B1.6(2025.03~)** 는 소비전류↑·호환성 주의 — 추가 구매 시 리비전 확인.
+
+**개방형 방송 표준 / 연동**
+- [BTHome](https://bthome.io) — pvvx/ATC가 쓰는 개방형 BLE 방송 표준(HA 기본 통합).
+- Home Assistant 포럼(community.home-assistant.io), Reddit r/homeassistant · r/homeautomation, ESPHome(`atc_mithermometer`·`xiaomi_lywsd03mmc`).
+
+**"자체 게이트웨이(파이썬)" 쪽 — 이 프로젝트와 가장 유사**
+- [JsBergbau/MiTemperature2](https://github.com/JsBergbau/MiTemperature2) — LYWSD03MMC 파이썬 리더(온습도·배터리, passive+연결).
+- [Theengs/decoder](https://github.com/theengs/decoder) · Theengs Gateway — 오픈소스 BLE 디코더(MiBeacon·ATC·BTHome) + MQTT 게이트웨이.
+
+**bindkey 추출**
+- [Xiaomi-cloud-tokens-extractor](https://github.com/PiotrMachowski/Xiaomi-cloud-tokens-extractor)
+
+**한국**
+- HA 한국 사용자(네이버 카페 / 카카오톡 오픈채팅), 클리앙 홈네트워크 게시판. 검색어: `LYWSD03MMC 펌웨어`, `샤오미 온습도계 ATC pvvx`, `홈어시스턴트 블루투스 게이트웨이`.
