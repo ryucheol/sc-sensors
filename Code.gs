@@ -58,16 +58,19 @@ function _currentSheet() {
   var sh = ss.getSheetByName(CURRENT_SHEET);
   if (!sh) {
     sh = ss.insertSheet(CURRENT_SHEET);
-    sh.appendRow(['센서', '온도(°C)', '습도(%)', '배터리(V)', '갱신시각']);
+    sh.appendRow(['센서', '온도(°C)', '습도(%)', '배터리(V)', '갱신시각', 'SSID', 'IP']);
     sh.setFrozenRows(1);
+  } else if (sh.getRange(1, 6).getValue() !== 'SSID') {
+    sh.getRange(1, 6, 1, 2).setValues([['SSID', 'IP']]);   // 기존 시트에 헤더 보강
   }
   return sh;
 }
 
-// 현재값: 센서별 한 행을 덮어씀(없으면 추가)
+// 현재값: 센서별 한 행을 덮어씀(없으면 추가). 게이트웨이 접속 SSID·IP를 갱신시각 옆에 표시.
 function _postCurrent(body) {
   var sh = _currentSheet();
   var readings = body.readings || [];
+  var ssid = body.ssid || '', ip = body.ip || '';
   var last = sh.getLastRow();
   var names = last >= 2 ? sh.getRange(2, 1, last - 1, 1).getValues().map(function (r) { return r[0]; }) : [];
   var n = 0;
@@ -76,7 +79,7 @@ function _postCurrent(body) {
     var idx = names.indexOf(r.sensor);
     var row = idx >= 0 ? idx + 2 : sh.getLastRow() + 1;
     var t = r.time_ms ? new Date(r.time_ms) : new Date();
-    sh.getRange(row, 1, 1, 5).setValues([[r.sensor, r.temp, r.hum, r.volt, t]]);
+    sh.getRange(row, 1, 1, 7).setValues([[r.sensor, r.temp, r.hum, r.volt, t, ssid, ip]]);
     if (idx < 0) names.push(r.sensor);
     n++;
   }

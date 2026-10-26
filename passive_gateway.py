@@ -14,8 +14,10 @@ passive_gateway.py — 라즈베리파이 상주 게이트웨이.
 import asyncio
 import json
 import os
+import socket
 import sqlite3
 import struct
+import subprocess
 import sys
 import time
 import urllib.request
@@ -171,8 +173,35 @@ def _post(payload):
         return json.loads(r.read().decode("utf-8", "replace"))
 
 
-def post_current(readings):
-    return _post({"secret": SECRET, "mode": "current", "readings": readings})
+def net_info():
+    """현재 wlan 연결의 SSID와 IP (현재 탭 '갱신시각' 옆에 표시용). 실패 시 빈 문자열."""
+    ip = ""
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.settimeout(1)
+        s.connect(("8.8.8.8", 80))
+        ip = s.getsockname()[0]
+        s.close()
+    except Exception:
+        pass
+    ssid = ""
+    try:
+        out = subprocess.run(["nmcli", "-t", "-f", "active,ssid", "dev", "wifi"],
+                             capture_output=True, text=True, timeout=4).stdout
+        for ln in out.splitlines():
+            if ln.startswith("yes:"):
+                ssid = ln.split(":", 1)[1]
+                break
+    except Exception:
+        pass
+    return {"ssid": ssid, "ip": ip}
+
+
+def post_current(readings, net=None):
+    payload = {"secret": SECRET, "mode": "current", "readings": readings}
+    if net:
+        payload.update(net)   # ssid, ip
+    return _post(payload)
 
 
 def post_avg(readings):
@@ -385,8 +414,9 @@ async def current_uploader(cfg, latest, dirty):
                 readings.append(r)
         if readings:
             try:
-                res = post_current(readings)
-                log(f"[현재] {res.get('updated')}개 갱신")
+                net = await asyncio.to_thread(net_info)
+                res = post_current(readings, net)
+                log(f"[현재] {res.get('updated')}개 갱신 ({net.get('ssid','')} {net.get('ip','')})")
             except Exception as e:
                 log(f"[현재] 업로드 오류: {e}")
         await asyncio.sleep(CURRENT_COOLDOWN)   # 쿨다운: 이 동안의 변화는 모아서 다음 1회로
