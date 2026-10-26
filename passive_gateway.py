@@ -186,12 +186,12 @@ def net_info():
         pass
     ssid = ""
     try:
-        out = subprocess.run(["nmcli", "-t", "-f", "active,ssid", "dev", "wifi"],
-                             capture_output=True, text=True, timeout=4).stdout
-        for ln in out.splitlines():
-            if ln.startswith("yes:"):
-                ssid = ln.split(":", 1)[1]
-                break
+        # 활성 연결명(스캔 캐시와 무관하게 항상 확실) → 그 연결의 SSID
+        conn = subprocess.run(["nmcli", "-g", "GENERAL.CONNECTION", "device", "show", "wlan0"],
+                              capture_output=True, text=True, timeout=4).stdout.strip()
+        if conn and conn != "--":
+            ssid = subprocess.run(["nmcli", "-g", "802-11-wireless.ssid", "connection", "show", conn],
+                                  capture_output=True, text=True, timeout=4).stdout.strip() or conn
     except Exception:
         pass
     return {"ssid": ssid, "ip": ip}
