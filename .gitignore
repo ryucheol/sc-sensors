@@ -4,10 +4,14 @@ config.json
 config.local.*
 secret*.txt
 *.local
-# 비콘 복호화용 bindkey/token (비밀 — 절대 커밋 금지)
+# 비콘 복호화용 bindkey (비밀 — 절대 커밋 금지). shelf_keys.json 등 2차 인스턴스 포함
 sensor_keys.json
-# Pi 게이트웨이 환경파일(SECRET 포함)
+*_keys.json
+# Pi 게이트웨이 환경파일(SECRET·대상 URL 포함). *.env.example 만 커밋
 gateway.env
+shelf.env
+*.env
+!*.env.example
 
 # 로그
 *.log

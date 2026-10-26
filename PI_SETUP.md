@@ -84,3 +84,52 @@ journalctl -u farmhut-gateway -f
 - **BlueZ 버전**: 최신 Pi OS면 충분. 오래된 OS면 `sudo apt upgrade`.
 - **인터넷 끊김**: 업로드만 실패하고 수신은 계속됨. 복구되면 다음 주기에 올라감(이력은 시트 마지막 이후만 받으므로 공백 자동 복구). 현재값은 그 순간 것만.
 - **Windows(WinRT)의 "Unreachable"** 문제는 리눅스엔 없음 — Pi가 더 안정적.
+
+---
+
+## 2차 인스턴스: 선반(shelf) 센서 → 별도 시트
+같은 `passive_gateway.py` 를 **환경변수만 바꿔** 두 번째 센서·시트에 재사용한다(코드 복제 없음).
+
+> ⚠ **BlueZ는 어댑터(hci0) 1개당 스캐너 1개만** 가능하다. 한 Pi에서 농막·선반 게이트웨이를
+> **동시에 못 돌린다**(스캔 충돌 InProgress). `shelf-gateway.service` 에 `Conflicts=farmhut-gateway.service`
+> 가 걸려 있어 **하나를 start 하면 다른 하나는 자동 정지**된다. 두 곳을 24/7 수집하려면 기기가 2대 필요.
+> (보통 Pi는 한 장소에만 있으므로 그 장소의 센서를 쓰는 인스턴스 하나만 enable 하면 된다.)
+
+### A. 선반 시트 만들기 + Code.gs 배포 (한 번)
+1. 새 구글시트 **"선반 온습도 기록"** 열기(이미 생성돼 있으면 그대로).
+2. 확장 프로그램 > Apps Script → `Code.gs` 전체 붙여넣기.
+3. 맨 위 두 줄을 선반용으로 수정:
+   - `var SITE = '선반';`  (탭이 선반_현재/선반_평균/선반_시간별 로 생성됨)
+   - `var SECRET = '...';` (아래 shelf.env 의 FARMHUT_SECRET 과 **똑같이**)
+4. 배포 > 새 배포 > 웹앱(실행: 나 / 액세스: 모든 사용자) → 생성된 **/exec URL 복사**.
+
+### B. 선반 설정 파일 (Pi, 시크릿 — 커밋 금지)
+```bash
+cd ~/smart-cabin
+# 센서키: {"선반":{"mac":"...","key":"<BLE KEY>"}}  ← 앱에서 받은 값
+nano shelf_keys.json
+# 환경파일: 예시 복사 후 GW_WEBAPP_URL(=A의 /exec), FARMHUT_SECRET, 경로 채우기
+cp shelf.env.example shelf.env && nano shelf.env
+```
+`shelf.env` 의 세 값(`GW_WEBAPP_URL`·`GW_KEYS_FILE`·`GW_QUEUE_DB`)은 **반드시 함께** 채운다
+(하나라도 빠지면 게이트웨이가 시작 시 중단 — 선반 값이 농막 시트로 가는 사고 방지).
+
+### C. 수동 시험
+```bash
+sudo systemctl stop farmhut-gateway        # 스캐너 비우기
+./run_gateway.sh shelf.env                  # 선반 env 로 실행
+# 시작 로그에 "대상 시트: ...<선반 /exec 끝자리>  키: shelf_keys.json  큐: shelf_queue.db" 확인
+```
+
+### D. 상주 전환 (농막 ↔ 선반, 한 Pi에선 택1)
+```bash
+sudo cp shelf-gateway.service /etc/systemd/system/
+sudo systemctl daemon-reload
+# 선반으로 전환(농막은 Conflicts 로 자동 정지):
+sudo systemctl disable --now farmhut-gateway
+sudo systemctl enable  --now shelf-gateway
+# 다시 농막으로 되돌리기:
+#   sudo systemctl disable --now shelf-gateway && sudo systemctl enable --now farmhut-gateway
+systemctl status shelf-gateway
+journalctl -u shelf-gateway -f
+```

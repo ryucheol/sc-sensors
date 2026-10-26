@@ -30,10 +30,14 @@ from bleak.exc import BleakError
 from cryptography.hazmat.primitives.ciphers.aead import AESCCM
 
 # ── 설정 ───────────────────────────────────────────────
-WEBAPP_URL = "https://script.google.com/macros/s/AKfycbzEJn5u4lIAJprA69xR_yRSEeRmk2I_qe_igsAlPqEq1umHdsNkykOcF_imW3Zj5s_Rzg/exec"
+_HERE = os.path.dirname(os.path.abspath(__file__))
+# 기본값 = 농막. 두 번째 인스턴스(예: 선반)는 아래 3개를 env로 '함께' 지정한다.
+#   GW_WEBAPP_URL(대상 시트) · GW_KEYS_FILE(그 센서 bindkey) · GW_QUEUE_DB(독립 큐)
+# 셋 중 일부만 주면 main()에서 중단 → 선반 값이 농막 시트로 잘못 올라가는 사고 방지.
+WEBAPP_URL = os.environ.get("GW_WEBAPP_URL") or "https://script.google.com/macros/s/AKfycbzEJn5u4lIAJprA69xR_yRSEeRmk2I_qe_igsAlPqEq1umHdsNkykOcF_imW3Zj5s_Rzg/exec"
 SECRET = os.environ.get("FARMHUT_SECRET", "CHANGE-ME")
-CFG = os.path.join(os.path.dirname(os.path.abspath(__file__)), "sensor_keys.json")
-QUEUE_DB = os.path.join(os.path.dirname(os.path.abspath(__file__)), "gateway_queue.db")  # 평균 store-and-forward(오프라인 대비)
+CFG = os.environ.get("GW_KEYS_FILE") or os.path.join(_HERE, "sensor_keys.json")
+QUEUE_DB = os.environ.get("GW_QUEUE_DB") or os.path.join(_HERE, "gateway_queue.db")  # 평균 store-and-forward(오프라인 대비)
 
 CURRENT_INTERVAL = float(os.environ.get("GW_CURRENT_INTERVAL", 600))    # '농막_현재' 하트비트 주기(초): 변화 없어도 최소 이 간격마다 1회
 CURRENT_COOLDOWN = float(os.environ.get("GW_CURRENT_COOLDOWN", 60))     # 변화 시 업로드 최소 간격(초) — 잦은 쓰기 방지
@@ -600,9 +604,15 @@ async def drain_loop(db):
 
 
 async def main():
+    # 2차 인스턴스 안전장치: 대상/키/큐는 반드시 '함께' 지정(일부만 주면 농막으로 오업로드 위험).
+    _site_env = [os.environ.get("GW_WEBAPP_URL"), os.environ.get("GW_KEYS_FILE"), os.environ.get("GW_QUEUE_DB")]
+    if any(_site_env) and not all(_site_env):
+        log("[중단] GW_WEBAPP_URL·GW_KEYS_FILE·GW_QUEUE_DB 는 모두 함께 지정해야 합니다(하나라도 빠지면 중단).")
+        sys.exit(2)
     if not MONITOR and SECRET in ("", "CHANGE-ME"):   # 모니터는 업로드 안 하므로 SECRET 불필요
         log("[중단] 환경변수 FARMHUT_SECRET 를 설정하세요.")
         sys.exit(2)
+    log(f"대상 시트: ...{WEBAPP_URL[-14:]}  키: {os.path.basename(CFG)}  큐: {os.path.basename(QUEUE_DB)}")
     cfg = load_cfg()
     latest = {label: {} for label in cfg}
     avg_state = {label: {"temp": TWAvg(), "humi": TWAvg(),

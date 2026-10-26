@@ -1,0 +1,21 @@
+[Unit]
+Description=Shelf passive BLE gateway (선반)
+After=bluetooth.service network-online.target
+Wants=bluetooth.service network-online.target
+# ⚠ BlueZ 어댑터 1개로는 농막·선반 게이트웨이를 동시에 돌릴 수 없다(스캔 충돌: InProgress).
+#    Conflicts 로 상호배제 — 이 유닛을 start 하면 farmhut-gateway 는 자동 정지된다.
+#    한 Pi에선 둘 중 하나만 enable 할 것(둘 다 24/7 수집하려면 기기/어댑터가 2개 필요).
+Conflicts=farmhut-gateway.service
+
+[Service]
+Type=simple
+User=ryuch
+WorkingDirectory=/home/ryuch/smart-cabin
+EnvironmentFile=/home/ryuch/smart-cabin/shelf.env
+ExecStartPre=+/usr/sbin/rfkill unblock bluetooth
+ExecStart=/usr/bin/python3 /home/ryuch/smart-cabin/passive_gateway.py
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

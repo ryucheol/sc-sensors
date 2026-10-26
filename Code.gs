@@ -15,10 +15,11 @@
  *   - 시각은 실제 날짜/시간 값으로 저장 → 나중에 MAXIFS 등으로 일별 집계 가능.
  */
 
-var SECRET = 'CHANGE-ME';          // ← index.html 의 '공유 시크릿'과 동일하게
-var SHEET_NAME = '농막_시간별';
-var CURRENT_SHEET = '농막_현재';   // 현재값 스냅샷(센서별 1행, 덮어쓰기)
-var AVG_SHEET = '농막_평균';       // 게이트웨이가 passive로 계산한 시간가중 평균(파생값)
+var SITE = '농막';                 // ← 장소 접두사. 두 번째 시트(예: 선반)는 '선반' 으로만 바꾸면 됨
+var SECRET = 'CHANGE-ME';          // ← 게이트웨이의 FARMHUT_SECRET 과 동일하게
+var SHEET_NAME = SITE + '_시간별';
+var CURRENT_SHEET = SITE + '_현재';   // 현재값 스냅샷(센서별 1행, 덮어쓰기)
+var AVG_SHEET = SITE + '_평균';       // 게이트웨이가 passive로 계산한 시간가중 평균(파생값)
 // 컬럼: A시각 B센서 C최고온도 D최저온도 E최고습도 F최저습도 G센서idx H업로드시각
 
 function _sheet() {
