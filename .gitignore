@@ -12,6 +12,10 @@ gateway.env
 # 로그
 *.log
 
+# 로컬 store-and-forward 큐(평균 오프라인 보관)
+gateway_queue.db
+*.db
+
 # 파이썬
 __pycache__/
 *.py[cod]

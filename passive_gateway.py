@@ -14,6 +14,7 @@ passive_gateway.py — 라즈베리파이 상주 게이트웨이.
 import asyncio
 import json
 import os
+import sqlite3
 import struct
 import sys
 import time
@@ -32,6 +33,7 @@ from cryptography.hazmat.primitives.ciphers.aead import AESCCM
 WEBAPP_URL = "https://script.google.com/macros/s/AKfycbzEJn5u4lIAJprA69xR_yRSEeRmk2I_qe_igsAlPqEq1umHdsNkykOcF_imW3Zj5s_Rzg/exec"
 SECRET = os.environ.get("FARMHUT_SECRET", "CHANGE-ME")
 CFG = os.path.join(os.path.dirname(os.path.abspath(__file__)), "sensor_keys.json")
+QUEUE_DB = os.path.join(os.path.dirname(os.path.abspath(__file__)), "gateway_queue.db")  # 평균 store-and-forward(오프라인 대비)
 
 CURRENT_INTERVAL = float(os.environ.get("GW_CURRENT_INTERVAL", 600))    # '농막_현재' 하트비트 주기(초): 변화 없어도 최소 이 간격마다 1회
 CURRENT_COOLDOWN = float(os.environ.get("GW_CURRENT_COOLDOWN", 60))     # 변화 시 업로드 최소 간격(초) — 잦은 쓰기 방지
@@ -175,6 +177,58 @@ def post_history(label, boot_epoch, rows):
 
 def post_avg(readings):
     return _post({"secret": SECRET, "mode": "avg", "readings": readings})
+
+
+# ── 평균 store-and-forward (오프라인/재부팅에도 유실 없이) ──
+# 농막은 인터넷이 방문 때만(폰 테더링) 있으므로, 시간평균을 로컬 SQLite에 영구 저장해 두고
+# 인터넷이 있을 때 밀린 것을 일괄 업로드한다. 현재값(스냅샷)·이력(센서 버퍼)은 큐 불필요.
+def q_connect():
+    db = sqlite3.connect(QUEUE_DB)
+    db.execute("CREATE TABLE IF NOT EXISTS avg_q ("
+               "time_ms INTEGER, sensor TEXT, temp REAL, hum REAL, sent INTEGER DEFAULT 0, "
+               "PRIMARY KEY(time_ms, sensor))")
+    db.commit()
+    return db
+
+
+def q_store(db, batch):
+    for r in batch:
+        db.execute("INSERT OR IGNORE INTO avg_q(time_ms, sensor, temp, hum) VALUES(?,?,?,?)",
+                   (int(r["time_ms"]), r["sensor"], r.get("temp"), r.get("hum")))
+    db.commit()
+
+
+def q_pending(db):
+    return db.execute("SELECT COUNT(*) FROM avg_q WHERE sent=0").fetchone()[0]
+
+
+def q_drain(db, chunk=300):
+    """미전송 평균을 청크로 업로드. 실패하면 멈추고 로컬에 남겨둔다(다음에 재시도)."""
+    while True:
+        rows = db.execute("SELECT time_ms, sensor, temp, hum FROM avg_q WHERE sent=0 "
+                          "ORDER BY time_ms LIMIT ?", (chunk,)).fetchall()
+        if not rows:
+            return
+        readings = []
+        for t, s, temp, hum in rows:
+            r = {"sensor": s, "time_ms": t}
+            if temp is not None: r["temp"] = temp
+            if hum is not None: r["hum"] = hum
+            readings.append(r)
+        try:
+            res = post_avg(readings)
+        except Exception as e:
+            log(f"[평균] 업로드 오류(로컬 {q_pending(db)}개 보관): {e}")
+            return
+        if res.get("mode") != "avg":
+            log("[평균] ⚠ Code.gs 재배포 필요(mode:avg 미지원) — 로컬 보관 후 재시도")
+            return
+        db.executemany("UPDATE avg_q SET sent=1 WHERE time_ms=? AND sensor=?",
+                       [(t, s) for t, s, _, _ in rows])
+        db.commit()
+        log(f"[평균] 업로드 추가 {res.get('added')}/중복 {res.get('skipped')} (전송 {len(rows)}, 남은대기 {q_pending(db)})")
+        if len(rows) < chunk:
+            return
 
 
 def get_sheet_last():
@@ -336,15 +390,21 @@ async def history_syncer(cfg, box, lock):
 async def avg_uploader(cfg, avg_state):
     """버킷(기본 1시간) 경계가 지나면 직전 버킷의 시간가중 평균을 '농막_평균'에 올림.
     - 시작 당시 '진행 중'이던 버킷은 일부만 관측되므로 업로드하지 않고 버퍼만 비운다.
-    - 평균은 재계산 불가 → 업로드 실패분은 pending에 쌓아 다음 성공 때 함께 보냄(서버가 중복 제거).
-    - 1시간 미만 버킷(테스트용)은 (센서|정시) 중복키가 충돌하므로 업로드하지 않고 로그만 남긴다."""
+    - ★ 평균은 로컬 SQLite에 '영구 저장(store-and-forward)' → 인터넷(방문 테더링)이 있을 때
+      밀린 것을 일괄 업로드. 오프라인·재부팅에도 유실 없음(서버가 중복 제거).
+    - 1시간 미만 버킷(테스트용)·모니터 모드는 업로드/저장 안 하고 로그만."""
     start_ts = time.time()
     last_bucket = int(start_ts // AVG_BUCKET)
     can_upload = AVG_BUCKET >= 3600 and not MONITOR
     if not can_upload:
         why = "모니터 모드" if MONITOR else f"버킷 {AVG_BUCKET:.0f}s < 1h"
         log(f"[평균] {why} → 로그만(업로드 안 함)")
-    pending = []
+    db = q_connect() if can_upload else None
+    if db is not None:
+        n = q_pending(db)
+        if n:
+            log(f"[평균] 로컬 대기 {n}개 — 업로드 시도(오프라인 동안 쌓인 분)")
+        q_drain(db)   # 시작 시: 지난 실행/오프라인 동안 밀린 평균 먼저 업로드
     while True:
         await asyncio.sleep(AVG_CHECK)
         b = int(time.time() // AVG_BUCKET)
@@ -370,19 +430,8 @@ async def avg_uploader(cfg, avg_state):
             log(f"[평균] {hhmm}  {detail}")
         if not can_upload:
             continue
-        pending.extend(batch)
-        pending = pending[-1000:]       # 안전 상한(연결 장기불통 대비)
-        if not pending:
-            continue
-        try:
-            res = post_avg(pending)
-            if res.get("mode") != "avg":
-                log("[평균] ⚠ Code.gs 재배포 필요(mode:avg 미지원) — 보류 후 재시도")
-            else:
-                log(f"[평균] 업로드 추가 {res.get('added')}/중복 {res.get('skipped')} (보류분 {len(pending)})")
-                pending = []
-        except Exception as e:
-            log(f"[평균] 업로드 오류(보류 {len(pending)}개): {e}")
+        q_store(db, batch)   # ① 로컬 영구 저장(인터넷 없어도 안전, 재부팅에도 유지)
+        q_drain(db)          # ② 인터넷 있으면 밀린 것 전부 업로드(없으면 로컬 보관)
 
 
 async def passive_loop(cfg, latest, avg_state, dirty, box, lock):
