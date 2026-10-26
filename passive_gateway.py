@@ -412,7 +412,7 @@ async def current_uploader(cfg, latest, dirty):
                      "temp": round(v["temp"], 1), "hum": v["humi"]}
                 if "batt" in v: r["volt"] = round(2.2 + 0.9 * v["batt"] / 100, 3)
                 readings.append(r)
-        if readings:
+        if readings and await asyncio.to_thread(online):   # 오프라인이면 아예 시도 안 함(현재값은 큐 안 함)
             try:
                 net = await asyncio.to_thread(net_info)
                 res = post_current(readings, net)
