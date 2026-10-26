@@ -125,6 +125,55 @@ function _postAvg(body) {
   return _json({ ok: true, mode: 'avg', added: rows.length, skipped: readings.length - rows.length });
 }
 
+// 시간별 min/max upsert. readings=[{sensor,time_ms,maxT,minT,maxH,minH}]
+//  - 같은 (센서|정시) 행이 있고 값이 다르면 '덮어씀'(authoritative가 passive 근사값을 교정)
+//  - 값이 같으면 건너뜀(쓰기 0). 없으면 append.
+//  ★ 첫 센서 sync는 이미 시트에 있는 이력을 통째로 다시 보냄 → 대부분 '변화없음'으로 걸러
+//    setValues 폭주를 막는다(스크립트 락·타임아웃 회피). 센서idx(G열)는 기존값 보존.
+function _postHist(body) {
+  var sh = _sheet();
+  var readings = body.readings || [];
+  var last = sh.getLastRow();
+  var info = {};  // "센서|정시" -> {row, c,d,e,f: 기존 min/max, g: 기존 idx}
+  if (last >= 2) {
+    var vals = sh.getRange(2, 1, last - 1, 7).getValues();  // A..G
+    for (var i = 0; i < vals.length; i++) {
+      var t = vals[i][0], s = vals[i][1];
+      if (!t || !s) continue;
+      var ms0 = (t instanceof Date) ? t.getTime() : new Date(t).getTime();
+      if (!isNaN(ms0)) info[_hourKey(s, ms0)] = { row: i + 2, c: vals[i][2], d: vals[i][3], e: vals[i][4], f: vals[i][5], g: vals[i][6] };
+    }
+  }
+  function num(x) { return (x === '' || x == null) ? null : Number(x); }
+  function same(ex, r) { return num(ex.c) === num(r.maxT) && num(ex.d) === num(r.minT) && num(ex.e) === num(r.maxH) && num(ex.f) === num(r.minH); }
+  var now = new Date(), added = 0, updated = 0, unchanged = 0, appendRows = [], seen = {};
+  for (var j = 0; j < readings.length; j++) {
+    var r = readings[j];
+    var ms = Number(r.time_ms);
+    if (isNaN(ms) || !r.sensor) continue;
+    var key = _hourKey(r.sensor, ms);
+    var ex = info[key];
+    if (ex) {
+      if (same(ex, r)) { unchanged++; continue; }
+      sh.getRange(ex.row, 1, 1, 8).setValues([[new Date(ms), r.sensor, r.maxT, r.minT, r.maxH, r.minH, ex.g, now]]);
+      updated++;
+    } else if (seen[key] !== undefined) {
+      appendRows[seen[key]] = [new Date(ms), r.sensor, r.maxT, r.minT, r.maxH, r.minH, '', now];  // 배치 내 중복→마지막 값
+    } else {
+      seen[key] = appendRows.length;
+      appendRows.push([new Date(ms), r.sensor, r.maxT, r.minT, r.maxH, r.minH, '', now]);
+      added++;
+    }
+  }
+  if (appendRows.length) {
+    var need = sh.getLastRow() + appendRows.length + 1;
+    if (need > sh.getMaxRows()) sh.insertRowsAfter(sh.getMaxRows(), need - sh.getMaxRows());
+    var start = sh.getLastRow() + 1;
+    sh.getRange(start, 1, appendRows.length, 8).setValues(appendRows);
+  }
+  return _json({ ok: true, mode: 'hist', added: added, updated: updated, unchanged: unchanged });
+}
+
 function doPost(e) {
   var lock = LockService.getScriptLock();
   lock.waitLock(30000);
@@ -135,6 +184,7 @@ function doPost(e) {
     }
     if (body.mode === 'current') return _postCurrent(body);
     if (body.mode === 'avg') return _postAvg(body);
+    if (body.mode === 'hist') return _postHist(body);
     var sensor = String(body.sensor || '').trim();
     var records = body.records || [];
     if (!sensor || !records.length) return _json({ ok: true, added: 0, skipped: 0, note: 'empty' });

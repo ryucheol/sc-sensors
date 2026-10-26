@@ -171,64 +171,109 @@ def post_current(readings):
     return _post({"secret": SECRET, "mode": "current", "readings": readings})
 
 
-def post_history(label, boot_epoch, rows):
-    return _post({"secret": SECRET, "sensor": label, "bootEpoch": boot_epoch, "records": rows})
-
-
 def post_avg(readings):
     return _post({"secret": SECRET, "mode": "avg", "readings": readings})
 
 
-# ── 평균 store-and-forward (오프라인/재부팅에도 유실 없이) ──
-# 농막은 인터넷이 방문 때만(폰 테더링) 있으므로, 시간평균을 로컬 SQLite에 영구 저장해 두고
-# 인터넷이 있을 때 밀린 것을 일괄 업로드한다. 현재값(스냅샷)·이력(센서 버퍼)은 큐 불필요.
+def post_hist(readings):
+    return _post({"secret": SECRET, "mode": "hist", "readings": readings})
+
+
+# ── store-and-forward 로컬 큐 (오프라인/재부팅/정전에도 무손실) ──
+# 농막은 인터넷이 방문 때만(폰 테더링). 모든 데이터를 로컬 SQLite에 영구 저장해 두고,
+# 인터넷이 있을 때만 시트로 보낸다(센서엔 다시 안 묻는다).
+#  - avg_q : passive 시간평균 → '농막_평균'
+#  - hist_q: 시간별 min/max → '농막_시간별'. src 'p'(passive 근사)|'s'(센서 authoritative).
+#            authoritative('s')가 오면 같은 시간의 passive('p') 값을 덮어쓴다(정확값 교정).
 def q_connect():
     db = sqlite3.connect(QUEUE_DB)
     db.execute("CREATE TABLE IF NOT EXISTS avg_q ("
                "time_ms INTEGER, sensor TEXT, temp REAL, hum REAL, sent INTEGER DEFAULT 0, "
                "PRIMARY KEY(time_ms, sensor))")
+    db.execute("CREATE TABLE IF NOT EXISTS hist_q ("
+               "time_ms INTEGER, sensor TEXT, maxT REAL, minT REAL, maxH REAL, minH REAL, "
+               "src TEXT, sent INTEGER DEFAULT 0, PRIMARY KEY(time_ms, sensor))")
     db.commit()
     return db
 
 
-def q_store(db, batch):
+def q_store_avg(db, batch):
     for r in batch:
         db.execute("INSERT OR IGNORE INTO avg_q(time_ms, sensor, temp, hum) VALUES(?,?,?,?)",
                    (int(r["time_ms"]), r["sensor"], r.get("temp"), r.get("hum")))
     db.commit()
 
 
-def q_pending(db):
-    return db.execute("SELECT COUNT(*) FROM avg_q WHERE sent=0").fetchone()[0]
+def q_store_hist(db, rows, src):
+    # 's'(센서 authoritative): 기존(=passive) 행을 덮어쓰고 재전송 표시. 'p'(passive): 없을 때만 넣음.
+    sql = ("INSERT OR REPLACE" if src == "s" else "INSERT OR IGNORE") + \
+          " INTO hist_q(time_ms, sensor, maxT, minT, maxH, minH, src, sent) VALUES(?,?,?,?,?,?,?,0)"
+    for r in rows:
+        db.execute(sql, (int(r["time_ms"]), r["sensor"], r.get("maxT"), r.get("minT"),
+                         r.get("maxH"), r.get("minH"), src))
+    db.commit()
+
+
+def q_last_sensor_ms(db, sensor):
+    row = db.execute("SELECT MAX(time_ms) FROM hist_q WHERE sensor=? AND src='s'", (sensor,)).fetchone()
+    return row[0] if row and row[0] is not None else None
+
+
+def q_pending(db, table):
+    return db.execute(f"SELECT COUNT(*) FROM {table} WHERE sent=0").fetchone()[0]
+
+
+def online(timeout=3):
+    # 시트 호스트에 빠르게 연결 시도 → 오프라인이면 즉시 False(긴 POST 타임아웃 회피).
+    import socket
+    try:
+        socket.create_connection(("script.google.com", 443), timeout=timeout).close()
+        return True
+    except Exception:
+        return False
 
 
 def q_drain(db, chunk=300):
-    """미전송 평균을 청크로 업로드. 실패하면 멈추고 로컬에 남겨둔다(다음에 재시도)."""
-    while True:
+    """온라인일 때만 avg_q·hist_q 미전송분을 시트로 보낸다. 오프라인/실패면 로컬에 남겨둠."""
+    if not online():
+        return
+    while True:   # 1) 평균 → 농막_평균
         rows = db.execute("SELECT time_ms, sensor, temp, hum FROM avg_q WHERE sent=0 "
                           "ORDER BY time_ms LIMIT ?", (chunk,)).fetchall()
         if not rows:
-            return
-        readings = []
-        for t, s, temp, hum in rows:
-            r = {"sensor": s, "time_ms": t}
-            if temp is not None: r["temp"] = temp
-            if hum is not None: r["hum"] = hum
-            readings.append(r)
+            break
+        readings = [dict({"sensor": s, "time_ms": t},
+                         **({"temp": tp} if tp is not None else {}),
+                         **({"hum": h} if h is not None else {})) for t, s, tp, h in rows]
         try:
             res = post_avg(readings)
         except Exception as e:
-            log(f"[평균] 업로드 오류(로컬 {q_pending(db)}개 보관): {e}")
-            return
+            log(f"[평균] 업로드 오류(로컬 보관): {e}"); return
         if res.get("mode") != "avg":
-            log("[평균] ⚠ Code.gs 재배포 필요(mode:avg 미지원) — 로컬 보관 후 재시도")
-            return
-        db.executemany("UPDATE avg_q SET sent=1 WHERE time_ms=? AND sensor=?",
-                       [(t, s) for t, s, _, _ in rows])
+            log("[평균] ⚠ Code.gs 재배포 필요(mode:avg) — 로컬 보관"); break
+        db.executemany("UPDATE avg_q SET sent=1 WHERE time_ms=? AND sensor=?", [(t, s) for t, s, _, _ in rows])
         db.commit()
-        log(f"[평균] 업로드 추가 {res.get('added')}/중복 {res.get('skipped')} (전송 {len(rows)}, 남은대기 {q_pending(db)})")
+        log(f"[평균] 전송 {len(rows)} (남은대기 {q_pending(db, 'avg_q')})")
         if len(rows) < chunk:
-            return
+            break
+    while True:   # 2) min/max → 농막_시간별 (upsert)
+        rows = db.execute("SELECT time_ms, sensor, maxT, minT, maxH, minH FROM hist_q WHERE sent=0 "
+                          "ORDER BY time_ms LIMIT ?", (chunk,)).fetchall()
+        if not rows:
+            break
+        readings = [{"sensor": s, "time_ms": t, "maxT": mxT, "minT": mnT, "maxH": mxH, "minH": mnH}
+                    for t, s, mxT, mnT, mxH, mnH in rows]
+        try:
+            res = post_hist(readings)
+        except Exception as e:
+            log(f"[이력] 업로드 오류(로컬 보관): {e}"); return
+        if res.get("mode") != "hist":
+            log("[이력] ⚠ Code.gs 재배포 필요(mode:hist) — 로컬 보관"); break
+        db.executemany("UPDATE hist_q SET sent=1 WHERE time_ms=? AND sensor=?", [(t, s) for t, s, *_ in rows])
+        db.commit()
+        log(f"[이력] 전송 {len(rows)} (추가 {res.get('added')}/갱신 {res.get('updated')}, 남은대기 {q_pending(db, 'hist_q')})")
+        if len(rows) < chunk:
+            break
 
 
 def get_sheet_last():
@@ -262,24 +307,24 @@ def iso_hour(ms):
     return datetime.datetime.utcfromtimestamp(ms / 1000).strftime("%Y-%m-%dT%H:%M:%S.000Z")
 
 
-async def sync_history_one(mac, label, sheet_last_ms):
+async def sync_history_one(mac, last_ms):
+    # 센서 연결 → authoritative 시간별 min/max 레코드를 '.db 기준 증분'으로 가져온다.
+    # last_ms = .db에 이미 있는 마지막 authoritative 시각(없으면 None → 전체). 반환: min/max rows.
     dev = await BleakScanner.find_device_by_address(mac, timeout=SCAN_TIMEOUT)
     if dev is None:
         raise RuntimeError("스캔 실패(못 찾음)")
     async with BleakClient(dev, services=[SERVICE]) as client:
         counter_s = struct.unpack_from("<I", await client.read_gatt_char(C_TIME), 0)[0]
         now_ms = time.time() * 1000
-        boot_epoch = round(now_ms / 1000 - counter_s)
         latest = decode_record(await client.read_gatt_char(C_LATEST))
 
         start_idx = 0
-        last_ms = sheet_last_ms.get(label)
         if last_ms:
             idx_of_last = (counter_s - (now_ms - last_ms) / 1000) / 3600 - 1
             start_idx = max(0, round(idx_of_last) - OVERLAP)
         start_idx = min(start_idx, latest["idx"] + 1)
         if start_idx > latest["idx"]:
-            return f"[{label}] 이력: 새 레코드 없음"
+            return []   # 새 레코드 없음
 
         await client.write_gatt_char(C_INDEX, struct.pack("<I", start_idx), response=True)
         records = []
@@ -309,13 +354,10 @@ async def sync_history_one(mac, label, sheet_last_ms):
     rows = []
     for r in records:
         hour_ms = round((now_ms - (counter_s - r["ts"]) * 1000) / 3600000) * 3600000
-        rows.append({"idx": r["idx"], "time": iso_hour(hour_ms),
-                     "maxT": r["maxT"], "minT": r["minT"], "maxH": r["maxH"], "minH": r["minH"]})
+        rows.append({"time_ms": hour_ms, "maxT": r["maxT"], "minT": r["minT"],
+                     "maxH": r["maxH"], "minH": r["minH"], "idx": r["idx"]})
     rows.sort(key=lambda x: x["idx"])
-    if not rows:
-        return f"[{label}] 이력: 받은 레코드 없음"
-    res = post_history(label, boot_epoch, rows)
-    return f"[{label}] 이력: {len(rows)}개 → 추가 {res.get('added')}/중복 {res.get('skipped')}"
+    return rows
 
 
 # ── 메인 루프 ───────────────────────────────────────────
@@ -346,20 +388,12 @@ async def current_uploader(cfg, latest, dirty):
         await asyncio.sleep(CURRENT_COOLDOWN)   # 쿨다운: 이 동안의 변화는 모아서 다음 1회로
 
 
-async def history_syncer(cfg, box, lock):
-    # 시작 직후 1회(권위 데이터 확보·공백 백필) + 이후 주기적(기본 하루 1회).
-    # 하루 간격이라 실패가 비싸므로, 실패한 센서만 몇 라운드 재시도 후 긴 대기.
-    # ★ BlueZ는 스캔 중 연결 불가 → 연결 구간에서만 passive 스캐너를 멈췄다 재개(lock+box).
+async def history_syncer(cfg, box, lock, db):
+    # 하루 1회 센서 연결 → authoritative 시간별 min/max를 '.db 기준 증분'으로 .db에 저장.
+    # 인터넷 유무와 무관(오프라인에도 .db엔 쌓임) → 센서는 하루 1회만 접근(배터리 절약),
+    # 같은 데이터는 재fetch 안 함. 업로드는 q_drain이 온라인일 때 따로 처리.
+    # ★ BlueZ: 스캔 중 연결 불가 → 연결 구간에서만 passive 스캐너 정지(lock+box).
     while True:
-        # 온라인 확인: 시트에 못 닿으면(오프라인) 이력 sync 생략 — 연결=센서 배터리인데 업로드도
-        # 못 하고, 데이터는 센서 버퍼(~5개월)에 보존되므로 방문해 온라인 되면 증분으로 한 번에 복구.
-        # (빈집 동안 매일 풀버퍼를 BLE로 읽어 배터리 낭비하는 것을 방지)
-        try:
-            sheet_last = get_sheet_last()
-        except Exception as e:
-            log(f"[이력] 오프라인 — 이력 sync 생략(센서 버퍼 보존): {e}")
-            await asyncio.sleep(HISTORY_INTERVAL)
-            continue
         pending = dict(cfg)
         for rnd in range(HISTORY_RETRY_ROUNDS):
             if not pending:
@@ -376,7 +410,11 @@ async def history_syncer(cfg, box, lock):
                     box["scanner"] = None   # 잠금 해제 후 passive_loop가 스캐너 재시작
                 for label, v in pending.items():
                     try:
-                        log(await sync_history_one(v["mac"], label, sheet_last))
+                        rows = await sync_history_one(v["mac"], q_last_sensor_ms(db, label))
+                        for r in rows:
+                            r["sensor"] = label
+                        q_store_hist(db, rows, "s")          # authoritative → .db(passive 덮어씀)
+                        log(f"[{label}] 이력: {len(rows)}개 .db 저장(authoritative)")
                     except BleakError as e:
                         log(f"[{label}] 이력 연결오류: {e}"); failed[label] = v
                     except Exception as e:
@@ -385,54 +423,66 @@ async def history_syncer(cfg, box, lock):
             pending = failed                                 # 잠금 해제 → 스캐너 재개
         if pending:
             log(f"[이력] 최종 실패: {list(pending)} — 다음 주기에 재시도")
-        await asyncio.sleep(HISTORY_INTERVAL)                # 대기 중 스캐너 가동
+        q_drain(db)   # .db → 시트 (온라인일 때만)
+        await asyncio.sleep(HISTORY_INTERVAL)
 
 
-async def avg_uploader(cfg, avg_state):
-    """버킷(기본 1시간) 경계가 지나면 직전 버킷의 시간가중 평균을 '농막_평균'에 올림.
-    - 시작 당시 '진행 중'이던 버킷은 일부만 관측되므로 업로드하지 않고 버퍼만 비운다.
-    - ★ 평균은 로컬 SQLite에 '영구 저장(store-and-forward)' → 인터넷(방문 테더링)이 있을 때
-      밀린 것을 일괄 업로드. 오프라인·재부팅에도 유실 없음(서버가 중복 제거).
-    - 1시간 미만 버킷(테스트용)·모니터 모드는 업로드/저장 안 하고 로그만."""
+async def hourly_flusher(cfg, avg_state, db):
+    """매 정시: passive로 모은 시간가중 avg + 시간별 min/max를 .db에 '영구 저장'.
+    - avg  → avg_q(→농막_평균),  min/max → hist_q src='p'(→농막_시간별, authoritative가 덮어씀)
+    - 진행 중이던 첫 버킷은 부분이라 제외. db=None(모니터/테스트)이면 로그만.
+    - 저장 후 온라인이면 드레인(업로드). 크래시·정전에도 직전 완료 시간까지 .db에 안전(유실 ≤1h)."""
     start_ts = time.time()
     last_bucket = int(start_ts // AVG_BUCKET)
-    can_upload = AVG_BUCKET >= 3600 and not MONITOR
-    if not can_upload:
+    can_store = db is not None
+    if not can_store:
         why = "모니터 모드" if MONITOR else f"버킷 {AVG_BUCKET:.0f}s < 1h"
-        log(f"[평균] {why} → 로그만(업로드 안 함)")
-    db = q_connect() if can_upload else None
-    if db is not None:
-        n = q_pending(db)
-        if n:
-            log(f"[평균] 로컬 대기 {n}개 — 업로드 시도(오프라인 동안 쌓인 분)")
-        q_drain(db)   # 시작 시: 지난 실행/오프라인 동안 밀린 평균 먼저 업로드
+        log(f"[정시] {why} → 로그만(저장/업로드 안 함)")
+    else:
+        na, nh = q_pending(db, "avg_q"), q_pending(db, "hist_q")
+        if na or nh:
+            log(f"[큐] 로컬 대기 avg {na} / hist {nh} — 업로드 시도(오프라인 동안 쌓인 분)")
+        q_drain(db)   # 시작 시: 지난 실행/오프라인 동안 밀린 것 먼저
     while True:
         await asyncio.sleep(AVG_CHECK)
         b = int(time.time() // AVG_BUCKET)
         if b <= last_bucket:
             continue
-        bucket_end = b * AVG_BUCKET                  # 완료된 버킷의 끝 = 현재 버킷의 시작
-        full = (last_bucket * AVG_BUCKET) >= start_ts  # 버킷 전체를 관측했는가(부분 버킷 제외)
-        batch = []
+        bucket_end = b * AVG_BUCKET
+        full = (last_bucket * AVG_BUCKET) >= start_ts   # 버킷 전체를 관측했는가(부분 버킷 제외)
+        t_ms = last_bucket * AVG_BUCKET * 1000
+        avg_batch, hist_batch, parts = [], [], []
         for label in cfg:
             st = avg_state[label]
             at = st["temp"].flush(bucket_end)
             ah = st["humi"].flush(bucket_end)
-            if not full or (at is None and ah is None):
+            tmin, tmax, hmin, hmax = st["tmin"], st["tmax"], st["hmin"], st["hmax"]
+            st["tmin"] = st["tmax"] = st["hmin"] = st["hmax"] = None   # 다음 버킷 위해 리셋
+            if not full:
                 continue
-            r = {"sensor": label, "time_ms": last_bucket * AVG_BUCKET * 1000}
-            if at is not None: r["temp"] = round(at, 1)
-            if ah is not None: r["hum"] = round(ah, 1)
-            batch.append(r)
+            if at is not None or ah is not None:
+                r = {"sensor": label, "time_ms": t_ms}
+                if at is not None: r["temp"] = round(at, 1)
+                if ah is not None: r["hum"] = round(ah, 1)
+                avg_batch.append(r)
+            if tmin is not None or hmin is not None:
+                # passive 라벨 t_ms = 관측 시작 정시(예: 09:00 = 09~10시).
+                # 센서 authoritative 라벨(sync_history_one)과 같은 정시여야 덮어쓰기(교정)가 맞물린다.
+                # 농막 현장 첫 sync 때 09:00 등 급변 시간의 min/max를 read-only로 덤프해 offset 확인할 것
+                # (offset +1로 밝혀지면 아래 t_ms 에만 +AVG_BUCKET*1000 추가. sync_history_one은 건드리지 말 것
+                #  — 농막_시간별/최근5일/비교가 그 라벨 규약에 묶여 있음).
+                hist_batch.append({"sensor": label, "time_ms": t_ms,
+                                   "maxT": tmax, "minT": tmin, "maxH": hmax, "minH": hmin})
+                parts.append(f"{label} {tmin if tmin is not None else '-'}~{tmax if tmax is not None else '-'}℃")
         last_bucket = b
-        if batch:
-            hhmm = time.strftime("%H:%M", time.localtime(batch[0]["time_ms"] / 1000))
-            detail = "  ".join(f"{r['sensor']} {r.get('temp', '-')}℃/{r.get('hum', '-')}%" for r in batch)
-            log(f"[평균] {hhmm}  {detail}")
-        if not can_upload:
+        if avg_batch or hist_batch:
+            hhmm = time.strftime("%H:%M", time.localtime(t_ms / 1000))
+            log(f"[정시] {hhmm}  avg {len(avg_batch)}센서 · 범위 {'  '.join(parts)}")
+        if not can_store:
             continue
-        q_store(db, batch)   # ① 로컬 영구 저장(인터넷 없어도 안전, 재부팅에도 유지)
-        q_drain(db)          # ② 인터넷 있으면 밀린 것 전부 업로드(없으면 로컬 보관)
+        q_store_avg(db, avg_batch)
+        q_store_hist(db, hist_batch, "p")   # passive 근사 min/max (authoritative 없을 때만 들어감)
+        q_drain(db)
 
 
 async def passive_loop(cfg, latest, avg_state, dirty, box, lock):
@@ -482,17 +532,23 @@ async def passive_loop(cfg, latest, avg_state, dirty, box, lock):
         is_change = False
         temp_d = humi_d = None   # 이번 비콘에서 바뀐 값의 증분(바뀐 센서만 표시)
         if "temp" in vals:
-            st["temp"].update(vals["temp"], now)
-            if "temp" not in prev or vals["temp"] != prev["temp"]:
-                temp_d = (vals["temp"] - prev["temp"]) if "temp" in prev else 0.0
+            t = vals["temp"]
+            st["temp"].update(t, now)                                     # 평균(시간가중)
+            st["tmin"] = t if st["tmin"] is None else min(st["tmin"], t)  # passive min/max
+            st["tmax"] = t if st["tmax"] is None else max(st["tmax"], t)
+            if "temp" not in prev or t != prev["temp"]:
+                temp_d = (t - prev["temp"]) if "temp" in prev else 0.0
                 is_change = True
         if "humi" in vals:
-            st["humi"].update(vals["humi"], now)   # 평균은 모든 샘플 사용(데드밴드 무관)
+            h = vals["humi"]
+            st["humi"].update(h, now)   # 평균은 모든 샘플 사용(데드밴드 무관)
+            st["hmin"] = h if st["hmin"] is None else min(st["hmin"], h)
+            st["hmax"] = h if st["hmax"] is None else max(st["hmax"], h)
             base = sig[label].get("humi")
-            if base is None or abs(vals["humi"] - base) >= HUMI_DEADBAND:
-                humi_d = (vals["humi"] - base) if base is not None else 0.0
+            if base is None or abs(h - base) >= HUMI_DEADBAND:
+                humi_d = (h - base) if base is not None else 0.0
                 is_change = True
-                sig[label]["humi"] = vals["humi"]
+                sig[label]["humi"] = h
         vals["ts"] = now
         prev.update(vals)
         if is_change:
@@ -536,30 +592,41 @@ async def passive_loop(cfg, latest, avg_state, dirty, box, lock):
             await asyncio.sleep(10)
 
 
+async def drain_loop(db):
+    # 인터넷이 중간에 생겼을 때(방문·테더링) 밀린 .db를 ~1분 내 올리기 위한 주기 드레인.
+    while True:
+        await asyncio.sleep(60)
+        q_drain(db)
+
+
 async def main():
     if not MONITOR and SECRET in ("", "CHANGE-ME"):   # 모니터는 업로드 안 하므로 SECRET 불필요
         log("[중단] 환경변수 FARMHUT_SECRET 를 설정하세요.")
         sys.exit(2)
     cfg = load_cfg()
     latest = {label: {} for label in cfg}
-    avg_state = {label: {"temp": TWAvg(), "humi": TWAvg()} for label in cfg}
+    avg_state = {label: {"temp": TWAvg(), "humi": TWAvg(),
+                         "tmin": None, "tmax": None, "hmin": None, "hmax": None} for label in cfg}
     dirty = asyncio.Event()   # 값 변화 신호(passive → current_uploader)
     scan_lock = asyncio.Lock()        # 스캔(passive)과 연결(이력)의 BlueZ 동시사용 방지
     box = {"scanner": None}           # 현재 passive 스캐너 핸들(이력 sync가 멈출 수 있게 공유)
+    db = q_connect() if (not MONITOR and AVG_BUCKET >= 3600) else None   # 1h 미만/모니터는 로컬저장 안 함
     if MONITOR:
         log("모니터 모드: 수신 로그만 — 서버 업로드 없음 · 센서 연결 없음 (평균은 계산·로그만)")
         await asyncio.gather(
             passive_loop(cfg, latest, avg_state, dirty, box, scan_lock),
-            avg_uploader(cfg, avg_state),   # can_upload=False → 로그만
+            hourly_flusher(cfg, avg_state, db),   # db=None → 로그만
         )
     else:
         log(f"게이트웨이 시작 (현재 변화시+{CURRENT_COOLDOWN:.0f}s쿨다운/하트비트 {CURRENT_INTERVAL:.0f}s / 평균 {AVG_BUCKET:.0f}s / 이력 {HISTORY_INTERVAL:.0f}s)")
-        await asyncio.gather(
+        tasks = [
             passive_loop(cfg, latest, avg_state, dirty, box, scan_lock),
             current_uploader(cfg, latest, dirty),
-            avg_uploader(cfg, avg_state),
-            history_syncer(cfg, box, scan_lock),
-        )
+            hourly_flusher(cfg, avg_state, db),
+        ]
+        if db is not None:
+            tasks += [history_syncer(cfg, box, scan_lock, db), drain_loop(db)]
+        await asyncio.gather(*tasks)
 
 
 if __name__ == "__main__":
