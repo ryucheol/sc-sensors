@@ -1,0 +1,25 @@
+{
+  "sensor": "내부1층",
+  "frost":   { "on": 3,  "off": 5 },
+  "comfort": { "on": 23, "off": 24 },
+
+  "preheat": {
+    "enabled": true,
+    "weekday": 4,
+    "target_hour": 20,
+    "target_min": 0,
+    "target_temp": 23,
+    "noshow_hour": 24,
+    "outdoor_sensor": "바닥외부",
+    "tau_hours": 9.16,
+    "ua_w_per_k": 47,
+    "heater_watts": 2000,
+    "margin": 1.25,
+    "max_lead_hours": 10
+  },
+
+  "backstop_comfort_hours": 36,
+  "stale_temp_min": 30,
+  "poll_sec": 60,
+  "_comment": "frost/comfort = 히스테리시스 ON/OFF(°C). preheat: weekday 0=월..4=금, target_hour=도착시각(그때 target_temp 되도록 적응형 선행가열), noshow_hour=이 시각까지 '난방' 명령 없으면 동파 복귀(24=토 00:00). tau_hours=C/UA 열시정수, margin=선행시간 안전계수. backstop=난방 상태로 이 시간 무신호면 동파. stale_temp_min=온도 이보다 오래되면 동파시 안전가동. 값 바꾸면 즉시 반영(파일만 저장)."
+}

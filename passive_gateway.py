@@ -479,6 +479,14 @@ async def current_uploader(cfg, latest, dirty):
                      "temp": round(v["temp"], 1), "hum": v["humi"]}
                 if "batt" in v: r["volt"] = round(2.2 + 0.9 * v["batt"] / 100, 3)
                 readings.append(r)
+        if readings:   # 히터 제어용: 현재온도를 로컬 파일로 내보냄(인터넷 무관, 항상 최신)
+            try:
+                _lp = os.path.join(os.path.dirname(os.path.abspath(__file__)), "latest.json")
+                with open(_lp, "w") as _f:
+                    json.dump({r["sensor"]: {"temp": r["temp"], "hum": r["hum"], "time_ms": r["time_ms"]}
+                               for r in readings}, _f, ensure_ascii=False)
+            except Exception:
+                pass
         if readings and await asyncio.to_thread(online):   # 오프라인이면 아예 시도 안 함(현재값은 큐 안 함)
             try:
                 net = await asyncio.to_thread(net_info)

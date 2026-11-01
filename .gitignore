@@ -31,3 +31,8 @@ venv/
 Thumbs.db
 .vscode/
 .idea/
+
+# 히터 제어 런타임(생성물 — 커밋 금지)
+heater_state.json
+latest.json
+*.bak*
