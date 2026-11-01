@@ -11,6 +11,8 @@ STATE  = os.path.join(BASE, "heater_state.json")
 KEYS   = os.path.join(BASE, "tuya_keys.json")
 LATEST = os.path.join(BASE, "latest.json")
 LOG    = os.path.join(BASE, "heater.log")
+STATUS = os.path.join(BASE, "heater_status.json")    # 계측·전력량·고장 스냅샷(서비스만 기록, 제어상태와 분리)
+ENERGY_CSV = os.path.join(BASE, "heater_energy.csv") # 시간별 열모델 원시데이터(오프라인 UA/C 피팅용)
 
 import tinytuya
 
@@ -78,6 +80,13 @@ def main():
     log("히터 제어 시작: %s @ %s v%s" % (dev["name"], dev["ip"], dev["version"]))
 
     last_hb = 0; last_stale_log = 0
+    # ── 계측 누적(heater_status.json에서 복원; 제어와 독립. 재시작 시 acct_last=None → 첫 주기 적분 안 함) ──
+    _ss = load(STATUS, {})
+    total_wh = _ss.get("total_wh", 0.0); day_wh = _ss.get("day_wh", 0.0)
+    day_date = _ss.get("day_date", datetime.date.today().isoformat())
+    acct_last = None
+    hr = {"key": None, "wdt": 0.0, "tin_dt": 0.0, "tout_dt": 0.0, "dt": 0.0, "on_dt": 0.0, "tin0": None, "tin1": None}
+    fault_dt = 0.0; fault_active = False; fail_streak = 0
     while True:
         poll = 60
         try:
@@ -113,13 +122,15 @@ def main():
             if changed: save_atomic(STATE, st)
 
             # ── 실제 플러그 상태 읽기(앱·수동·정전복구 등 외부변경 자가보정) ──
-            cur_relay = st.get("relay"); cur_watt = 0.0
+            cur_relay = st.get("relay"); cur_watt = 0.0; cur_volt = 0.0; status_ok = False
             try:
                 s = d.status().get("dps", {})
-                cur_relay = bool(s.get("1")); cur_watt = s.get("19", 0) / 10.0
+                cur_relay = bool(s.get("1")); cur_watt = s.get("19", 0) / 10.0; cur_volt = s.get("20", 0) / 10.0
+                status_ok = True; fail_streak = 0
                 if cur_relay != st.get("relay"): st["relay"] = cur_relay; save_atomic(STATE, st)
             except Exception as e:
-                log("상태조회 오류: %s" % e)
+                fail_streak += 1
+                log("상태조회 오류(%d연속): %s" % (fail_streak, e))
 
             # ── 히스테리시스 제어 ──
             on_th, off_th = st["on"], st["off"]
@@ -137,6 +148,7 @@ def main():
                 if want is not None and want != cur_relay:
                     relay, watt, volt = apply_relay(d, want)
                     st["relay"] = relay; save_atomic(STATE, st)
+                    cur_relay = relay; cur_watt = watt    # 스냅샷·고장감지가 변경 직후 실측을 쓰도록 갱신
                     log("%s %s°C [%s %s/%s] → 플러그 %s (%.0fW %.0fV)"
                         % (cfg["sensor"], t_in, st["mode"], on_th, off_th, "ON" if relay else "OFF", watt, volt))
                 elif now() - last_hb > 1800:    # 30분 하트비트(현황 로그)
@@ -145,6 +157,62 @@ def main():
                     last_hb = now()
             except Exception as e:
                 log("플러그 제어 오류: %s" % e)
+
+            # ── 계측·축적(제어와 완전 분리: 여기서 예외가 나도 제어엔 영향 없음) ──
+            try:
+                tnow = now()
+                dt = (tnow - acct_last) if acct_last else 0.0
+                acct_last = tnow
+                if dt < 0 or dt > 2 * poll: dt = 0.0           # 재시작/다운타임 후 stale 적분 방지
+                # 전력량 적분(상태조회 성공 시만)
+                if status_ok and dt > 0:
+                    wh = cur_watt * dt / 3600.0; total_wh += wh; day_wh += wh
+                # 일일 롤오버
+                today = datetime.date.today().isoformat()
+                if today != day_date:
+                    log("일일 전력량 %s: %.2f kWh (누적 %.1f kWh)" % (day_date, day_wh / 1000.0, total_wh / 1000.0))
+                    day_wh = 0.0; day_date = today
+                # 시간별 열모델 원시데이터(오프라인 UA/C 피팅용)
+                if status_ok and dt > 0 and not stale and t_in is not None:
+                    hk = datetime.datetime.now().strftime("%Y-%m-%d %H")
+                    if hr["key"] is None: hr["key"] = hk; hr["tin0"] = t_in
+                    if hk != hr["key"]:
+                        if hr["dt"] > 0:
+                            row = "%s:00,%.1f,%.2f,%.2f,%.2f,%.2f,%.2f\n" % (
+                                hr["key"], hr["wdt"] / 3600.0, hr["tin_dt"] / hr["dt"], hr["tout_dt"] / hr["dt"],
+                                hr["tin0"] if hr["tin0"] is not None else t_in,
+                                hr["tin1"] if hr["tin1"] is not None else t_in, hr["on_dt"] / hr["dt"])
+                            try:
+                                newf = not os.path.exists(ENERGY_CSV)
+                                with open(ENERGY_CSV, "a") as f:
+                                    if newf: f.write("hour,Wh,mean_Tin,mean_Tout,Tin_start,Tin_end,on_fraction\n")
+                                    f.write(row)
+                            except Exception: pass
+                        hr = {"key": hk, "wdt": 0.0, "tin_dt": 0.0, "tout_dt": 0.0, "dt": 0.0, "on_dt": 0.0, "tin0": t_in, "tin1": t_in}
+                    hr["wdt"] += cur_watt * dt; hr["tin_dt"] += t_in * dt
+                    hr["tout_dt"] += (t_out if t_out is not None else 0.0) * dt
+                    hr["dt"] += dt; hr["tin1"] = t_in
+                    if cur_relay: hr["on_dt"] += dt
+                # 히터 가열실패 감지(기대가열인데 전력 없음) — 로그만(업링크 없어 경보는 KT 후)
+                wmin = cfg.get("fault_min_watt", 100.0); grace = cfg.get("fault_grace_sec", 300.0)
+                expecting = status_ok and (not stale) and (t_in is not None) and (t_in < on_th) and cur_relay
+                if expecting and cur_watt < wmin:
+                    fault_dt += dt
+                    if fault_dt >= grace and not fault_active:
+                        fault_active = True
+                        log("⚠ 히터 가열 안됨: 켜짐인데 %.0fW (실내 %.1f°C<%s). 히터 자체 스위치/다이얼/콘센트 확인" % (cur_watt, t_in, on_th))
+                else:
+                    if fault_active and status_ok and cur_watt >= wmin: log("히터 정상 복귀(%.0fW)" % cur_watt)
+                    if not (expecting and cur_watt < wmin): fault_dt = 0.0; fault_active = False
+                # 스냅샷(heater_status.json — 서비스만 기록)
+                save_atomic(STATUS, {
+                    "updated": stamp(), "mode": st.get("mode"), "relay": cur_relay,
+                    "watt": round(cur_watt, 0), "volt": round(cur_volt, 1),
+                    "today_kwh": round(day_wh / 1000.0, 3), "total_kwh": round(total_wh / 1000.0, 2),
+                    "heater_ok": (not fault_active), "status_fail_streak": fail_streak,
+                    "day_wh": round(day_wh, 1), "total_wh": round(total_wh, 1), "day_date": day_date})
+            except Exception as e:
+                log("계측 오류: %s" % e)
         except Exception as e:
             log("루프 오류: %s" % e)
         time.sleep(poll)

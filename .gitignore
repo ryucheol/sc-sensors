@@ -36,3 +36,5 @@ Thumbs.db
 heater_state.json
 latest.json
 *.bak*
+heater_status.json
+heater_energy.csv
