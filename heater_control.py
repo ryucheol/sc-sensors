@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""농막 히터 제어 — 내부1층 온도 기반 동파/난방 히스테리시스 + 금요일 적응형 예열.
+"""농막 히터 제어 — 동파/난방/취침 히스테리시스 + 금요일 적응형 예열.
+   제어센서는 mode에서 유도: 취침=다락, 그 외=기본(내부1층). 계측(전력량·열모델)은 항상 1층 기준.
    venv(~/tuya-venv)로 실행. 게이트웨이가 쓰는 latest.json에서 온도를 읽고 Tuya 플러그를 로컬(LAN) 제어.
    설정: heater_config.json (즉시 반영) / 모드·임계값: heater_state.json (난방/동파 명령이 갱신)."""
 import os, json, time, math, datetime
@@ -115,11 +116,23 @@ def main():
                 if dtn >= noshow and st["source"] == "preheat":
                     f = cfg["frost"]; st.update(mode="frost", on=f["on"], off=f["off"], source="noshow", since=now()); changed = True
                     log("노쇼(난방 명령 없음) → 동파 복귀")
-            if st["mode"] == "comfort" and st.get("source") == "cmd" and st.get("last_cmd_ts", 0) > 0:
+            if st["mode"] in ("comfort", "sleep") and st.get("source") == "cmd" and st.get("last_cmd_ts", 0) > 0:
                 if (now() - st["last_cmd_ts"]) > cfg["backstop_comfort_hours"]*3600:
                     f = cfg["frost"]; st.update(mode="frost", on=f["on"], off=f["off"], source="backstop", since=now()); changed = True
-                    log("안전 백스톱: 난방 %sh 무신호 → 동파 복귀" % cfg["backstop_comfort_hours"])
+                    log("안전 백스톱: 재실모드 %sh 무신호 → 동파 복귀" % cfg["backstop_comfort_hours"])
             if changed: save_atomic(STATE, st)
+
+            # ── 제어 센서 선택: mode에서 유도(취침=다락, 그 외=기본). state엔 저장 안 함 ──
+            #    (백스톱 등으로 mode가 바뀌면 센서도 자동 복귀. 계측용 t_in/stale은 항상 기본센서=1층 유지) ──
+            if st["mode"] == "sleep":
+                ctl_sensor = cfg.get("sleep", {}).get("sensor", cfg["sensor"])
+            else:
+                ctl_sensor = cfg["sensor"]
+            if ctl_sensor == cfg["sensor"]:
+                t_ctl, tc_ms = t_in, t_ms
+            else:
+                t_ctl, tc_ms = read_temp(ctl_sensor)
+            ctl_stale = (tc_ms is None) or ((now()*1000 - tc_ms) > cfg["stale_temp_min"]*60*1000)
 
             # ── 실제 플러그 상태 읽기(앱·수동·정전복구 등 외부변경 자가보정) ──
             cur_relay = st.get("relay"); cur_watt = 0.0; cur_volt = 0.0; cur_kwh_hw = None; status_ok = False
@@ -133,16 +146,16 @@ def main():
                 fail_streak += 1
                 log("상태조회 오류(%d연속): %s" % (fail_streak, e))
 
-            # ── 히스테리시스 제어 ──
+            # ── 히스테리시스 제어(제어센서 ctl_sensor/t_ctl 기준) ──
             on_th, off_th = st["on"], st["off"]
-            if stale:
+            if ctl_stale:
                 want = True if st["mode"] == "frost" else cur_relay   # 온도미상: 동파면 안전가동
                 if now() - last_stale_log > 1800:
-                    log("⚠ 온도 데이터 오래됨(%s) → %s" % (cfg["sensor"], "안전가동(ON)" if st["mode"]=="frost" else "현상유지"))
+                    log("⚠ 온도 데이터 오래됨(%s) → %s" % (ctl_sensor, "안전가동(ON)" if st["mode"]=="frost" else "현상유지"))
                     last_stale_log = now()
             else:
-                if   t_in < on_th:  want = True
-                elif t_in > off_th: want = False
+                if   t_ctl < on_th:  want = True
+                elif t_ctl > off_th: want = False
                 else:               want = cur_relay    # 밴드 내 유지
 
             try:
@@ -151,10 +164,10 @@ def main():
                     st["relay"] = relay; save_atomic(STATE, st)
                     cur_relay = relay; cur_watt = watt    # 스냅샷·고장감지가 변경 직후 실측을 쓰도록 갱신
                     log("%s %s°C [%s %s/%s] → 플러그 %s (%.0fW %.0fV)"
-                        % (cfg["sensor"], t_in, st["mode"], on_th, off_th, "ON" if relay else "OFF", watt, volt))
+                        % (ctl_sensor, t_ctl, st["mode"], on_th, off_th, "ON" if relay else "OFF", watt, volt))
                 elif now() - last_hb > 1800:    # 30분 하트비트(현황 로그)
                     log("현황: %s %s°C 외기 %s°C [%s %s/%s] 플러그 %s (%.0fW)"
-                        % (cfg["sensor"], t_in, t_out, st["mode"], on_th, off_th, "ON" if cur_relay else "OFF", cur_watt))
+                        % (ctl_sensor, t_ctl, t_out, st["mode"], on_th, off_th, "ON" if cur_relay else "OFF", cur_watt))
                     last_hb = now()
             except Exception as e:
                 log("플러그 제어 오류: %s" % e)
@@ -196,12 +209,12 @@ def main():
                     if cur_relay: hr["on_dt"] += dt
                 # 히터 가열실패 감지(기대가열인데 전력 없음) — 로그만(업링크 없어 경보는 KT 후)
                 wmin = cfg.get("fault_min_watt", 100.0); grace = cfg.get("fault_grace_sec", 300.0)
-                expecting = status_ok and (not stale) and (t_in is not None) and (t_in < on_th) and cur_relay
+                expecting = status_ok and (not ctl_stale) and (t_ctl is not None) and (t_ctl < on_th) and cur_relay
                 if expecting and cur_watt < wmin:
                     fault_dt += dt
                     if fault_dt >= grace and not fault_active:
                         fault_active = True
-                        log("⚠ 히터 가열 안됨: 켜짐인데 %.0fW (실내 %.1f°C<%s). 히터 자체 스위치/다이얼/콘센트 확인" % (cur_watt, t_in, on_th))
+                        log("⚠ 히터 가열 안됨: 켜짐인데 %.0fW (%s %.1f°C<%s). 히터 자체 스위치/다이얼/콘센트 확인" % (cur_watt, ctl_sensor, t_ctl, on_th))
                 else:
                     if fault_active and status_ok and cur_watt >= wmin: log("히터 정상 복귀(%.0fW)" % cur_watt)
                     if not (expecting and cur_watt < wmin): fault_dt = 0.0; fault_active = False

@@ -40,7 +40,7 @@
 | 파일 | 역할 | git |
 |---|---|---|
 | `heater_control.py` | **제어 데몬**: 온도 히스테리시스 + 예열 + 계측. systemd `heater-control` | ✅ |
-| `heater_cmd.py` | 모드 전환 명령(`난방`/`동파`), 상태파일 갱신 | ✅ |
+| `heater_cmd.py` | 모드 전환 명령(`난방`/`동파`/`취침`), 상태파일 갱신 | ✅ |
 | `heater_selftest.py` | 떠나기 전 자가점검(플러그 펄스→전력 PASS/FAIL) | ✅ |
 | `heater_config.json` | 설정(임계값·예열·열모델·고장). **저장 즉시 반영(핫리로드)** | ✅ |
 | `heater-control.service` | systemd 유닛 | ✅ |
@@ -65,9 +65,10 @@
 ### `heater_config.json` (설정, 핫리로드)
 ```json
 {
-  "sensor": "내부1층",                      // 제어 기준 센서
+  "sensor": "내부1층",                      // 기본 제어센서(동파·난방)
   "frost":   {"on": 3,  "off": 5},          // 동파: 3°C 켜짐 / 5°C 꺼짐
   "comfort": {"on": 23, "off": 24},         // 난방: 23 / 24
+  "sleep":   {"on": 20, "off": 21, "sensor": "다락"},  // 취침: 다락 센서로 제어(20/21)
   "preheat": {
     "enabled": true, "weekday": 4,          // 0=월 … 4=금
     "target_hour": 20, "target_min": 0,     // 도착 시각(그때 target_temp 되도록 선행가열)
@@ -88,8 +89,9 @@
 
 ### `heater_state.json` (현재 제어상태; `heater_cmd.py`·제어기가 갱신)
 ```json
-{"mode":"frost|comfort","on":3,"off":5,"source":"default|cmd|preheat|noshow|backstop","since":<epoch>,"last_cmd_ts":<epoch>,"relay":false}
+{"mode":"frost|comfort|sleep","on":3,"off":5,"source":"default|cmd|preheat|noshow|backstop","since":<epoch>,"last_cmd_ts":<epoch>,"relay":false}
 ```
+- **제어센서는 state에 저장하지 않고 `mode`에서 유도**한다(`sleep`→`sleep.sensor`=다락, 그 외→`sensor`=내부1층). 백스톱/노쇼 등으로 mode가 바뀌면 센서도 자동 복귀 — `sleep` 상태가 36h 백스톱으로 `frost`가 되면 **동파 3/5는 다시 1층 기준**으로 판정된다(다락은 1층 수관보다 따뜻하므로 다락 기준 동파판정은 위험).
 
 ### `heater_status.json` (계측 스냅샷; 서비스만 기록)
 ```json
@@ -110,13 +112,13 @@ hour,Wh,mean_Tin,mean_Tout,Tin_start,Tin_end,on_fraction
 
 ## 제어 로직 (`heater_control.py`, 매 `poll_sec`초)
 
-1. `latest.json`에서 기준센서 온도(`t_in`)·외기(`t_out`) 읽고 **신선도(stale)** 판정.
+1. `latest.json`에서 **계측용** 기준센서 온도(`t_in`=1층)·외기(`t_out`) 읽고 신선도 판정. 스케줄 처리 뒤 `mode`에서 **제어센서**를 유도해 **제어용** `t_ctl`·`ctl_stale`를 따로 구한다(취침=다락, 그 외=1층). 계측(전력량·열모델 CSV)은 항상 `t_in`(1층)을 써서 데이터 일관성을 지킨다.
 2. **스케줄**:
    - **금요일 적응형 예열**: 금 `target_hour`에 `target_temp` 되도록, 외기 보고 **선행시간**을 계산해 미리 `comfort`로 전환. 선행시간 = `τ·ln((T_eq−T_in)/(T_eq−target))·margin`, `T_eq=T_out+P/UA` (상한 `max_lead_hours`).
    - **노쇼 복귀**: `noshow_hour`(토 00:00)까지 `난방` 명령(source=cmd) 없으면 → 동파.
-   - **안전 백스톱**: `comfort`+source=cmd가 `backstop_comfort_hours`(36h) 무신호 → 동파.
+   - **안전 백스톱**: `comfort`/`sleep`+source=cmd가 `backstop_comfort_hours`(36h) 무신호 → 동파(재실모드 공통).
 3. **실측 플러그 상태 읽기(자가보정)**: 매 주기 `status()`로 실제 relay/W/V/누적(DP17)을 읽어, 앱·수동·정전으로 어긋난 기록을 ≤60초 내 교정.
-4. **히스테리시스**: `t_in < on` → ON, `t_in > off` → OFF, 밴드 내 → 유지. stale면 동파는 안전가동(ON)/난방은 현상유지.
+4. **히스테리시스**(제어센서 `t_ctl` 기준): `t_ctl < on` → ON, `t_ctl > off` → OFF, 밴드 내 → 유지. `ctl_stale`면 동파는 안전가동(ON)/그 외는 현상유지.
 5. **계측(제어와 분리된 try/except — 여기서 예외가 나도 제어엔 영향 없음)**: 전력량 적분(dt 상한·재시작 리셋), 시간별 CSV, **가열실패 감지**(기대가열인데 `<fault_min_watt`가 `fault_grace_sec` 지속→`heater_ok=false` 로그), `heater_status.json` 기록(누적치는 여기에만 — `heater_state.json`은 명령이 read-modify-write 하므로 경합 회피).
 
 ---
@@ -127,8 +129,9 @@ hour,Wh,mean_Tin,mean_Tout,Tin_start,Tin_end,on_fraction
 
 | 별칭 | 동작 |
 |---|---|
-| `난방` / `난방 25` / `난방 25 27` | comfort 모드. 기본(23/24) / ON25·OFF25+밴드 / ON25·OFF27 |
-| `동파` / `동파 7` | frost 모드. 기본(3/5) / ON7·OFF7+밴드 |
+| `난방` / `난방 25` / `난방 25 27` | comfort 모드(1층 기준). 기본(23/24) / ON25·OFF25+밴드 / ON25·OFF27 |
+| `동파` / `동파 7` | frost 모드(1층 기준). 기본(3/5) / ON7·OFF7+밴드 |
+| `취침` / `취침 19` / `취침 19 20` | **다락 센서** 기준. 기본(20/21) / ON19·OFF19+밴드 / ON19·OFF20. 다락에서 잘 때. |
 | `히터점검` (`heater-check`) | 자가점검: 플러그 5초 켜 전력 측정 → PASS(≥500W)/FAIL(<100W)/WARN |
 | `heater-state` | 현재 모드·임계값(`heater_state.json`) |
 | `heater-status` | 계측 스냅샷(`heater_status.json`) |
@@ -136,6 +139,7 @@ hour,Wh,mean_Tin,mean_Tout,Tin_start,Tin_end,on_fraction
 
 > 명령 반영은 최대 `poll_sec`(기본 60초). 별칭은 시스템 `python3`로 `heater_cmd.py`(stdlib만) 실행, `히터점검`은 tinytuya가 필요해 **venv** `~/tuya-venv/bin/python`로 실행.
 > **운용**: 도착 `난방`, 떠남 `동파`. 금요일 예열은 자동(도착하면 `난방`으로 확정, 안 오면 자동 동파복귀).
+> **취침**: 다락에서 잘 때 `취침`. 다락 센서로 제어하므로 열성층화(위가 2~3°C 더움)를 보정해 **잘 때 과열을 막는다**. 아침에 `난방`/`동파`로 되돌리거나, 깜빡해도 36h 백스톱이 동파로 복귀시킨다. ⚠ `time_ms`가 전 센서 공통 타임스탬프라 **다락 센서 단독 고장(배터리 등)은 stale로 못 잡는다** — 재실(사람 있음) 전제의 모드이므로 위험은 제한적.
 
 ---
 
