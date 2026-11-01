@@ -122,10 +122,11 @@ def main():
             if changed: save_atomic(STATE, st)
 
             # ── 실제 플러그 상태 읽기(앱·수동·정전복구 등 외부변경 자가보정) ──
-            cur_relay = st.get("relay"); cur_watt = 0.0; cur_volt = 0.0; status_ok = False
+            cur_relay = st.get("relay"); cur_watt = 0.0; cur_volt = 0.0; cur_kwh_hw = None; status_ok = False
             try:
                 s = d.status().get("dps", {})
                 cur_relay = bool(s.get("1")); cur_watt = s.get("19", 0) / 10.0; cur_volt = s.get("20", 0) / 10.0
+                _e17 = s.get("17"); cur_kwh_hw = (_e17 / 100.0) if _e17 is not None else None   # DP17: 플러그 하드웨어 누적(0.01kWh 단위)
                 status_ok = True; fail_streak = 0
                 if cur_relay != st.get("relay"): st["relay"] = cur_relay; save_atomic(STATE, st)
             except Exception as e:
@@ -208,7 +209,7 @@ def main():
                 save_atomic(STATUS, {
                     "updated": stamp(), "mode": st.get("mode"), "relay": cur_relay,
                     "watt": round(cur_watt, 0), "volt": round(cur_volt, 1),
-                    "today_kwh": round(day_wh / 1000.0, 3), "total_kwh": round(total_wh / 1000.0, 2),
+                    "hw_kwh": cur_kwh_hw, "today_kwh": round(day_wh / 1000.0, 3), "total_kwh": round(total_wh / 1000.0, 2),
                     "heater_ok": (not fault_active), "status_fail_streak": fail_streak,
                     "day_wh": round(day_wh, 1), "total_wh": round(total_wh, 1), "day_date": day_date})
             except Exception as e:
