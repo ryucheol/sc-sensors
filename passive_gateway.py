@@ -52,6 +52,8 @@ MONITOR = os.environ.get("GW_MONITOR", "0").lower() in ("1", "true", "yes", "on"
 SCAN_TIMEOUT = 15.0
 IDLE_TIMEOUT = 10.0
 OVERLAP = 2
+HIST_SYNC_BUDGET = 180.0        # 한 센서 이력 동기화(이어받기 포함) 총 제한시간(초) — 약한 링크에서 무한루프 방지
+HIST_STALE_MAX = 3              # 연속 '무진전' 라운드 한도 — 이 이상이면 부분 저장 후 중단(기존 재시도 라운드가 다음에 재접속)
 HISTORY_RETRY_ROUNDS = 3        # 이력 연결 실패 시 재시도 라운드 수(하루 간격이라 실패가 비쌈)
 HISTORY_RETRY_BACKOFF = 120.0   # 실패 센서 재시도 간 대기(초)
 
@@ -373,55 +375,89 @@ def iso_hour(ms):
 
 async def sync_history_one(mac, last_ms):
     # 센서 연결 → authoritative 시간별 min/max 레코드를 '.db 기준 증분'으로 가져온다.
-    # last_ms = .db에 이미 있는 마지막 authoritative 시각(없으면 None → 전체). 반환: min/max rows.
+    # last_ms = .db에 이미 있는 마지막 authoritative 시각(없으면 None → 전체).
+    # 반환: (rows, meta). meta={first,last,target,missing,exit} — 로깅/재시도 판단용.
+    # ★ 대용량·약한 링크에서 BLE 알림이 중간에 유실되면 조용히 잘리던 문제 →
+    #   받은 idx 집합과 목표(latest.idx)를 비교해 '구멍'이 남으면 그 지점부터 다시 요청,
+    #   전부 채우거나(완료) 연속 무진전/시간초과로 포기(중단)할 때까지 이어받는다.
     dev = await BleakScanner.find_device_by_address(mac, timeout=SCAN_TIMEOUT)
     if dev is None:
         raise RuntimeError("스캔 실패(못 찾음)")
+    loop = asyncio.get_event_loop()
     async with BleakClient(dev, services=[SERVICE]) as client:
         counter_s = struct.unpack_from("<I", await client.read_gatt_char(C_TIME), 0)[0]
         now_ms = time.time() * 1000
         latest = decode_record(await client.read_gatt_char(C_LATEST))
+        target = latest["idx"]
 
         start_idx = 0
         if last_ms:
             idx_of_last = (counter_s - (now_ms - last_ms) / 1000) / 3600 - 1
             start_idx = max(0, round(idx_of_last) - OVERLAP)
-        start_idx = min(start_idx, latest["idx"] + 1)
-        if start_idx > latest["idx"]:
-            return []   # 새 레코드 없음
+        start_idx = min(start_idx, target + 1)
+        if start_idx > target:
+            return [], {"first": None, "last": None, "target": target,
+                        "missing": 0, "exit": "최신"}   # 새 레코드 없음
 
-        await client.write_gatt_char(C_INDEX, struct.pack("<I", start_idx), response=True)
-        records = []
-        done = asyncio.Event()
-        loop = asyncio.get_event_loop()
-        st = {"idle": None}
+        got = {}                       # idx -> record (중복 자동 제거)
+        exit_reason = "완료"
+        stale_rounds = 0               # 연속 '한 개도 못 받은' 라운드
+        deadline = loop.time() + HIST_SYNC_BUDGET
+        req_from = start_idx
 
-        def kick():
+        def remaining():
+            # 실제 받은 범위 안의 구멍만 센다(버퍼에서 밀려난 start_idx 미만은 추적 안 함).
+            lo = min(got) if got else start_idx
+            return [i for i in range(lo, target + 1) if i not in got]
+
+        while True:
+            prev = len(got)
+            await client.write_gatt_char(C_INDEX, struct.pack("<I", req_from), response=True)
+            done = asyncio.Event()
+            st = {"idle": None}
+
+            def kick():
+                if st["idle"]:
+                    st["idle"].cancel()
+                st["idle"] = loop.call_later(IDLE_TIMEOUT, done.set)
+
+            def on_hist(_s, data):
+                if len(data) >= 14:
+                    r = decode_record(data)
+                    got[r["idx"]] = r
+                    if r["idx"] >= target:
+                        done.set()
+                    else:
+                        kick()
+
+            kick()
+            await client.start_notify(C_HIST, on_hist)
+            await done.wait()
+            await client.stop_notify(C_HIST)
             if st["idle"]:
                 st["idle"].cancel()
-            st["idle"] = loop.call_later(IDLE_TIMEOUT, done.set)
 
-        def on_hist(_s, data):
-            if len(data) >= 14:
-                r = decode_record(data)
-                records.append(r)
-                if r["idx"] >= latest["idx"]:
-                    done.set()
-                else:
-                    kick()
+            miss = remaining()
+            if not miss:
+                break
+            stale_rounds = stale_rounds + 1 if len(got) == prev else 0
+            if stale_rounds >= HIST_STALE_MAX:
+                exit_reason = "중단"; break
+            if loop.time() > deadline:
+                exit_reason = "시간초과"; break
+            req_from = miss[0]         # 가장 앞 구멍부터 다시(목표까지 재스트림, 중복은 자동 제거)
 
-        kick()
-        await client.start_notify(C_HIST, on_hist)
-        await done.wait()
-        await client.stop_notify(C_HIST)
-
+    records = [got[i] for i in sorted(got)]
     rows = []
     for r in records:
         hour_ms = round((now_ms - (counter_s - r["ts"]) * 1000) / 3600000) * 3600000
         rows.append({"time_ms": hour_ms, "maxT": r["maxT"], "minT": r["minT"],
                      "maxH": r["maxH"], "minH": r["minH"], "idx": r["idx"]})
     rows.sort(key=lambda x: x["idx"])
-    return rows
+    meta = {"first": records[0]["idx"] if records else None,
+            "last": records[-1]["idx"] if records else None,
+            "target": target, "missing": len(remaining()), "exit": exit_reason}
+    return rows, meta
 
 
 # ── 메인 루프 ───────────────────────────────────────────
@@ -475,11 +511,15 @@ async def history_syncer(cfg, box, lock, db):
                     box["scanner"] = None   # 잠금 해제 후 passive_loop가 스캐너 재시작
                 for label, v in pending.items():
                     try:
-                        rows = await sync_history_one(v["mac"], q_last_sensor_ms(db, label))
+                        rows, meta = await sync_history_one(v["mac"], q_last_sensor_ms(db, label))
                         for r in rows:
                             r["sensor"] = label
                         q_store_hist(db, rows, "s")          # authoritative → .db(passive 덮어씀)
-                        log(f"[{label}] 이력: {len(rows)}개 .db 저장(authoritative)")
+                        tag = "" if meta["exit"] in ("완료", "최신") else f" ⚠{meta['exit']}"
+                        log(f"[{label}] 이력: {len(rows)}개 저장 "
+                            f"(idx {meta['first']}..{meta['last']}/{meta['target']}, 누락 {meta['missing']}){tag}")
+                        if meta["missing"]:                  # 구멍 남음 → 다음 라운드에 이어받기
+                            failed[label] = v
                     except BleakError as e:
                         log(f"[{label}] 이력 연결오류: {e}"); failed[label] = v
                     except Exception as e:
