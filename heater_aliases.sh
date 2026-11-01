@@ -12,3 +12,6 @@ alias 히터점검='~/tuya-venv/bin/python ~/smart-cabin/heater_selftest.py'
 alias heater-check='~/tuya-venv/bin/python ~/smart-cabin/heater_selftest.py'
 # 계측 스냅샷(전력량·전압·고장여부)
 alias heater-status='cat ~/smart-cabin/heater_status.json; echo'
+# 센서 게이트웨이 로그 라이브 모니터 ([수신] 바닥외부 1층 다락 | 습도, [현재]=시트갱신)
+alias 센서='journalctl -fu farmhut-gateway -o cat'
+alias sensors='journalctl -fu farmhut-gateway -o cat'
