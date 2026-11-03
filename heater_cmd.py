@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """히터 모드 전환 명령. 모드는 '인자'로 받음(한글 파일명 불필요).
    사용:
-     heater_cmd.py 난방          # 기본 난방(설정값, 예: 23/24)
+     heater_cmd.py 난방          # 기본 난방(설정값, 예: 23/23.5)
      heater_cmd.py 난방 25       # 임시: ON 25, OFF 25+밴드
      heater_cmd.py 난방 25 27    # 임시: ON 25, OFF 27
      heater_cmd.py 동파          # 기본 동파(예: 3/5)

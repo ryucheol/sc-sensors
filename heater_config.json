@@ -1,7 +1,7 @@
 {
   "sensor": "내부1층",
   "frost":   { "on": 3,  "off": 5 },
-  "comfort": { "on": 23, "off": 24 },
+  "comfort": { "on": 23, "off": 23.5 },
   "sleep":   { "on": 20, "off": 21, "sensor": "다락" },
 
   "preheat": {

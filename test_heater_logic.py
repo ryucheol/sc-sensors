@@ -55,7 +55,7 @@ class Schedule(unittest.TestCase):
         s = st(); lead = hc.preheat_lead_hours(CFG, 5, 0)
         now = at(20) - datetime.timedelta(hours=lead) + datetime.timedelta(minutes=1)
         changed, logs = hc.schedule_step(CFG, s, 5, 0, now, now.timestamp())
-        self.assertTrue(changed); self.assertEqual((s["mode"], s["source"], s["on"], s["off"]), ("comfort", "preheat", 23, 24))
+        self.assertTrue(changed); self.assertEqual((s["mode"], s["source"], s["on"], s["off"]), ("comfort", "preheat", 23, 23.5))
         self.assertEqual(len(logs), 1)
     def test_preheat_not_before_lead(self):
         s = st(); lead = hc.preheat_lead_hours(CFG, 5, 0)
