@@ -30,7 +30,7 @@
 - Pi가 작은 라우터: 폰 핫스팟의 인터넷을 eth0 쪽(버팔로 WiFi)으로 NAT 중계. 플러그·아이패드가 여기 붙는다.
 - **플러그 제어는 Pi→버팔로→플러그 전부 로컬(LAN)** — 인터넷 불필요.
 - **무인기간엔 폰이 떠나 Pi 인터넷이 끊긴다** → SSH·시트·경보 모두 KT 상시회선 연결 전까지는 불가. (제어 자체는 로컬이라 정상 동작.)
-- KT 전환 시: 버팔로 Router ON + KT를 WAN에, Pi eth0 `shared→auto`.
+- KT 전환 시: 버팔로 Router ON + KT를 WAN에, Pi eth0 `shared→auto`. **절차·체크리스트: [NETWORK_MIGRATION.md](NETWORK_MIGRATION.md)**
 - 버팔로 WiFi: SSID `Ryufarm`, WPA2-PSK/AES(비번은 비밀). WiFi를 바꾸면 **플러그를 재페어링**해야 하고 로컬키가 바뀐다(아래 "Tuya 플러그" 참고).
 
 ---
