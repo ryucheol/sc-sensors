@@ -483,7 +483,10 @@ async def current_uploader(cfg, latest, dirty):
             try:
                 _lp = os.path.join(os.path.dirname(os.path.abspath(__file__)), "latest.json")
                 with open(_lp, "w") as _f:
-                    json.dump({r["sensor"]: {"temp": r["temp"], "hum": r["hum"], "time_ms": r["time_ms"]}
+                    # time_ms = 그 센서의 마지막 비콘 '수신' 시각(쓴 시각 아님) → 센서별 고장(배터리·전파)을
+                    # 히터 제어기가 stale로 잡을 수 있게. 하트비트로 옛 값에 새 시각이 찍히는 것을 막는다.
+                    json.dump({r["sensor"]: {"temp": r["temp"], "hum": r["hum"],
+                                             "time_ms": round(latest[r["sensor"]].get("ts", now_ms / 1000) * 1000)}
                                for r in readings}, _f, ensure_ascii=False)
             except Exception:
                 pass

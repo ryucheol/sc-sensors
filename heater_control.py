@@ -97,6 +97,48 @@ def control_sensor(cfg, mode):
         return cfg.get("sleep", {}).get("sensor", cfg["sensor"])
     return cfg["sensor"]
 
+# ── 실내 센서 이중화(1층 ↔ 다락) ─────────────────────────────────────────────
+# 실내 센서 둘은 열성층화로 차이가 있다(실측: 난방 중 다락이 ~2°C, 난방 끈 뒤 밤엔 ~4°C 더 따뜻).
+# 둘 다 살아 있을 때 차이 delta(=다락−1층)를 천천히 학습해 두고, 한쪽이 죽으면 다른 쪽 + delta 로 대신한다.
+RED_DEFAULT = {"delta_init": 3.0, "tau_min": 60, "fallback_margin_frost": 1.5,
+               "disagree_c": 5.0, "valid_min": -30.0, "valid_max": 60.0}
+
+def red_cfg(cfg):
+    r = dict(RED_DEFAULT); r.update(cfg.get("redundancy", {})); return r
+
+def indoor_pair(cfg):
+    """(기본센서=1층, 보조센서=다락). 다락 미설정이면 보조 없음."""
+    a = cfg["sensor"]; b = cfg.get("sleep", {}).get("sensor")
+    return a, (b if b and b != a else None)
+
+def sensor_ok(temp, t_ms, now_ms, stale_ms, vmin=-30.0, vmax=60.0):
+    """센서값 사용가능(순수): 값 있음 + 신선함 + 물리적으로 그럴듯한 범위."""
+    if temp is None or t_ms is None: return False
+    if (now_ms - t_ms) > stale_ms:   return False
+    return vmin <= temp <= vmax
+
+def update_delta(delta, t_attic, t_floor, dt, tau_s, clamp=10.0):
+    """delta(=다락−1층) 지수이동평균 갱신(순수). 둘 다 정상일 때만 부를 것."""
+    if dt <= 0: return delta
+    a = min(1.0, dt / float(tau_s))
+    d = delta + a * ((t_attic - t_floor) - delta)
+    return max(-clamp, min(clamp, d))
+
+def fuse_control(mode, t_ctl, ctl_ok, t_oth, oth_ok, d, r):
+    """제어온도 결정(순수). d = 기대차(제어센서 − 다른센서).
+       반환 (온도 또는 None, 출처). 출처: primary / primary-only / fallback / disagree / disagree-min / none.
+       동파모드에선 항상 '더 춥게' 보는 쪽(=더 일찍 켜는 쪽)으로 치우친다."""
+    margin = r["fallback_margin_frost"] if mode == "frost" else 0.0
+    if ctl_ok and oth_ok:
+        est = t_oth + d
+        if abs(t_ctl - est) > r["disagree_c"]:
+            if mode == "frost": return min(t_ctl, est - margin), "disagree-min"
+            return t_ctl, "disagree"
+        return t_ctl, "primary"
+    if ctl_ok: return t_ctl, "primary-only"
+    if oth_ok: return t_oth + d - margin, "fallback"
+    return None, "none"
+
 def decide_relay(mode, on_th, off_th, t_ctl, ctl_stale, cur_relay):
     """히스테리시스 판단(순수): 원하는 릴레이 상태. 온도미상이면 동파=ON, 그 외=현상유지."""
     if ctl_stale:
@@ -128,6 +170,9 @@ def main():
     acct_last = None
     hr = {"key": None, "wdt": 0.0, "tin_dt": 0.0, "tout_dt": 0.0, "dt": 0.0, "on_dt": 0.0, "tin0": None, "tin1": None}
     fault_dt = 0.0; fault_active = False; fail_streak = 0
+    # ── 센서 이중화 상태: delta(=다락−1층) 학습값은 재시작해도 이어가도록 status에서 복원 ──
+    delta = _ss.get("delta_attic_floor", red_cfg(load(CFG, {}) or {})["delta_init"])
+    red_last = None; last_src = None; last_sensor_warn = {}
     while True:
         poll = 60
         try:
@@ -137,23 +182,50 @@ def main():
             st = load(STATE, None)
             if not st: st = default_state(cfg); save_atomic(STATE, st)
 
-            t_in, t_ms = read_temp(cfg["sensor"])
-            t_out, _   = read_temp(cfg["preheat"].get("outdoor_sensor", ""))
-            stale = (t_ms is None) or ((now()*1000 - t_ms) > cfg["stale_temp_min"]*60*1000)
+            R = red_cfg(cfg); now_ms = now() * 1000; stale_ms = cfg["stale_temp_min"] * 60 * 1000
+            def _ok(t, ms): return sensor_ok(t, ms, now_ms, stale_ms, R["valid_min"], R["valid_max"])
+            floor_s, attic_s = indoor_pair(cfg)
+            t_in, t_ms = read_temp(floor_s)
+            stale = not _ok(t_in, t_ms)                       # 계측(전력량·열모델)은 1층 '실측'만 사용
+            t_at, ta_ms = read_temp(attic_s) if attic_s else (None, None)
+            at_ok = bool(attic_s) and _ok(t_at, ta_ms)
+            t_out, to_ms = read_temp(cfg["preheat"].get("outdoor_sensor", ""))
+            if not _ok(t_out, to_ms): t_out = None            # 외기 미상 → 예열은 0°C 가정(기존 동작)
+
+            # ── 이중화: 둘 다 정상이면 delta 학습, 센서 이상은 30분마다 경고 ──
+            _t = now(); _dtr = (_t - red_last) if red_last else 0.0; red_last = _t
+            if _dtr < 0 or _dtr > 2 * poll: _dtr = 0.0
+            # 둘이 크게 어긋나면(한쪽 고장 의심) 학습 중단 — 고장값이 delta에 스며드는 것 방지
+            if (not stale) and at_ok and abs((t_at - t_in) - delta) <= R["disagree_c"]:
+                delta = update_delta(delta, t_at, t_in, _dtr, R["tau_min"] * 60)
+            for _nm, _good, _tv in ((floor_s, not stale, t_in), (attic_s, at_ok, t_at)):
+                if _nm and not _good and _t - last_sensor_warn.get(_nm, 0) > 1800:
+                    log("⚠ 센서 이상(%s): %s" % (_nm, "수신 끊김" if _tv is None else "오래됐거나 범위 밖(%s°C)" % _tv))
+                    last_sensor_warn[_nm] = _t
+            # 예열 판단용 1층 온도: 1층이 죽어도 다락+delta로 추정(보수적=더 춥게)
+            t_floor_est, _ = fuse_control("frost", t_in, not stale, t_at, at_ok, -delta, R)
 
             # ── 스케줄: 금요일 적응형 예열 / 노쇼 복귀 / 안전 백스톱 ──
-            changed, slogs = schedule_step(cfg, st, t_in, t_out, datetime.datetime.now(), now())
+            changed, slogs = schedule_step(cfg, st, t_floor_est, t_out, datetime.datetime.now(), now())
             for m in slogs: log(m)
             if changed: save_atomic(STATE, st)
 
             # ── 제어 센서 선택: mode에서 유도(취침=다락, 그 외=기본). state엔 저장 안 함 ──
             #    (백스톱 등으로 mode가 바뀌면 센서도 자동 복귀. 계측용 t_in/stale은 항상 기본센서=1층 유지) ──
             ctl_sensor = control_sensor(cfg, st["mode"])
-            if ctl_sensor == cfg["sensor"]:
-                t_ctl, tc_ms = t_in, t_ms
+            if ctl_sensor == floor_s:
+                c_t, c_ok, o_t, o_ok, d_exp = t_in, not stale, t_at, at_ok, -delta
+            elif ctl_sensor == attic_s:
+                c_t, c_ok, o_t, o_ok, d_exp = t_at, at_ok, t_in, not stale, delta
             else:
-                t_ctl, tc_ms = read_temp(ctl_sensor)
-            ctl_stale = (tc_ms is None) or ((now()*1000 - tc_ms) > cfg["stale_temp_min"]*60*1000)
+                c_t, c_ms = read_temp(ctl_sensor); c_ok = _ok(c_t, c_ms); o_t, o_ok, d_exp = None, False, 0.0
+            t_ctl, ctl_src = fuse_control(st["mode"], c_t, c_ok, o_t, o_ok, d_exp, R)
+            ctl_stale = t_ctl is None
+            if t_ctl is not None: t_ctl = round(t_ctl, 1)
+            if ctl_src != last_src:
+                if last_src is not None or ctl_src != "primary":
+                    log("제어온도 출처: %s → %s (%s 기준, 다락−1층 %.1f°C)" % (last_src, ctl_src, ctl_sensor, delta))
+                last_src = ctl_src
 
             # ── 실제 플러그 상태 읽기(앱·수동·정전복구 등 외부변경 자가보정) ──
             cur_relay = st.get("relay"); cur_watt = 0.0; cur_volt = 0.0; cur_kwh_hw = None; status_ok = False
@@ -179,8 +251,8 @@ def main():
                     relay, watt, volt = apply_relay(d, want)
                     st["relay"] = relay; save_atomic(STATE, st)
                     cur_relay = relay; cur_watt = watt    # 스냅샷·고장감지가 변경 직후 실측을 쓰도록 갱신
-                    log("%s %s°C [%s %s/%s] → 플러그 %s (%.0fW %.0fV)"
-                        % (ctl_sensor, t_ctl, st["mode"], on_th, off_th, "ON" if relay else "OFF", watt, volt))
+                    log("%s %s°C(%s) [%s %s/%s] → 플러그 %s (%.0fW %.0fV)"
+                        % (ctl_sensor, t_ctl, ctl_src, st["mode"], on_th, off_th, "ON" if relay else "OFF", watt, volt))
                 elif now() - last_hb > 1800:    # 30분 하트비트(현황 로그)
                     log("현황: %s %s°C 외기 %s°C [%s %s/%s] 플러그 %s (%.0fW)"
                         % (ctl_sensor, t_ctl, t_out, st["mode"], on_th, off_th, "ON" if cur_relay else "OFF", cur_watt))
@@ -240,7 +312,10 @@ def main():
                     "watt": round(cur_watt, 0), "volt": round(cur_volt, 1),
                     "hw_kwh": cur_kwh_hw, "today_kwh": round(day_wh / 1000.0, 3), "total_kwh": round(total_wh / 1000.0, 2),
                     "heater_ok": (not fault_active), "status_fail_streak": fail_streak,
-                    "day_wh": round(day_wh, 1), "total_wh": round(total_wh, 1), "day_date": day_date})
+                    "day_wh": round(day_wh, 1), "total_wh": round(total_wh, 1), "day_date": day_date,
+                    "ctl_sensor": ctl_sensor, "ctl_src": ctl_src, "t_ctl": t_ctl,
+                    "sensor_ok": {floor_s: (not stale), **({attic_s: at_ok} if attic_s else {})},
+                    "delta_attic_floor": round(delta, 2)})
             except Exception as e:
                 log("계측 오류: %s" % e)
         except Exception as e:

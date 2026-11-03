@@ -104,3 +104,49 @@ class Schedule(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+
+R = hc.red_cfg(CFG)
+
+class SensorOk(unittest.TestCase):
+    def test_fresh_ok(self):        self.assertTrue(hc.sensor_ok(5.0, 1000, 1000 + 60_000, 30 * 60_000))
+    def test_stale(self):           self.assertFalse(hc.sensor_ok(5.0, 0, 31 * 60_000, 30 * 60_000))
+    def test_missing(self):
+        self.assertFalse(hc.sensor_ok(None, 0, 0, 1)); self.assertFalse(hc.sensor_ok(5.0, None, 0, 1))
+    def test_out_of_range(self):    # 배터리 방전 등 쓰레기값
+        self.assertFalse(hc.sensor_ok(-40.0, 0, 0, 1)); self.assertFalse(hc.sensor_ok(85.0, 0, 0, 1))
+
+class Delta(unittest.TestCase):
+    def test_moves_toward_observed(self):
+        d = hc.update_delta(3.0, 24.0, 22.0, 600, 3600)          # 관측 차 2.0, 10분/60분
+        self.assertTrue(2.0 < d < 3.0); self.assertAlmostEqual(d, 3.0 + (1/6) * (2.0 - 3.0))
+    def test_zero_dt_noop(self):    self.assertEqual(hc.update_delta(3.0, 30, 0, 0, 3600), 3.0)
+    def test_clamped(self):         self.assertEqual(hc.update_delta(0.0, 50, 0, 10**6, 3600), 10.0)
+
+class Fuse(unittest.TestCase):
+    # 1층 제어(동파). 다락−1층 delta=3 → d(1층−다락) = −3
+    def test_both_ok_uses_primary(self):
+        self.assertEqual(hc.fuse_control("frost", 4.0, True, 7.2, True, -3.0, R), (4.0, "primary"))
+    def test_primary_only(self):
+        self.assertEqual(hc.fuse_control("frost", 4.0, True, None, False, -3.0, R), (4.0, "primary-only"))
+    def test_fallback_frost_is_conservative(self):   # 1층 고장 → 다락 7 − 3 − 여유 1.5 = 2.5 → 켜짐 쪽
+        t, src = hc.fuse_control("frost", None, False, 7.0, True, -3.0, R)
+        self.assertEqual(src, "fallback"); self.assertAlmostEqual(t, 7.0 - 3.0 - R["fallback_margin_frost"])
+        self.assertTrue(hc.decide_relay("frost", 3, 5, t, False, False))
+    def test_fallback_comfort_no_margin(self):
+        t, src = hc.fuse_control("comfort", None, False, 25.0, True, -2.0, R)
+        self.assertEqual((t, src), (23.0, "fallback"))
+    def test_sleep_attic_dead_uses_floor(self):       # 취침: 다락 고장 → 1층 21 + delta 2 = 23
+        self.assertEqual(hc.fuse_control("sleep", None, False, 21.0, True, 2.0, R), (23.0, "fallback"))
+    def test_disagree_frost_takes_colder(self):       # 1층이 20°C로 튀어도(고장) 다락 기준 추정 4−3−1.5 쪽을 믿음
+        t, src = hc.fuse_control("frost", 20.0, True, 4.0, True, -3.0, R)
+        self.assertEqual(src, "disagree-min"); self.assertAlmostEqual(t, 4.0 - 3.0 - R["fallback_margin_frost"])
+    def test_disagree_comfort_keeps_primary(self):
+        self.assertEqual(hc.fuse_control("comfort", 10.0, True, 25.0, True, -2.0, R), (10.0, "disagree"))
+    def test_both_dead(self):
+        self.assertEqual(hc.fuse_control("frost", None, False, None, False, -3.0, R), (None, "none"))
+
+class Pair(unittest.TestCase):
+    def test_pair(self): self.assertEqual(hc.indoor_pair(CFG), ("내부1층", "다락"))
+    def test_no_attic(self):
+        cfg = dict(CFG); cfg["sleep"] = {"on": 20, "off": 21}
+        self.assertEqual(hc.indoor_pair(cfg), ("내부1층", None))
