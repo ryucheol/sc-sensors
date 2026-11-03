@@ -41,6 +41,7 @@
 |---|---|---|
 | `heater_control.py` | **제어 데몬**: 온도 히스테리시스 + 예열 + 계측. systemd `heater-control` | ✅ |
 | `heater_cmd.py` | 모드 전환 명령(`난방`/`동파`/`취침`), 상태파일 갱신 | ✅ |
+| `test_heater_logic.py` | 판단 로직 단위테스트(하드웨어·tinytuya 불필요): `python3 -m unittest -v test_heater_logic` | ✅ |
 | `heater_selftest.py` | 떠나기 전 자가점검(플러그 펄스→전력 PASS/FAIL) | ✅ |
 | `heater_config.json` | 설정(임계값·예열·열모델·고장). **저장 즉시 반영(핫리로드)** | ✅ |
 | `heater-control.service` | systemd 유닛 | ✅ |
@@ -115,7 +116,7 @@ hour,Wh,mean_Tin,mean_Tout,Tin_start,Tin_end,on_fraction
 1. `latest.json`에서 **계측용** 기준센서 온도(`t_in`=1층)·외기(`t_out`) 읽고 신선도 판정. 스케줄 처리 뒤 `mode`에서 **제어센서**를 유도해 **제어용** `t_ctl`·`ctl_stale`를 따로 구한다(취침=다락, 그 외=1층). 계측(전력량·열모델 CSV)은 항상 `t_in`(1층)을 써서 데이터 일관성을 지킨다.
 2. **스케줄**:
    - **금요일 적응형 예열**: 금 `target_hour`에 `target_temp` 되도록, 외기 보고 **선행시간**을 계산해 미리 `comfort`로 전환. 선행시간 = `τ·ln((T_eq−T_in)/(T_eq−target))·margin`, `T_eq=T_out+P/UA` (상한 `max_lead_hours`).
-   - **노쇼 복귀**: `noshow_hour`(토 00:00)까지 `난방` 명령(source=cmd) 없으면 → 동파.
+   - **노쇼 복귀**: 예열(source=preheat)이 시작된 날 0시 + `noshow_hour`(=토 00:00) 이후에도 `난방` 명령이 없으면 → 동파. (요일 블록 밖에서 판정)
    - **안전 백스톱**: `comfort`/`sleep`+source=cmd가 `backstop_comfort_hours`(36h) 무신호 → 동파(재실모드 공통).
 3. **실측 플러그 상태 읽기(자가보정)**: 매 주기 `status()`로 실제 relay/W/V/누적(DP17)을 읽어, 앱·수동·정전으로 어긋난 기록을 ≤60초 내 교정.
 4. **히스테리시스**(제어센서 `t_ctl` 기준): `t_ctl < on` → ON, `t_ctl > off` → OFF, 밴드 내 → 유지. `ctl_stale`면 동파는 안전가동(ON)/그 외는 현상유지.
@@ -159,6 +160,12 @@ hour,Wh,mean_Tin,mean_Tout,Tin_start,Tin_end,on_fraction
   # → devices.json 에서 MAC e4:ae:e4:fa:ee:bd 로 매칭해 key 를 tuya_keys.json 에 반영(id·ip 유지됨)
   ```
   (Tuya IoT 프로젝트는 **삭제 금지** — 재추출에 필요.)
+
+---
+
+## 테스트
+
+판단 로직(`schedule_step`·`decide_relay`·`control_sensor`·`preheat_lead_hours`)은 순수 함수라 Pi·플러그 없이 검증된다: `python3 -m unittest -v test_heater_logic`. 코드 수정 후 재배포 전에 실행.
 
 ---
 

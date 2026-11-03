@@ -15,8 +15,6 @@ LOG    = os.path.join(BASE, "heater.log")
 STATUS = os.path.join(BASE, "heater_status.json")    # 계측·전력량·고장 스냅샷(서비스만 기록, 제어상태와 분리)
 ENERGY_CSV = os.path.join(BASE, "heater_energy.csv") # 시간별 열모델 원시데이터(오프라인 UA/C 피팅용)
 
-import tinytuya
-
 def now(): return time.time()
 def stamp(): return datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
@@ -66,6 +64,47 @@ def default_state(cfg):
     return {"mode":"frost","on":f["on"],"off":f["off"],"source":"default",
             "since":now(),"last_cmd_ts":0,"relay":None}
 
+def schedule_step(cfg, st, t_in, t_out, dtn, tnow):
+    """스케줄 판단(순수): 금요일 예열 / 노쇼 복귀 / 안전 백스톱. st를 제자리 수정, (changed, 로그메시지목록) 반환."""
+    p = cfg["preheat"]; changed = False; logs = []
+    if p.get("enabled") and dtn.weekday() == p["weekday"]:
+        target = dtn.replace(hour=p["target_hour"], minute=p["target_min"], second=0, microsecond=0)
+        if dtn < target and st["mode"] == "frost":
+            lead = preheat_lead_hours(cfg, t_in, t_out)
+            if dtn >= target - datetime.timedelta(hours=lead):
+                c = cfg["comfort"]
+                st.update(mode="comfort", on=c["on"], off=c["off"], source="preheat", since=tnow); changed = True
+                logs.append("예열 시작: 목표 %s°C@%02d:%02d, 내부 %s°C 외기 %s°C, 선행 %.1fh → 난방 %s/%s"
+                            % (p["target_temp"], p["target_hour"], p["target_min"], t_in, t_out, lead, c["on"], c["off"]))
+    # 노쇼 복귀: 예열(source=preheat)이 시작된 날 0시 + noshow_hour 까지 '난방' 명령이 없으면 동파 복귀.
+    # 금요일 블록 밖에서 판정해야 한다(noshow=토 00:00이라 금요일엔 영원히 참이 될 수 없음).
+    if p.get("enabled") and st.get("source") == "preheat":
+        try: base = datetime.datetime.fromtimestamp(st.get("since", tnow))
+        except Exception: base = dtn
+        noshow_at = base.replace(hour=0, minute=0, second=0, microsecond=0) + datetime.timedelta(hours=p["noshow_hour"])
+        if dtn >= noshow_at:
+            f = cfg["frost"]; st.update(mode="frost", on=f["on"], off=f["off"], source="noshow", since=tnow); changed = True
+            logs.append("노쇼(난방 명령 없음) → 동파 복귀")
+    if st["mode"] in ("comfort", "sleep") and st.get("source") == "cmd" and st.get("last_cmd_ts", 0) > 0:
+        if (tnow - st["last_cmd_ts"]) > cfg["backstop_comfort_hours"]*3600:
+            f = cfg["frost"]; st.update(mode="frost", on=f["on"], off=f["off"], source="backstop", since=tnow); changed = True
+            logs.append("안전 백스톱: 재실모드 %sh 무신호 → 동파 복귀" % cfg["backstop_comfort_hours"])
+    return changed, logs
+
+def control_sensor(cfg, mode):
+    """제어센서는 mode에서 유도(취침=다락, 그 외=기본)."""
+    if mode == "sleep":
+        return cfg.get("sleep", {}).get("sensor", cfg["sensor"])
+    return cfg["sensor"]
+
+def decide_relay(mode, on_th, off_th, t_ctl, ctl_stale, cur_relay):
+    """히스테리시스 판단(순수): 원하는 릴레이 상태. 온도미상이면 동파=ON, 그 외=현상유지."""
+    if ctl_stale:
+        return True if mode == "frost" else cur_relay
+    if t_ctl < on_th:  return True
+    if t_ctl > off_th: return False
+    return cur_relay
+
 def apply_relay(d, want):
     (d.turn_on() if want else d.turn_off())
     time.sleep(1)
@@ -73,6 +112,7 @@ def apply_relay(d, want):
     return bool(s.get("1")), s.get("19",0)/10.0, s.get("20",0)/10.0   # relay, W, V
 
 def main():
+    import tinytuya    # 지연 임포트: 테스트가 tinytuya 없이 순수 로직을 임포트할 수 있게
     dev = get_device()
     if not dev:
         log("tuya_keys.json에 기기 없음 — 종료"); return
@@ -102,32 +142,13 @@ def main():
             stale = (t_ms is None) or ((now()*1000 - t_ms) > cfg["stale_temp_min"]*60*1000)
 
             # ── 스케줄: 금요일 적응형 예열 / 노쇼 복귀 / 안전 백스톱 ──
-            dtn = datetime.datetime.now(); p = cfg["preheat"]; changed = False
-            if p.get("enabled") and dtn.weekday() == p["weekday"]:
-                target = dtn.replace(hour=p["target_hour"], minute=p["target_min"], second=0, microsecond=0)
-                noshow = dtn.replace(hour=0, minute=0, second=0, microsecond=0) + datetime.timedelta(hours=p["noshow_hour"])
-                if dtn < target and st["mode"] == "frost":
-                    lead = preheat_lead_hours(cfg, t_in, t_out)
-                    if dtn >= target - datetime.timedelta(hours=lead):
-                        c = cfg["comfort"]
-                        st.update(mode="comfort", on=c["on"], off=c["off"], source="preheat", since=now()); changed = True
-                        log("예열 시작: 목표 %s°C@%02d:%02d, 내부 %s°C 외기 %s°C, 선행 %.1fh → 난방 %s/%s"
-                            % (p["target_temp"], p["target_hour"], p["target_min"], t_in, t_out, lead, c["on"], c["off"]))
-                if dtn >= noshow and st["source"] == "preheat":
-                    f = cfg["frost"]; st.update(mode="frost", on=f["on"], off=f["off"], source="noshow", since=now()); changed = True
-                    log("노쇼(난방 명령 없음) → 동파 복귀")
-            if st["mode"] in ("comfort", "sleep") and st.get("source") == "cmd" and st.get("last_cmd_ts", 0) > 0:
-                if (now() - st["last_cmd_ts"]) > cfg["backstop_comfort_hours"]*3600:
-                    f = cfg["frost"]; st.update(mode="frost", on=f["on"], off=f["off"], source="backstop", since=now()); changed = True
-                    log("안전 백스톱: 재실모드 %sh 무신호 → 동파 복귀" % cfg["backstop_comfort_hours"])
+            changed, slogs = schedule_step(cfg, st, t_in, t_out, datetime.datetime.now(), now())
+            for m in slogs: log(m)
             if changed: save_atomic(STATE, st)
 
             # ── 제어 센서 선택: mode에서 유도(취침=다락, 그 외=기본). state엔 저장 안 함 ──
             #    (백스톱 등으로 mode가 바뀌면 센서도 자동 복귀. 계측용 t_in/stale은 항상 기본센서=1층 유지) ──
-            if st["mode"] == "sleep":
-                ctl_sensor = cfg.get("sleep", {}).get("sensor", cfg["sensor"])
-            else:
-                ctl_sensor = cfg["sensor"]
+            ctl_sensor = control_sensor(cfg, st["mode"])
             if ctl_sensor == cfg["sensor"]:
                 t_ctl, tc_ms = t_in, t_ms
             else:
@@ -148,15 +169,10 @@ def main():
 
             # ── 히스테리시스 제어(제어센서 ctl_sensor/t_ctl 기준) ──
             on_th, off_th = st["on"], st["off"]
-            if ctl_stale:
-                want = True if st["mode"] == "frost" else cur_relay   # 온도미상: 동파면 안전가동
-                if now() - last_stale_log > 1800:
-                    log("⚠ 온도 데이터 오래됨(%s) → %s" % (ctl_sensor, "안전가동(ON)" if st["mode"]=="frost" else "현상유지"))
-                    last_stale_log = now()
-            else:
-                if   t_ctl < on_th:  want = True
-                elif t_ctl > off_th: want = False
-                else:               want = cur_relay    # 밴드 내 유지
+            want = decide_relay(st["mode"], on_th, off_th, t_ctl, ctl_stale, cur_relay)
+            if ctl_stale and now() - last_stale_log > 1800:
+                log("⚠ 온도 데이터 오래됨(%s) → %s" % (ctl_sensor, "안전가동(ON)" if st["mode"]=="frost" else "현상유지"))
+                last_stale_log = now()
 
             try:
                 if want is not None and want != cur_relay:
