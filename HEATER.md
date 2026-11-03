@@ -81,7 +81,7 @@
     "margin": 1.25, "max_lead_hours": 10
   },
   "backstop_comfort_hours": 36,             // 난방 상태로 이 시간 무신호 → 동파복귀
-  "stale_temp_min": 30,                     // 온도 이보다 오래되면 동파시 안전가동
+  "stale_temp_min": 45,                     // 온도 이보다 오래되면 고장으로 봄(센서 방송 ~10분 주기 고려)
   "poll_sec": 60,
   "fault_min_watt": 100,                    // 켜짐인데 이 미만이면 가열실패 의심
   "fault_grace_sec": 300                    // 이만큼 지속되면 고장 판정
@@ -128,6 +128,7 @@ hour,Wh,mean_Tin,mean_Tout,Tin_start,Tin_end,on_fraction
 
 실내 센서가 둘(내부1층·다락)이라 한쪽이 죽어도 다른 쪽으로 제어를 이어간다. 순수함수 `sensor_ok`·`update_delta`·`fuse_control`(테스트 `test_heater_logic.py`).
 
+- **센서 방송 주기**: LYWSD03MMC 순정 펌웨어는 온·습도를 **약 10분에 한 번**, 배터리는 1시간에 한 번 방송한다. 여기에 게이트웨이 파일 갱신(최대 10분)과 비콘 누락 1회를 더하면 약 31분 → `stale_temp_min` 45분.
 - **정상 판정**(`sensor_ok`): 값 있음 + `stale_temp_min` 이내 수신 + −30~60°C 범위. 게이트웨이가 센서별 수신시각을 쓰므로 **센서 단독 고장(배터리·전파)** 도 잡힌다.
 - **차이 학습**(`update_delta`): 둘 다 정상일 때 `delta = 다락 − 1층`을 지수이동평균(`tau_min` 60분)으로 학습. 재시작해도 `heater_status.json`에서 이어간다. 두 값이 `disagree_c`(5°C) 넘게 어긋나면 학습을 멈춘다(고장값이 스며들지 않게).
   - 실측(2026-10-26, 11-01~02 시간평균): 난방 중 다락이 약 1.6~2.5°C, 난방 끈 밤엔 약 3.4~4.2°C 더 따뜻 → 초기값 `delta_init` 3.0.
