@@ -139,6 +139,27 @@ def fuse_control(mode, t_ctl, ctl_ok, t_oth, oth_ok, d, r):
     if oth_ok: return t_oth + d - margin, "fallback"
     return None, "none"
 
+# ── 데드맨(fail-on): Pi·공유기가 죽으면 플러그가 스스로 켜지게 ─────────────────────
+# 플러그 카운트다운(DP9)은 '현재 상태를 뒤집는다'(2026-11-04 집 플러그로 확인: 꺼짐→켜짐, 삭제·재설정 가능).
+# 꺼져 있는 동안 sec(30분) 카운트다운을 rearm_sec(5분)마다 다시 걸어 계속 미룬다 → Pi가 살아 있으면 안 터진다.
+# 켜질 땐 반드시 지운다(남아 있으면 sec 뒤 꺼져 버림). 히터 다이얼(최대)이 켜짐 고착 시 상한.
+DM_DEFAULT = {"enabled": True, "dp": 9, "sec": 1800, "rearm_sec": 300}
+
+def dm_cfg(cfg):
+    r = dict(DM_DEFAULT); r.update(cfg.get("deadman", {})); return r
+
+def deadman_action(relay, cd_reported, armed_age, dm):
+    """데드맨 판단(순수). 반환 ("arm", 초) / ("clear", 0) / None.
+       relay=실측 릴레이(None=모름), cd_reported=플러그가 보고한 남은 초(None=보고 없음),
+       armed_age=마지막으로 건 뒤 지난 초(None=건 적 없음)."""
+    if not dm.get("enabled") or relay is None:
+        return None
+    if relay:
+        return ("clear", 0) if (cd_reported or armed_age is not None) else None
+    if armed_age is None or armed_age >= dm["rearm_sec"] or cd_reported == 0:
+        return ("arm", int(dm["sec"]))
+    return None
+
 def decide_relay(mode, on_th, off_th, t_ctl, ctl_stale, cur_relay):
     """히스테리시스 판단(순수): 원하는 릴레이 상태. 온도미상이면 동파=ON, 그 외=현상유지."""
     if ctl_stale:
@@ -163,6 +184,7 @@ def main():
     log("히터 제어 시작: %s @ %s v%s" % (dev["name"], dev["ip"], dev["version"]))
 
     last_hb = 0; last_stale_log = 0
+    dm_armed_ts = None; dm_err_log = 0; dm_logged = False
     # ── 계측 누적(heater_status.json에서 복원; 제어와 독립. 재시작 시 acct_last=None → 첫 주기 적분 안 함) ──
     _ss = load(STATUS, {})
     total_wh = _ss.get("total_wh", 0.0); day_wh = _ss.get("day_wh", 0.0)
@@ -229,8 +251,10 @@ def main():
 
             # ── 실제 플러그 상태 읽기(앱·수동·정전복구 등 외부변경 자가보정) ──
             cur_relay = st.get("relay"); cur_watt = 0.0; cur_volt = 0.0; cur_kwh_hw = None; status_ok = False
+            DM = dm_cfg(cfg); cur_cd = None
             try:
                 s = d.status().get("dps", {})
+                cur_cd = s.get(str(DM["dp"]))
                 cur_relay = bool(s.get("1")); cur_watt = s.get("19", 0) / 10.0; cur_volt = s.get("20", 0) / 10.0
                 _e17 = s.get("17"); cur_kwh_hw = (_e17 / 100.0) if _e17 is not None else None   # DP17: 플러그 하드웨어 누적(0.01kWh 단위)
                 status_ok = True; fail_streak = 0
@@ -259,6 +283,25 @@ def main():
                     last_hb = now()
             except Exception as e:
                 log("플러그 제어 오류: %s" % e)
+
+            # ── 데드맨: 꺼짐이면 30분 뒤 켜짐을 계속 미루고, 켜짐이면 지운다 ──
+            if status_ok:
+                try:
+                    _age = (now() - dm_armed_ts) if dm_armed_ts else None
+                    act = deadman_action(cur_relay, cur_cd, _age, DM)
+                    if act:
+                        r = d.set_value(DM["dp"], act[1])
+                        if isinstance(r, dict) and r.get("Error"): raise RuntimeError(r.get("Error"))
+                        if act[0] == "arm":
+                            dm_armed_ts = now()
+                            if not dm_logged:
+                                log("데드맨 작동: 꺼짐 동안 %d분 카운트다운을 %d분마다 연장(DP%s)" % (DM["sec"] // 60, DM["rearm_sec"] // 60, DM["dp"]))
+                                dm_logged = True
+                        else:
+                            dm_armed_ts = None
+                except Exception as e:
+                    if now() - dm_err_log > 1800:
+                        log("⚠ 데드맨 설정 실패(DP%s): %s" % (DM["dp"], e)); dm_err_log = now()
 
             # ── 계측·축적(제어와 완전 분리: 여기서 예외가 나도 제어엔 영향 없음) ──
             try:
@@ -315,7 +358,8 @@ def main():
                     "day_wh": round(day_wh, 1), "total_wh": round(total_wh, 1), "day_date": day_date,
                     "ctl_sensor": ctl_sensor, "ctl_src": ctl_src, "t_ctl": t_ctl,
                     "sensor_ok": {floor_s: (not stale), **({attic_s: at_ok} if attic_s else {})},
-                    "delta_attic_floor": round(delta, 2)})
+                    "delta_attic_floor": round(delta, 2),
+                    "deadman_armed": bool(dm_armed_ts), "countdown_s": cur_cd})
             except Exception as e:
                 log("계측 오류: %s" % e)
         except Exception as e:

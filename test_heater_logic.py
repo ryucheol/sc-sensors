@@ -150,3 +150,20 @@ class Pair(unittest.TestCase):
     def test_no_attic(self):
         cfg = dict(CFG); cfg["sleep"] = {"on": 20, "off": 21}
         self.assertEqual(hc.indoor_pair(cfg), ("내부1층", None))
+
+DM = hc.dm_cfg(CFG)
+
+class Deadman(unittest.TestCase):
+    def test_off_first_time_arms(self):   self.assertEqual(hc.deadman_action(False, None, None, DM), ("arm", 1800))
+    def test_off_recent_no_write(self):    self.assertIsNone(hc.deadman_action(False, 1700, 60, DM))
+    def test_off_rearm_after_interval(self): self.assertEqual(hc.deadman_action(False, 1500, 300, DM), ("arm", 1800))
+    def test_off_cleared_externally_rearms(self):   # 앱에서 지웠거나 플러그 재부팅
+        self.assertEqual(hc.deadman_action(False, 0, 60, DM), ("arm", 1800))
+    def test_on_clears_pending(self):      self.assertEqual(hc.deadman_action(True, 1700, 60, DM), ("clear", 0))
+    def test_on_clears_when_armed_unreported(self): self.assertEqual(hc.deadman_action(True, None, 60, DM), ("clear", 0))
+    def test_on_nothing_pending(self):     self.assertIsNone(hc.deadman_action(True, 0, None, DM))
+    def test_unknown_relay_noop(self):     self.assertIsNone(hc.deadman_action(None, 0, None, DM))
+    def test_disabled(self):
+        self.assertIsNone(hc.deadman_action(False, None, None, dict(DM, enabled=False)))
+    def test_fires_before_freeze(self):    # 30분: 외기 −19°C, 실내 3°C에서 냉각 ~2.4°C/h → 켜질 때 ~1.8°C
+        self.assertLessEqual(DM["sec"], 1800)
