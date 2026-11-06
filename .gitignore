@@ -38,3 +38,4 @@ latest.json
 *.bak*
 heater_status.json
 heater_energy.csv
+forecast.json
