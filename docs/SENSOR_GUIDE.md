@@ -2,6 +2,8 @@
 
 A study guide for students. It explains how the cheap Xiaomi Bluetooth thermometer (model **LYWSD03MMC**, sold as *Mijia Thermometer 2*) talks, what **GATT** is, and why this project moved from "connect to the sensor" to a **hybrid** design. It is written so that a student who knows basic programming can follow it, and who then reads a bit more can understand the code in this repository.
 
+> 한국어판: [SENSOR_GUIDE.ko.md](SENSOR_GUIDE.ko.md)
+
 > **Honest note.** Xiaomi publishes no official documentation for this sensor. Everything about its Bluetooth protocol here comes from community reverse engineering and from testing on real devices (see the *Development memo* in [README.md](../README.md)). Parts marked **(from the code)** are things you can verify by reading a file in this repository.
 
 **Contents**
