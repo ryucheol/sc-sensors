@@ -118,6 +118,7 @@ hour,Wh,mean_Tin,mean_Tout,Tin_start,Tin_end,on_fraction
    - **금요일 적응형 예열**: 금 `target_hour`에 `target_temp` 되도록, 외기 보고 **선행시간**을 계산해 미리 `comfort`로 전환. 선행시간 = `τ·ln((T_eq−T_in)/(T_eq−target))·margin`, `T_eq=T_out+P/UA` (상한 `max_lead_hours`).
    - **노쇼 복귀**: 예열(source=preheat)이 시작된 날 0시 + `noshow_hour`(=토 00:00) 이후에도 `난방` 명령이 없으면 → 동파. (요일 블록 밖에서 판정)
    - **안전 백스톱**: `comfort`/`sleep`+source=cmd가 `backstop_comfort_hours`(36h) 무신호 → 동파(재실모드 공통).
+     - **36시간의 근거**(2026-11-06 정리): 시트 `재실기록`의 실제 체류가 20~26시간(2026-10-22~11-02, 3건)이라 최대 체류의 약 1.4배 여유를 두어 평소 체류 중에는 끊기지 않게 하면서, `동파`로 돌려놓는 걸 잊어도 난방이 무한정 이어지지 않게 막는다. 잊었을 때 추가 난방은 체류 종료 후 약 10~14 kWh 수준(추정: UA 47 W/K, 외기 5°C 가정). 금요일 20시 도착이면 일요일 08시에 만료되므로 그보다 오래 머물면 `난방`을 다시 실행(명령 시각부터 36시간을 다시 센다).
 3. **실측 플러그 상태 읽기(자가보정)**: 매 주기 `status()`로 실제 relay/W/V/누적(DP17)을 읽어, 앱·수동·정전으로 어긋난 기록을 ≤60초 내 교정.
 4. **히스테리시스**(제어센서 `t_ctl` 기준): `t_ctl < on` → ON, `t_ctl > off` → OFF, 밴드 내 → 유지. `ctl_stale`면 동파는 안전가동(ON)/그 외는 현상유지.
 5. **계측(제어와 분리된 try/except — 여기서 예외가 나도 제어엔 영향 없음)**: 전력량 적분(dt 상한·재시작 리셋), 시간별 CSV, **가열실패 감지**(기대가열인데 `<fault_min_watt`가 `fault_grace_sec` 지속→`heater_ok=false` 로그), `heater_status.json` 기록(누적치는 여기에만 — `heater_state.json`은 명령이 read-modify-write 하므로 경합 회피).
