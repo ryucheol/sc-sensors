@@ -148,6 +148,8 @@ MAC 으로 직접 찾으므로 선택창/LCD 대조 없이 완전 자동. Mi Hom
 
 > 2사이트 운영(농막/선반)·사이트 전환·오프라인 store-and-forward·배터리 예상 소진일 등
 > 최신 구성·운영은 **[OPERATIONS.md](OPERATIONS.md)** 참고.
+>
+> 센서 동작(방송·GATT), **구조를 이렇게 바꾼 이유와 장단점**을 학습용으로 정리한 영문 문서: **[docs/SENSOR_GUIDE.md](docs/SENSOR_GUIDE.md)**.
 
 ## 이 프로젝트의 차별점
 
