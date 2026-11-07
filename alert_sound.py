@@ -30,7 +30,9 @@ ON_T = 26.0; OFF_T = 25.0; CLOSE_ARM = 25.5; REPEAT = 300; LEAD = 1.0; VOL = "80
 CHANGE_EPS = 0.05  # 직전 알림 대비 원하는 방향(여세요=하강)으로 0.1°C↑ 변하면 반복 중지(문 열어 반응 시작)
 # 급락 감지(실측 보정: 자연 최대 ~3°C/h → 15분 2°C=8°C/h로 안전 분리)
 DROP_T = 2.0; DROP_WIN = 900
-# 난방 정체(다이얼 과소): t_ctl가 설정-여유 아래인데 30분간 거의 안 오름
+# 난방 정체(다이얼 과소): 난방 '켠 뒤' STALL_WIN 지나도 상승 ≤ STALL_RISE면 경고.
+#   STALL_WIN=1800(30분): 실측상 1790W로 켜도 첫 상승까지 ~6~9분 지연 + 센서 0.5°C 단위 보고 →
+#   정상 히터면 30분엔 ~1°C 이상 오르므로(0.2 임계 충분 초과) 오경보 없이 진짜 정체만 잡음.
 STALL_WIN = 1800; STALL_RISE = 0.2; STALL_MARGIN = 0.3; STALL_REPEAT = 900
 # 신선도 가드
 FRESH_SENSOR = 180; FRESH_STATUS = 150; FAULT_REPEAT = 900
@@ -271,9 +273,9 @@ def loop():
     closing = False; close_temp = None     # 닫기 반복 중 여부 + 직전 알림 온도(상승 감지)
     peak = None                       # close_armed 동안 최고 1층 온도(하락량 계산)
     fhist = []                        # [(ts, t_floor)] 급락용(~20분)
-    chist = []                        # [(ts, t_ctl)] 정체용(~35분)
     dropping = False; drop_base = None; drop_low = None; last_d = 0.0   # 급락: 시작점·최저점·반복시각
     stall_last = 0.0; fault_last = 0.0; hb_last = 0.0; gate_warned = False; prev_comfort = False
+    heat_since = None; heat_tctl0 = None   # 난방 '시작' 시점·그때 온도(정체 판정 기준점)
     logline("서비스 시작")
     while True:
         try:
@@ -284,8 +286,6 @@ def loop():
             # 이력 적재(신선할 때만)
             if fresh:
                 fhist.append((now, t)); fhist[:] = [x for x in fhist if now - x[0] <= 1200]
-            if stat_fresh:
-                chist.append((now, status.get("t_ctl"))); chist[:] = [x for x in chist if now - x[0] <= 2100]
 
             # 10분마다 상태 한 줄(살아있음·무엇을 보는지) — "왜 안 울렸나" 진단용
             if now - hb_last >= 600:
@@ -354,17 +354,25 @@ def loop():
                 if stat_fresh:
                     on_sp = st.get("on")
                     tctl = status.get("t_ctl")
+                    relay_on = bool(status.get("relay"))
+                    # 난방 '시작' 시점 추적: 플러그 ON + 설정보다 추운(=가열 수요) 동안만 시계가 간다.
+                    # 수요 없음/꺼짐/설정 도달 시 리셋 → STALL_WIN은 '난방 켠 뒤 경과'로만 쌓임.
+                    if relay_on and on_sp is not None and tctl is not None and tctl < on_sp - STALL_MARGIN:
+                        if heat_since is None:
+                            heat_since = now; heat_tctl0 = tctl
+                    else:
+                        heat_since = None; heat_tctl0 = None
                     # (A) 플러그 통신 끊김
                     if (status.get("heater_ok") is False) or (status.get("status_fail_streak", 0) >= 3):
                         if now - fault_last >= FAULT_REPEAT:
                             say("난방 플러그 연결이 끊겼습니다. 확인하세요."); fault_last = now
                             logline("플러그 통신끊김 발화 heater_ok=%s streak=%s" % (status.get("heater_ok"), status.get("status_fail_streak")))
-                    # (B) 난방 정체(다이얼 과소): 설정 아래인데 30분간 거의 안 오름
-                    elif on_sp is not None and tctl is not None and tctl < on_sp - STALL_MARGIN:
-                        oldc = [x for x in chist if now - x[0] >= STALL_WIN and x[1] is not None]
-                        if oldc and (tctl - oldc[-1][1]) <= STALL_RISE and now - stall_last >= STALL_REPEAT:
-                            say("난방 중인데 온도가 오르지 않습니다. 히터 다이얼을 확인하세요."); stall_last = now
-                            logline("난방정체 발화 t_ctl=%.1f on=%s" % (tctl, on_sp))
+                    # (B) 난방 정체(다이얼 과소): 난방 켠 지 STALL_WIN(워밍업 지연 감안) 지나도 거의 안 오름
+                    elif (heat_since is not None and now - heat_since >= STALL_WIN
+                          and (tctl - heat_tctl0) <= STALL_RISE and now - stall_last >= STALL_REPEAT):
+                        say("난방 중인데 온도가 오르지 않습니다. 히터 다이얼을 확인하세요."); stall_last = now
+                        logline("난방정체 발화 t_ctl=%.1f on=%s 경과%.0f분 상승%.1f"
+                                % (tctl, on_sp, (now - heat_since) / 60, tctl - heat_tctl0))
             elif not comfort:
                 # comfort 모드를 벗어날 때만(취침/동파 등) 전체 초기화.
                 # comfort인데 센서만 '일시 stale'이면 상태를 보존한다 — 특히 close_armed·peak.
