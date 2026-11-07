@@ -273,7 +273,7 @@ def loop():
     fhist = []                        # [(ts, t_floor)] 급락용(~20분)
     chist = []                        # [(ts, t_ctl)] 정체용(~35분)
     dropping = False; drop_base = None; drop_low = None; last_d = 0.0   # 급락: 시작점·최저점·반복시각
-    stall_last = 0.0; fault_last = 0.0; hb_last = 0.0; gate_warned = False
+    stall_last = 0.0; fault_last = 0.0; hb_last = 0.0; gate_warned = False; prev_comfort = False
     logline("서비스 시작")
     while True:
         try:
@@ -365,8 +365,15 @@ def loop():
                         if oldc and (tctl - oldc[-1][1]) <= STALL_RISE and now - stall_last >= STALL_REPEAT:
                             say("난방 중인데 온도가 오르지 않습니다. 히터 다이얼을 확인하세요."); stall_last = now
                             logline("난방정체 발화 t_ctl=%.1f on=%s" % (tctl, on_sp))
-            else:
+            elif not comfort:
+                # comfort 모드를 벗어날 때만(취침/동파 등) 전체 초기화.
+                # comfort인데 센서만 '일시 stale'이면 상태를 보존한다 — 특히 close_armed·peak.
+                # (stale 깜빡임에 무장이 풀려 '문 닫으세요'를 놓치던 버그 방지)
                 over = False; close_armed = False; closing = False; peak = None; dropping = False; repeating = False
+                if prev_comfort:
+                    logline("comfort 종료 → 상태 초기화")
+            # else: comfort인데 센서 stale → 이번 틱은 건너뜀(상태 보존)
+            prev_comfort = comfort
         except Exception:
             pass
         time.sleep(20)
