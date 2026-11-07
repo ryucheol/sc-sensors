@@ -506,7 +506,8 @@ async def history_syncer(cfg, box, lock, db):
     # 같은 데이터는 재fetch 안 함. 업로드는 q_drain이 온라인일 때 따로 처리.
     # ★ BlueZ: 스캔 중 연결 불가 → 연결 구간에서만 passive 스캐너 정지(lock+box).
     while True:
-        pending = dict(cfg)
+        # "history": false 센서(커스텀 펌웨어 등 Xiaomi 이력 GATT 없음)는 연결 시도 자체를 건너뜀
+        pending = {k: v for k, v in cfg.items() if v.get("history", True)}
         for rnd in range(HISTORY_RETRY_ROUNDS):
             if not pending:
                 break
