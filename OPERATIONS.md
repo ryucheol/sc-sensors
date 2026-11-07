@@ -16,7 +16,8 @@ Xiaomi LYWSD03MMC 온습도 센서를 라즈베리파이(`passive_gateway.py`)�
 
 ## 2. 현재 상태 (2026-11-07)
 - Pi는 **농막**에 있고 **`farmhut-gateway` 상주(active+enabled)**, `shelf-gateway`는 disabled. 난방 제어(`heater-control`)·음성 알림(`alert-sound`) 함께 상주.
-- 센서 3개 모두 HW **B1.6**(2025.03~ 신형). **다락은 pvvx v5.9**(Mi 암호화, 광고 5 s/측정 20 s, 온도 ~1분 갱신, `sensor_keys.json`에 `"history": false`) — 절차·검증은 [docs/PVVX_B16_FLASH.ko.md](docs/PVVX_B16_FLASH.ko.md). 1층·바닥은 순정.
+- **센서 3개 모두 pvvx v5.9**(Mi 암호화, 광고 5 s/측정 20 s, 온도 ~1분 갱신, `sensor_keys.json` 전부 `"history": false`). HW: 다락 B1.6, 1층·바닥 B1.5. 절차·검증·예측제어 검토는 [docs/PVVX_B16_FLASH.ko.md](docs/PVVX_B16_FLASH.ko.md).
+- 배터리(2026-11-08 pvvx 실측): 다락 96%, 1층 71%, 바닥 67%(1월 구입 둘은 2.7 V대). `농막_배터리`에 매시간 실제 %가 쌓이므로 60% 아래 기울기를 보고 교체.
 - 선반 센서는 2026-10-27 이후 침묵(배터리 추정).
 - 두 시트의 Apps Script **Code.gs = v5**(`/exec` 열면 `{"version":"2026-10-27 v5", "site":...}`로 확인).
 - 폰 핫스팟 자동접속(아래 3-D) 검증 완료.
