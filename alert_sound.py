@@ -5,7 +5,7 @@
  온라인(인터넷O): 기상청 예보 + 지금 바깥 → 명령.  오프라인: 바깥·1층·다락 센서 차례 → 명령만.
  - 26°C↑  : "문 여세요"(첫회 전체). 변화 없으면 5분마다 반복, 온도가 내려가기 시작하면(문 열어 반응) 반복 중지
  - 25.5°C↑로 데워졌다가 25°C↓ : "문 닫으세요"(+하락량, 26 도달 불필요). 변화 없으면 5분 반복, 온도가 올라가기 시작하면 중지
- - 급락(15분 2°C↑, 문 상태 아닐 때): "N도 떨어졌습니다, 문 닫으세요" — 5분 반복, 온도 상승/회복하면 중지
+ - 급락(15분 2°C↑, 문 상태 아닐 때): "N도 떨어졌습니다, 문 닫으세요" — 5분 반복(총 하락량), 최저점 대비 상승하면 중지
  - 난방진단: 플러그 통신끊김 / 난방정체(설정 아래 30분 안 오름=다이얼 과소)
  - 급상승은 생략(26°C 알림이 대체). 급락만 음성. 모두 comfort·센서 신선할 때만.
  CLI: alert_sound.py say "문장"  /  demo
@@ -29,7 +29,7 @@ CARD = "plughw:Headphones,0"
 ON_T = 26.0; OFF_T = 25.0; CLOSE_ARM = 25.5; REPEAT = 300; LEAD = 1.0; VOL = "80%"
 CHANGE_EPS = 0.05  # 직전 알림 대비 원하는 방향(여세요=하강)으로 0.1°C↑ 변하면 반복 중지(문 열어 반응 시작)
 # 급락 감지(실측 보정: 자연 최대 ~3°C/h → 15분 2°C=8°C/h로 안전 분리)
-DROP_T = 2.0; DROP_WIN = 900; DROP_CLEAR = 1.0
+DROP_T = 2.0; DROP_WIN = 900
 # 난방 정체(다이얼 과소): t_ctl가 설정-여유 아래인데 30분간 거의 안 오름
 STALL_WIN = 1800; STALL_RISE = 0.2; STALL_MARGIN = 0.3; STALL_REPEAT = 900
 # 신선도 가드
@@ -261,7 +261,7 @@ def loop():
     peak = None                       # close_armed 동안 최고 1층 온도(하락량 계산)
     fhist = []                        # [(ts, t_floor)] 급락용(~20분)
     chist = []                        # [(ts, t_ctl)] 정체용(~35분)
-    dropping = False; drop_ref = None; last_d = 0.0   # 급락 반복 상태(상승 감지)
+    dropping = False; drop_base = None; drop_low = None; last_d = 0.0   # 급락: 시작점·최저점·반복시각
     stall_last = 0.0; fault_last = 0.0
     while True:
         try:
@@ -302,19 +302,21 @@ def loop():
                         elif now - last >= REPEAT:
                             say("실내 %s도. 문을 닫으세요." % dec1(t)); last = now; close_temp = t
 
-                # ---- 급락 감지: 5분 반복, 온도 상승 시작/하락 회복하면 중지 (환기상태 아닐 때만) ----
+                # ---- 급락 감지: 5분 반복, 최저점 대비 상승 시작하면 중지 (환기상태 아닐 때만) ----
+                #   반복 발화는 '급락 시작점 대비 총 하락량'(계속 커짐). 낮은 값에 머물면 올라갈 때까지 계속.
                 if not over and not close_armed:
                     old = [x for x in fhist if now - x[0] >= DROP_WIN]
                     drop = (old[-1][1] - t) if old else 0.0   # 15분 전 대비 하락
                     if not dropping:
                         if drop >= DROP_T:
                             say("실내 온도가 %s도 떨어졌습니다. 문을 닫으세요." % dec1(drop))
-                            dropping = True; last_d = now; drop_ref = t
+                            dropping = True; last_d = now; drop_base = old[-1][1]; drop_low = t
                     else:
-                        if t >= drop_ref + CHANGE_EPS or drop < DROP_CLEAR:   # 상승 시작(문 닫음) 또는 회복 → 중지
+                        drop_low = min(drop_low, t)
+                        if t >= drop_low + CHANGE_EPS:        # 최저점 대비 상승 시작(문 닫음) → 중지
                             dropping = False
-                        elif now - last_d >= REPEAT:
-                            say("실내 온도가 %s도 떨어졌습니다. 문을 닫으세요." % dec1(drop)); last_d = now; drop_ref = t
+                        elif now - last_d >= REPEAT:          # 안 올라가면 5분마다 상기(총 하락량)
+                            say("실내 온도가 %s도 떨어졌습니다. 문을 닫으세요." % dec1(drop_base - t)); last_d = now
                 else:
                     dropping = False
 
