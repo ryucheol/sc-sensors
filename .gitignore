@@ -39,3 +39,7 @@ latest.json
 heater_status.json
 heater_energy.csv
 forecast.json
+forecast_cron.log
+piper/*.onnx
+alert_open.wav
+alert_close.wav

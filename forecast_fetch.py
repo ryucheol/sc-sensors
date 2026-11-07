@@ -82,6 +82,18 @@ def main():
         print("인증키 없음: 환경변수 KMA_AUTH_KEY 또는 ~/smart-cabin/kma_keys.json 필요", file=sys.stderr)
         sys.exit(2)
 
+    # 인터넷 미연결이면 가져오기 시도 자체를 안 함(즉시 종료, 대기·재시도 없음)
+    import socket
+    def _online():
+        for h in ("apihub.kma.go.kr", "1.1.1.1"):
+            try:
+                c = socket.create_connection((h, 443), 2.5); c.close(); return True
+            except Exception:
+                pass
+        return False
+    if not _online():
+        print("오프라인 — 예보 갱신 건너뜀", file=sys.stderr); sys.exit(0)
+
     now = datetime.datetime.now()
     items, used, last = None, None, None
     for bd, bt in base_candidates(now):
