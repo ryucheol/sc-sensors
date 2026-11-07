@@ -195,6 +195,7 @@ def main():
     # ── 센서 이중화 상태: delta(=다락−1층) 학습값은 재시작해도 이어가도록 status에서 복원 ──
     delta = _ss.get("delta_attic_floor", red_cfg(load(CFG, {}) or {})["delta_init"])
     red_last = None; last_src = None; last_sensor_warn = {}
+    prev_mode = None   # 모드 전환을 정확한 시각으로 로깅(현황 30분 간격 보완)
     while True:
         poll = 60
         try:
@@ -265,6 +266,15 @@ def main():
 
             # ── 히스테리시스 제어(제어센서 ctl_sensor/t_ctl 기준) ──
             on_th, off_th = st["on"], st["off"]
+            # ── 모드 전환 정확 시각 로깅(현황 30분 간격 보완) ──
+            if st["mode"] != prev_mode:
+                if prev_mode is None:
+                    log("모드 시작: %s [%s/%s] %s %s°C (source=%s)"
+                        % (st["mode"], on_th, off_th, ctl_sensor, t_ctl, st.get("source")))
+                else:
+                    log("모드 전환: %s → %s [%s/%s] %s %s°C (source=%s)"
+                        % (prev_mode, st["mode"], on_th, off_th, ctl_sensor, t_ctl, st.get("source")))
+                prev_mode = st["mode"]
             want = decide_relay(st["mode"], on_th, off_th, t_ctl, ctl_stale, cur_relay)
             if ctl_stale and now() - last_stale_log > 1800:
                 log("⚠ 온도 데이터 오래됨(%s) → %s" % (ctl_sensor, "안전가동(ON)" if st["mode"]=="frost" else "현상유지"))

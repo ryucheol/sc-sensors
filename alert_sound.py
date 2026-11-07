@@ -41,6 +41,17 @@ try:
     os.makedirs(CACHE, exist_ok=True)
 except Exception:
     pass
+ALOG = os.path.join(BASE, "alert.log")   # 알림 진단 로그(발화·억제·상태)
+
+
+def logline(msg):
+    try:
+        with open(ALOG, "a", encoding="utf-8") as f:
+            f.write("[%s] %s\n" % (time.strftime("%Y-%m-%d %H:%M:%S"), msg))
+    except Exception:
+        pass
+
+
 DEVNULL = subprocess.DEVNULL
 GTTS_GEN = "import sys;from gtts import gTTS;gTTS(sys.argv[1], lang='ko').save(sys.argv[2])"
 PDIR = os.path.join(BASE, "piper")
@@ -262,7 +273,8 @@ def loop():
     fhist = []                        # [(ts, t_floor)] 급락용(~20분)
     chist = []                        # [(ts, t_ctl)] 정체용(~35분)
     dropping = False; drop_base = None; drop_low = None; last_d = 0.0   # 급락: 시작점·최저점·반복시각
-    stall_last = 0.0; fault_last = 0.0
+    stall_last = 0.0; fault_last = 0.0; hb_last = 0.0; gate_warned = False
+    logline("서비스 시작")
     while True:
         try:
             st = json.load(open(STATE)); d = json.load(open(LATEST)); status = read_status()
@@ -275,16 +287,29 @@ def loop():
             if stat_fresh:
                 chist.append((now, status.get("t_ctl"))); chist[:] = [x for x in chist if now - x[0] <= 2100]
 
+            # 10분마다 상태 한 줄(살아있음·무엇을 보는지) — "왜 안 울렸나" 진단용
+            if now - hb_last >= 600:
+                logline("상태 실내%.1f mode=%s fresh=%s online=%s" % (t, st.get("mode"), fresh, online()))
+                hb_last = now
+            # 26도↑인데 알림이 억제되는 경우(comfort/fresh 게이트) 진입 시 1회 기록
+            if t >= ON_T and not (comfort and fresh):
+                if not gate_warned:
+                    logline("26도↑(%.1f) 알림억제: comfort=%s fresh=%s" % (t, comfort, fresh)); gate_warned = True
+            elif t < ON_T:
+                gate_warned = False
+
             if comfort and fresh:
                 # ---- 26°C 환기(열기): 변화없으면 5분 반복, 온도 하강 시작하면 중지 ----
                 if t >= ON_T:
                     if not over:
                         say(full_text(d, t, "문을 여세요.")); over = True; repeating = True; last = now; alert_temp = t
+                        logline("열기 발화(첫) 실내%.1f" % t)
                     elif repeating:
                         if t <= alert_temp - CHANGE_EPS:        # 하강 시작(문 열어 반응) → 반복 중지
-                            repeating = False
+                            repeating = False; logline("열기 반복중지(하강시작) 실내%.1f" % t)
                         elif now - last >= REPEAT:              # 변화 없으면 5분마다 상기
                             say("실내 %s도. 문을 여세요." % dec1(t)); last = now; alert_temp = t
+                            logline("열기 반복 실내%.1f" % t)
                     close_armed = True; closing = False; peak = t if peak is None else max(peak, t)
                 else:
                     over = False; repeating = False
@@ -296,11 +321,14 @@ def loop():
                         extra = ("%s도 내렸습니다. " % dec1(drop)) if drop >= 1.0 else ""
                         say(full_text(d, t, extra + "문을 닫으세요."))
                         closing = True; last = now; close_temp = t
+                        logline("닫기 발화(첫) 실내%.1f 하락%.1f" % (t, drop))
                     elif closing:
                         if t >= close_temp + CHANGE_EPS or t >= CLOSE_ARM:   # 상승 시작(문 닫음) 또는 재가온 → 중지
                             closing = False; close_armed = False; peak = None
+                            logline("닫기 반복중지(상승시작) 실내%.1f" % t)
                         elif now - last >= REPEAT:
                             say("실내 %s도. 문을 닫으세요." % dec1(t)); last = now; close_temp = t
+                            logline("닫기 반복 실내%.1f" % t)
 
                 # ---- 급락 감지: 5분 반복, 최저점 대비 상승 시작하면 중지 (환기상태 아닐 때만) ----
                 #   반복 발화는 '급락 시작점 대비 총 하락량'(계속 커짐). 낮은 값에 머물면 올라갈 때까지 계속.
@@ -311,12 +339,14 @@ def loop():
                         if drop >= DROP_T:
                             say("실내 온도가 %s도 떨어졌습니다. 문을 닫으세요." % dec1(drop))
                             dropping = True; last_d = now; drop_base = old[-1][1]; drop_low = t
+                            logline("급락 발화(첫) 실내%.1f 하락%.1f" % (t, drop))
                     else:
                         drop_low = min(drop_low, t)
                         if t >= drop_low + CHANGE_EPS:        # 최저점 대비 상승 시작(문 닫음) → 중지
-                            dropping = False
+                            dropping = False; logline("급락 중지(상승시작) 실내%.1f" % t)
                         elif now - last_d >= REPEAT:          # 안 올라가면 5분마다 상기(총 하락량)
                             say("실내 온도가 %s도 떨어졌습니다. 문을 닫으세요." % dec1(drop_base - t)); last_d = now
+                            logline("급락 반복 실내%.1f 총하락%.1f" % (t, drop_base - t))
                 else:
                     dropping = False
 
@@ -328,11 +358,13 @@ def loop():
                     if (status.get("heater_ok") is False) or (status.get("status_fail_streak", 0) >= 3):
                         if now - fault_last >= FAULT_REPEAT:
                             say("난방 플러그 연결이 끊겼습니다. 확인하세요."); fault_last = now
+                            logline("플러그 통신끊김 발화 heater_ok=%s streak=%s" % (status.get("heater_ok"), status.get("status_fail_streak")))
                     # (B) 난방 정체(다이얼 과소): 설정 아래인데 30분간 거의 안 오름
                     elif on_sp is not None and tctl is not None and tctl < on_sp - STALL_MARGIN:
                         oldc = [x for x in chist if now - x[0] >= STALL_WIN and x[1] is not None]
                         if oldc and (tctl - oldc[-1][1]) <= STALL_RISE and now - stall_last >= STALL_REPEAT:
                             say("난방 중인데 온도가 오르지 않습니다. 히터 다이얼을 확인하세요."); stall_last = now
+                            logline("난방정체 발화 t_ctl=%.1f on=%s" % (tctl, on_sp))
             else:
                 over = False; close_armed = False; closing = False; peak = None; dropping = False; repeating = False
         except Exception:

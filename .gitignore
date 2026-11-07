@@ -44,3 +44,4 @@ piper/*.onnx
 alert_open.wav
 alert_close.wav
 tts_cache/
+alert.log
