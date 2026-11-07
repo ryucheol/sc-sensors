@@ -5,7 +5,7 @@
  온라인(인터넷O): 기상청 예보 + 지금 바깥 → 명령.  오프라인: 바깥·1층·다락 센서 차례 → 명령만.
  - 26°C↑  : "문 여세요"(첫회 전체). 변화 없으면 5분마다 반복, 온도가 내려가기 시작하면(문 열어 반응) 반복 중지
  - 25.5°C↑로 데워졌다가 25°C↓ : "문 닫으세요"(+하락량, 26 도달 불필요). 변화 없으면 5분 반복, 온도가 올라가기 시작하면 중지
- - 급락(15분 2°C↑, 문 상태 아닐 때): "N도 떨어졌습니다, 문 닫으세요"
+ - 급락(15분 2°C↑, 문 상태 아닐 때): "N도 떨어졌습니다, 문 닫으세요" — 5분 반복, 온도 상승/회복하면 중지
  - 난방진단: 플러그 통신끊김 / 난방정체(설정 아래 30분 안 오름=다이얼 과소)
  - 급상승은 생략(26°C 알림이 대체). 급락만 음성. 모두 comfort·센서 신선할 때만.
  CLI: alert_sound.py say "문장"  /  demo
@@ -261,7 +261,8 @@ def loop():
     peak = None                       # close_armed 동안 최고 1층 온도(하락량 계산)
     fhist = []                        # [(ts, t_floor)] 급락용(~20분)
     chist = []                        # [(ts, t_ctl)] 정체용(~35분)
-    drop_said = False; stall_last = 0.0; fault_last = 0.0
+    dropping = False; drop_ref = None; last_d = 0.0   # 급락 반복 상태(상승 감지)
+    stall_last = 0.0; fault_last = 0.0
     while True:
         try:
             st = json.load(open(STATE)); d = json.load(open(LATEST)); status = read_status()
@@ -301,15 +302,21 @@ def loop():
                         elif now - last >= REPEAT:
                             say("실내 %s도. 문을 닫으세요." % dec1(t)); last = now; close_temp = t
 
-                # ---- 급락 감지(26/닫기 상태가 아닐 때만; 문 열어 식는 정상과 중복 방지) ----
+                # ---- 급락 감지: 5분 반복, 온도 상승 시작/하락 회복하면 중지 (환기상태 아닐 때만) ----
                 if not over and not close_armed:
                     old = [x for x in fhist if now - x[0] >= DROP_WIN]
-                    if old:
-                        drop = old[-1][1] - t          # 15분 전 대비 하락
-                        if drop >= DROP_T and not drop_said:
-                            say("실내 온도가 %s도 떨어졌습니다. 문을 닫으세요." % dec1(drop)); drop_said = True
-                        elif drop < DROP_CLEAR:
-                            drop_said = False
+                    drop = (old[-1][1] - t) if old else 0.0   # 15분 전 대비 하락
+                    if not dropping:
+                        if drop >= DROP_T:
+                            say("실내 온도가 %s도 떨어졌습니다. 문을 닫으세요." % dec1(drop))
+                            dropping = True; last_d = now; drop_ref = t
+                    else:
+                        if t >= drop_ref + CHANGE_EPS or drop < DROP_CLEAR:   # 상승 시작(문 닫음) 또는 회복 → 중지
+                            dropping = False
+                        elif now - last_d >= REPEAT:
+                            say("실내 온도가 %s도 떨어졌습니다. 문을 닫으세요." % dec1(drop)); last_d = now; drop_ref = t
+                else:
+                    dropping = False
 
                 # ---- 난방 문제 진단 ----
                 if stat_fresh:
@@ -325,7 +332,7 @@ def loop():
                         if oldc and (tctl - oldc[-1][1]) <= STALL_RISE and now - stall_last >= STALL_REPEAT:
                             say("난방 중인데 온도가 오르지 않습니다. 히터 다이얼을 확인하세요."); stall_last = now
             else:
-                over = False; close_armed = False; closing = False; peak = None; drop_said = False; repeating = False
+                over = False; close_armed = False; closing = False; peak = None; dropping = False; repeating = False
         except Exception:
             pass
         time.sleep(20)
