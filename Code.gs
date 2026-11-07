@@ -1,13 +1,16 @@
 /*
  * Code.gs — 농막/선반 센서 데이터 수집 Apps Script 웹앱 (SITE 접두사로 여러 시트 공용).
  *
- * ★★ 버전: 2026-10-27 v6  ← 붙여넣기 전에 이 줄 확인! ★★
+ * ★★ 버전: 2026-11-08 v7  ← 붙여넣기 전에 이 줄 확인! ★★
  *   이 버전 요약: SITE 접두사 · mode current(+SSID/IP+배터리 예상일) · avg · hist(upsert) ·
  *                 batt(배터리 이력 → _배터리 탭) · 멱등 업로드.
  *   배포된 버전 확인법: 브라우저로 /exec 주소를 열면 {"version":"2026-10-27 v6", ...} 가 보임.
  *   (구버전이 배포돼 있으면 version 이 다르거나 없음 → 다시 붙여넣고 새 버전 배포)
  *
  * 변경 이력:
+ *   v7 (2026-11-08) 배터리 예상일 재작성: pvvx 전압눈금(2.2V=0%,3.1V=100%) 전제, 종료 2.6V(44%),
+ *                   전지교체·펌웨어전환 불연속(>8%p)에서 추세창 재시작, CR2032 방전곡선 추정과 추세 추정 중
+ *                   보수적인 값 표시, 순정(3.1V/100% 고정)은 '순정 펌웨어' 표시. 2.65V 이하 즉시 빨강.
  *   v6 (2026-10-27) 배터리 이력(_배터리 탭) + 현재 탭 H열에 예상 소진일(임박 시 빨강)
  *   v5 (2026-10-27) 현재 탭에 접속 SSID·IP 표시(F·G열, 헤더 자동보강)
  *   v4 (2026-10-27) SITE 접두사(농막/선반 공용) · mode:hist upsert(변화행만)
@@ -22,7 +25,7 @@
  * 특징: 중복 제거를 서버에서 처리(멱등). 중복 기준 (센서, 정시 버킷). 시각은 실제 날짜값으로 저장.
  */
 
-var CODE_VERSION = '2026-10-27 v6';   // ← /exec(doGet) 응답·붙여넣기 확인용. 고칠 때마다 갱신.
+var CODE_VERSION = '2026-11-08 v7';   // ← /exec(doGet) 응답·붙여넣기 확인용. 고칠 때마다 갱신.
 var SITE = '농막';                 // ← 장소 접두사. 두 번째 시트(예: 선반)는 '선반' 으로만 바꾸면 됨
 var SECRET = 'CHANGE-ME';          // ← 게이트웨이의 FARMHUT_SECRET 과 동일하게
 var SHEET_NAME = SITE + '_시간별';
@@ -231,20 +234,42 @@ function _postBatt(body) {
   return _json({ ok: true, mode: 'batt', added: rows.length });
 }
 
-// 배터리 % 추세(최소제곱)로 예상 소진일을 계산해 현재 탭 H열에 기록. 임박(≤30일)하면 빨간 굵은 글씨.
+// 배터리 예상 소진일 → 현재 탭 H열. (v7)
+//  - pvvx 펌웨어의 %는 용량이 아니라 전압 눈금(2.2V=0%, 3.1V=100%, 선형). 게이트웨이 volt 열도 같은 환산.
+//  - 종료 기준 2.6V(=44%): LCD·라디오가 불안정해지는 전압. CR2032는 2.9V까지 평평하다가 2.8V 아래서 꺾인다.
+//  - 추정 2가지 중 보수적인(가까운) 날짜를 표시:
+//      (a) 전압곡선: 현재 전압 → CR2032 소모 비율(아래 표) → 2.6V까지 남은 mAh ÷ 가정 소비(≈12µA, 순정 실측×0.4)
+//      (b) 추세: 불연속(전지교체·펌웨어 전환, 인접 점 >8%p) 이후 구간의 %/일 최소제곱 기울기로 44%까지
+//  - 순정 펌웨어(3.1V/100% 고정)는 정보가 없으므로 '순정 펌웨어(표시 100% 고정)'.
 function _updateBatteryForecast(battSh) {
-  var DEATH_PCT = 5, WARN_DAYS = 30, MIN_PTS = 5, MIN_SPAN_D = 3, WINDOW_D = 21, DAY = 86400000;
+  var END_PCT = 44, WARN_DAYS = 30, MIN_PTS = 5, MIN_SPAN_D = 3, WINDOW_D = 60, DAY = 86400000;
+  // DRAW_UA: 순정 실측(1층 2026-01 구입 → 11-08 2.85V ≈ 66% 소모, 10개월 → 평균 ≈20µA, 자기방전·추위 포함)에
+  //          pvvx 라디오 비율 0.4를 적용한 ≈12µA. 야외 센서는 추위로 더 짧을 수 있음(추세가 쌓이면 추세가 이김).
+  var CAP_MAH = 220, DRAW_UA = 12, JUMP = 8, LOW_V = 2.65, END_V = 2.6;
+  // 개방전압(V) → 소모 비율(0~1). 저전류(~10µA) CR2032 전형값.
+  var CURVE = [[3.05, 0.00], [3.00, 0.10], [2.95, 0.30], [2.90, 0.50], [2.85, 0.65], [2.80, 0.78],
+               [2.75, 0.86], [2.70, 0.91], [2.65, 0.95], [2.60, 0.98], [2.50, 1.00]];
+  function usedFrac(v) {
+    if (v >= CURVE[0][0]) return 0;
+    for (var i = 1; i < CURVE.length; i++) {
+      if (v >= CURVE[i][0]) {
+        var v1 = CURVE[i - 1][0], f1 = CURVE[i - 1][1], v2 = CURVE[i][0], f2 = CURVE[i][1];
+        return f1 + (f2 - f1) * (v1 - v) / (v1 - v2);
+      }
+    }
+    return 1;
+  }
   var last = battSh.getLastRow();
   if (last < 2) return;
-  var n = Math.min(last - 1, 3000);                    // 최근 최대 3000행만
+  var n = Math.min(last - 1, 4000);
   var vals = battSh.getRange(last - n + 1, 1, n, 4).getValues();  // 시각,센서,V,%
   var now = Date.now(), cutoff = now - WINDOW_D * DAY, bySensor = {};
   for (var i = 0; i < vals.length; i++) {
-    var t = vals[i][0], s = vals[i][1], pct = vals[i][3];
+    var t = vals[i][0], s = vals[i][1], volt = vals[i][2], pct = vals[i][3];
     if (!t || !s || pct === '' || pct == null) continue;
     var ms = (t instanceof Date) ? t.getTime() : new Date(t).getTime();
     if (isNaN(ms) || ms < cutoff) continue;
-    (bySensor[s] = bySensor[s] || []).push([ms, Number(pct)]);
+    (bySensor[s] = bySensor[s] || []).push([ms, Number(pct), Number(volt)]);
   }
   var cur = _currentSheet(), cl = cur.getLastRow();
   var names = cl >= 2 ? cur.getRange(2, 1, cl - 1, 1).getValues().map(function (r) { return r[0]; }) : [];
@@ -252,24 +277,46 @@ function _updateBatteryForecast(battSh) {
   for (var s2 in bySensor) {
     var idx = names.indexOf(s2);
     if (idx < 0) continue;
-    var pts = bySensor[s2], cell = cur.getRange(idx + 2, 8), msg = '', red = false;
-    if (pts.length >= MIN_PTS) {
-      var t0 = pts[0][0], spanD = (pts[pts.length - 1][0] - t0) / DAY;
-      if (spanD >= MIN_SPAN_D) {
-        var nP = pts.length, sx = 0, sy = 0, sxx = 0, sxy = 0;
-        for (var k = 0; k < nP; k++) { var x = (pts[k][0] - t0) / DAY, y = pts[k][1]; sx += x; sy += y; sxx += x * x; sxy += x * y; }
+    var all = bySensor[s2].sort(function (a, b) { return a[0] - b[0]; });
+    var cell = cur.getRange(idx + 2, 8), msg = '', red = false;
+    var lastPt = all[all.length - 1], curPct = lastPt[1], curV = lastPt[2];
+    if (!(curV > 0)) curV = 2.2 + 0.9 * curPct / 100;
+    if (curPct >= 100 && curV >= 3.1) {                 // 순정 펌웨어: 죽기 직전까지 100%
+      msg = '순정 펌웨어(표시 100% 고정)';
+    } else {
+      // 불연속(전지교체·펌웨어 전환) 이후 구간만 추세에 사용
+      var pts = [];
+      for (var k = 0; k < all.length; k++) {
+        if (pts.length && Math.abs(all[k][1] - pts[pts.length - 1][1]) > JUMP) pts = [];
+        if (all[k][1] >= 100 && all[k][2] >= 3.1) { pts = []; continue; }   // 순정 구간 제외
+        pts.push(all[k]);
+      }
+      // (a) 전압곡선 추정
+      var remainMah = CAP_MAH * Math.max(0, usedFrac(END_V) - usedFrac(curV));   // 2.6V까지 쓸 수 있는 양
+      var daysCurve = remainMah / (DRAW_UA / 1000) / 24;
+      var daysBest = daysCurve, how = '전압';
+      // (b) 추세 추정
+      var spanD = pts.length ? (pts[pts.length - 1][0] - pts[0][0]) / DAY : 0;
+      if (pts.length >= MIN_PTS && spanD >= MIN_SPAN_D) {
+        var t0 = pts[0][0], nP = pts.length, sx = 0, sy = 0, sxx = 0, sxy = 0;
+        for (var j = 0; j < nP; j++) { var x = (pts[j][0] - t0) / DAY, y = pts[j][1]; sx += x; sy += y; sxx += x * x; sxy += x * y; }
         var denom = nP * sxx - sx * sx;
         if (denom !== 0) {
-          var slope = (nP * sxy - sx * sy) / denom;          // %/일 (음수면 감소)
-          var curPct = pts[nP - 1][1];
-          if (slope < -0.05) {                               // 의미있게 감소 중일 때만 예측
-            var daysLeft = (curPct - DEATH_PCT) / (-slope);
-            if (daysLeft < 0) daysLeft = 0;
-            var ds = Utilities.formatDate(new Date(now + daysLeft * DAY), Session.getScriptTimeZone(), 'yyyy-MM-dd');
-            if (daysLeft <= WARN_DAYS) { msg = '⚠ ' + ds + ' 교체 (' + Math.round(daysLeft) + '일)'; red = true; }
-            else { msg = '예상 ' + ds; }
+          var slope = (nP * sxy - sx * sy) / denom;          // %p/일
+          if (slope < -0.03) {
+            var daysTrend = (curPct - END_PCT) / (-slope);
+            if (daysTrend < daysBest) { daysBest = daysTrend; how = '추세'; }
           }
         }
+      }
+      if (daysBest < 0) daysBest = 0;
+      var ds = Utilities.formatDate(new Date(now + daysBest * DAY), Session.getScriptTimeZone(), 'yyyy-MM-dd');
+      if (curV <= LOW_V) { msg = '⚠ ' + curV.toFixed(2) + 'V 교체'; red = true; }
+      else if (daysBest <= WARN_DAYS) { msg = '⚠ ' + ds + ' 교체 (' + Math.round(daysBest) + '일)'; red = true; }
+      else {
+        msg = '예상 ' + ds + ' (' + how;
+        if (how === '전압') msg += ', 추세 ' + Math.round(spanD) + '일째';
+        msg += ')';
       }
     }
     cell.setValue(msg);
