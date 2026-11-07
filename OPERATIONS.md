@@ -1,6 +1,6 @@
 # 운영 가이드 (OPERATIONS)
 
-> 2026-10-27 기준. **설치 절차는 [PI_SETUP.md](PI_SETUP.md)**, 이 문서는 **구성 요약 + 운영 + 사이트 전환**.
+> 2026-11-07 기준. **설치 절차는 [PI_SETUP.md](PI_SETUP.md)**, 이 문서는 **구성 요약 + 운영 + 사이트 전환**.
 > 비밀값(SECRET·bindkey·핫스팟 비번·2차 /exec URL)은 이 문서에 쓰지 않는다(공개 저장소). `gateway.env`·`shelf.env`·`sensor_keys.json`·`shelf_keys.json`(모두 gitignore)에만 둔다.
 
 ## 1. 개요
@@ -11,12 +11,13 @@ Xiaomi LYWSD03MMC 온습도 센서를 라즈베리파이(`passive_gateway.py`)�
 | **농막** | 바닥외부·내부1층·다락 (3개) | "동지집 기온·습도 기록" | `farmhut-gateway` | `gateway.env` | `gateway_queue.db` |
 | **선반** | 선반 (1개, 집) | "선반 온습도 기록" | `shelf-gateway` | `shelf.env` | `shelf_queue.db` |
 
-- 호스트: `ryuch@192.168.0.140` (hostname `smartcabin`, Raspberry Pi 4 B, Debian 13), 경로 `/home/ryuch/smart-cabin`.
+- 호스트: hostname `smartcabin`(Raspberry Pi 4 B, Debian 13), 경로 `/home/ryuch/smart-cabin`. 집 WiFi에선 `192.168.0.140`, 농막 폰 핫스팟(Ryuspot)에선 `192.168.43.220`.
 - **한 Pi는 한 사이트만** 상주한다(아래 2·4 참고).
 
-## 2. 현재 상태 (2026-10-27)
-- Pi는 **집**에 있고 **`shelf-gateway` 상주(active+enabled)** → 선반 센서를 선반 시트에 기록 중.
-- `farmhut-gateway`는 **disabled**(농막용, 이전 시 전환).
+## 2. 현재 상태 (2026-11-07)
+- Pi는 **농막**에 있고 **`farmhut-gateway` 상주(active+enabled)**, `shelf-gateway`는 disabled. 난방 제어(`heater-control`)·음성 알림(`alert-sound`) 함께 상주.
+- 센서 3개 모두 HW **B1.6**(2025.03~ 신형). **다락은 pvvx v5.9**(Mi 암호화, 광고 5 s/측정 20 s, 온도 ~1분 갱신, `sensor_keys.json`에 `"history": false`) — 절차·검증은 [docs/PVVX_B16_FLASH.ko.md](docs/PVVX_B16_FLASH.ko.md). 1층·바닥은 순정.
+- 선반 센서는 2026-10-27 이후 침묵(배터리 추정).
 - 두 시트의 Apps Script **Code.gs = v5**(`/exec` 열면 `{"version":"2026-10-27 v5", "site":...}`로 확인).
 - 폰 핫스팟 자동접속(아래 3-D) 검증 완료.
 

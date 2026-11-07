@@ -33,10 +33,11 @@ Xiaomi **LYWSD03MMC** 온습도계 3개의 값을 BLE로 받아 구글시트 **�
 | `current_sync.py` | 현재값 즉시 읽기(연결) → `농막_현재` | 센서 근처 **PC** |
 | `passive_current.py` | 현재값 passive 디코드(**연결 없이**) 테스트 | PC |
 | `passive_gateway.py` | **상주 게이트웨이**: passive 현재·평균 + 하루 1회 이력 | **라즈베리파이**(또는 PC) |
+| `verify_attic.py` / `verify_shelf.py` | 센서 수신·복호화·값갱신 간격 검증 도구(pvvx 플래시 전후) | Pi |
 | `PI_SETUP.md` | Pi 설치·systemd 가이드 | — |
 | `run_sync.bat` / `run_current_sync.bat` / `run_gateway.bat` | Windows 실행 런처 | PC |
 | `run_monitor.bat` | 모니터(읽기전용) 런처: 수신 로그만, 업로드·연결 없음 | PC |
-| `sensor_keys.json` | 비콘 복호화 bindkey (**비밀 · gitignore**) | 로컬 |
+| `sensor_keys.json` | 비콘 복호화 bindkey (**비밀 · gitignore**). 항목에 `"history": false`를 두면 이력 sync 제외(커스텀 펌웨어 센서) | 로컬 |
 | `gateway.env` / `gateway.env.example` | Pi용 `FARMHUT_SECRET` 환경파일 (**비밀 · gitignore**) | Pi |
 | `farmhut-gateway.service` | systemd 유닛(부팅 자동시작) | Pi |
 
@@ -46,7 +47,7 @@ Xiaomi **LYWSD03MMC** 온습도계 3개의 값을 BLE로 받아 구글시트 **�
 |---|---|---|
 | 내부1층 | `A4:C1:38:6A:77:BE` | BE |
 | 바닥외부 | `A4:C1:38:B4:5E:13` | 13 |
-| 다락(2026-11-04부터 고정. 이전엔 휴대) | `A4:C1:38:32:8C:21` | 21 |
+| 다락(2026-11-04부터 고정. 이전엔 휴대) — **pvvx v5.9**(2026-11-07~, Mi 암호화, 온도 ~1분 갱신) | `A4:C1:38:32:8C:21` | 21 |
 
 > bindkey(복호화 키)는 비밀이라 `sensor_keys.json`(gitignore)에만 둔다. 형식:
 > `{"내부1층":{"mac":"A4:C1:38:6A:77:BE","key":"<32자리 hex>"}, …}`
@@ -144,7 +145,7 @@ MAC 으로 직접 찾으므로 선택창/LCD 대조 없이 완전 자동. Mi Hom
 - 샤오미 순정(stock) 펌웨어 기준. 이력·비콘 프로토콜은 공식 문서 없는 리버스엔지니어링.
 - `ebe0ccba` 에 시작 인덱스를 write 하면 `ebe0ccbc` 가 그 지점부터 스트림(비파괴적) — 실기기로 검증됨.
 - bindkey 는 Xiaomi Home 계정에서 [Xiaomi-cloud-tokens-extractor](https://github.com/PiotrMachowski/Xiaomi-cloud-tokens-extractor) 로 추출.
-- 장기 대안: pvvx/ATC 커스텀 펌웨어로 평문 비콘 방송(복호화 불필요) — 현재는 순정 유지.
+- 센서 펌웨어: 내부1층·바닥외부는 **순정**, 다락은 **pvvx v5.9**(Mi 암호화 포맷이라 파서 무수정). B1.6 플래시 절차·근거·검증: **[docs/PVVX_B16_FLASH.ko.md](docs/PVVX_B16_FLASH.ko.md)**.
 
 > 2사이트 운영(농막/선반)·사이트 전환·오프라인 store-and-forward·배터리 예상 소진일 등
 > 최신 구성·운영은 **[OPERATIONS.md](OPERATIONS.md)** 참고.
@@ -156,7 +157,7 @@ MAC 으로 직접 찾으므로 선택창/LCD 대조 없이 완전 자동. Mi Hom
 대부분의 LYWSD03MMC DIY는 **Home Assistant/ESPHome + MQTT + 상시 네트워크 + 커스텀 펌웨어(ATC/pvvx)** 조합이다. 이 프로젝트는 다른 선택을 했다:
 
 - **클라우드·HA·MQTT·브로커 없음** — 초경량 단일 파이썬 게이트웨이가 **구글시트로 직접** 업로드. 서버·DB·대시보드 인프라 불필요(시트가 저장소+뷰+공유+차트). 샤오미 클라우드·앱도 데이터 경로에 없음.
-- **스톡(순정) 펌웨어 그대로** — 암호화 MiBeacon + bindkey로 복호화. 플래시 위험·LCD 상실 없음. (대가: 갱신 느림·배터리 ~1년 → 문서화. 수명 우선이면 pvvx 교체 가능.)
+- **순정 펌웨어 우선, 필요한 센서만 pvvx** — 암호화 MiBeacon + bindkey 복호화를 그대로 두고, 제어에 쓰는 센서는 pvvx(Mi 암호화 모드)로 **측정값 갱신 12분→1분**. 파서·키 무수정. (2026-11-07 다락 시범, [docs/PVVX_B16_FLASH.ko.md](docs/PVVX_B16_FLASH.ko.md))
 - **오프라인 우선 + 무손실 store-and-forward** — 간헐적 인터넷(농막=방문 때 폰 테더링)을 전제. **로컬 SQLite가 진실원천**, 인터넷 될 때만 업로드(정전·재부팅·오프라인에도 worst-case 손실 ≤1시간). "상시 인터넷"을 가정하는 흔한 설정과 반대.
 - **passive + 하루 1회 권위 이력 하이브리드** — 실시간·평균은 passive(센서 배터리 0 소모), 시간별 min/max는 센서 내부버퍼에서 **증분으로 하루 1회만** 연결(배터리 절약). passive만(공백) 또는 연결만(배터리 소모)인 방식과 다름.
 - **폰 핫스팟 자동접속 + 온라인 선검사(online gate)** — 무인·간헐연결 맞춤(오프라인이면 업로드 시도조차 안 함).
