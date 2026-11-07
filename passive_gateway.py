@@ -649,6 +649,10 @@ async def passive_loop(cfg, latest, avg_state, dirty, box, lock):
         if pt is None:
             return
         vals = parse_objects(pt)
+        # pvvx 재부팅 첫 순환 아티팩트: 습도 0%·배터리 0% 객체는 버림(시트 minH=0·batt 0 오염 방지)
+        for _k in ("humi", "batt"):
+            if vals and vals.get(_k) == 0:
+                vals.pop(_k)
         if not vals:
             return
         now = time.time()
