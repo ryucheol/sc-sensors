@@ -485,8 +485,11 @@ async def current_uploader(cfg, latest, dirty):
                 with open(_lp, "w") as _f:
                     # time_ms = 그 센서의 마지막 비콘 '수신' 시각(쓴 시각 아님) → 센서별 고장(배터리·전파)을
                     # 히터 제어기가 stale로 잡을 수 있게. 하트비트로 옛 값에 새 시각이 찍히는 것을 막는다.
+                    # batt: 마지막 배터리 %도 함께 저장 → 재시작 후 되읽어 batt_q 공백 방지(순정은 수 시간에 1회만 송신)
                     json.dump({r["sensor"]: {"temp": r["temp"], "hum": r["hum"],
-                                             "time_ms": round(latest[r["sensor"]].get("ts", now_ms / 1000) * 1000)}
+                                             "time_ms": round(latest[r["sensor"]].get("ts", now_ms / 1000) * 1000),
+                                             **({"batt": latest[r["sensor"]]["batt"]}
+                                                if "batt" in latest[r["sensor"]] else {})}
                                for r in readings}, _f, ensure_ascii=False)
             except Exception:
                 pass
@@ -733,6 +736,13 @@ async def main():
     log(f"대상 시트: ...{WEBAPP_URL[-14:]}  키: {os.path.basename(CFG)}  큐: {os.path.basename(QUEUE_DB)}")
     cfg = load_cfg()
     latest = {label: {} for label in cfg}
+    try:   # 이전 실행이 남긴 배터리 %만 되읽기(온도·시각은 되읽지 않음 — stale 판정 보호)
+        _lp = os.path.join(os.path.dirname(os.path.abspath(__file__)), "latest.json")
+        for _k, _v in json.load(open(_lp)).items():
+            if _k in latest and isinstance(_v, dict) and isinstance(_v.get("batt"), int):
+                latest[_k]["batt"] = _v["batt"]
+    except Exception:
+        pass
     avg_state = {label: {"temp": TWAvg(), "humi": TWAvg(),
                          "tmin": None, "tmax": None, "hmin": None, "hmax": None} for label in cfg}
     dirty = asyncio.Event()   # 값 변화 신호(passive → current_uploader)
