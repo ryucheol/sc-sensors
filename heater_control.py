@@ -164,8 +164,8 @@ def decide_relay(mode, on_th, off_th, t_ctl, ctl_stale, cur_relay):
     """히스테리시스 판단(순수): 원하는 릴레이 상태. 온도미상이면 동파=ON, 그 외=현상유지."""
     if ctl_stale:
         return True if mode == "frost" else cur_relay
-    if t_ctl < on_th:  return True
-    if t_ctl > off_th: return False
+    if t_ctl <= on_th: return True   # 경계값(=on_th) 보고 시 즉시 ON (값 격자 0.5°C+느린 갱신 보정)
+    if t_ctl >= off_th: return False  # 경계값(=off_th) 보고 시 즉시 OFF → 오버슈트·초과가열 감소
     return cur_relay
 
 def apply_relay(d, want):
