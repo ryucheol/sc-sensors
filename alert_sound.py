@@ -3,8 +3,8 @@
 """난방(comfort) 과열/환기 음성알림 — 3.5mm 잭.
  엔진: gTTS(온라인, 영구캐시) → espeak 폴백(오프라인/실패). piper는 추후 연구(USE_PIPER).
  온라인(인터넷O): 기상청 예보 + 지금 바깥 → 명령.  오프라인: 바깥·1층·다락 센서 차례 → 명령만.
- - 26°C↑  : "문 여세요"(첫회 전체, 반복은 짧게 60초 간격)
- - 25.5°C↑로 데워졌다가 25°C↓ : 1회 "문 닫으세요"(+하락량), 26 도달 불필요
+ - 26°C↑  : "문 여세요"(첫회 전체). 변화 없으면 5분마다 반복, 온도가 내려가기 시작하면(문 열어 반응) 반복 중지
+ - 25.5°C↑로 데워졌다가 25°C↓ : "문 닫으세요"(+하락량, 26 도달 불필요). 변화 없으면 5분 반복, 온도가 올라가기 시작하면 중지
  - 급락(15분 2°C↑, 문 상태 아닐 때): "N도 떨어졌습니다, 문 닫으세요"
  - 난방진단: 플러그 통신끊김 / 난방정체(설정 아래 30분 안 오름=다이얼 과소)
  - 급상승은 생략(26°C 알림이 대체). 급락만 음성. 모두 comfort·센서 신선할 때만.
@@ -26,7 +26,8 @@ if USE_PIPER and os.path.exists(VENV_PY) and not os.environ.get("ALERT_VENV"):
 import json, time, subprocess, shutil, wave, datetime, socket, hashlib
 BASE = os.path.expanduser("~/smart-cabin")
 CARD = "plughw:Headphones,0"
-ON_T = 26.0; OFF_T = 25.0; CLOSE_ARM = 25.5; REPEAT = 60; LEAD = 1.0; VOL = "80%"
+ON_T = 26.0; OFF_T = 25.0; CLOSE_ARM = 25.5; REPEAT = 300; LEAD = 1.0; VOL = "80%"
+CHANGE_EPS = 0.05  # 직전 알림 대비 원하는 방향(여세요=하강)으로 0.1°C↑ 변하면 반복 중지(문 열어 반응 시작)
 # 급락 감지(실측 보정: 자연 최대 ~3°C/h → 15분 2°C=8°C/h로 안전 분리)
 DROP_T = 2.0; DROP_WIN = 900; DROP_CLEAR = 1.0
 # 난방 정체(다이얼 과소): t_ctl가 설정-여유 아래인데 30분간 거의 안 오름
@@ -82,11 +83,13 @@ def num2kr(n):
 
 
 def dec1(x):
-    """소수 한 자리 한글: 2.0→'이', 1.5→'일 점 오'."""
+    """소수 한 자리 한글: 2.0→'이', 1.5→'일 점 오', -1.2→'영하 일 점 이'."""
+    neg = x < 0
     x = abs(x); i = int(x); f = int(round((x - i) * 10))
     if f >= 10:
         i += 1; f = 0
-    return num2kr(i) if f == 0 else "%s 점 %s" % (num2kr(i), _U[f])
+    s = num2kr(i) if f == 0 else "%s 점 %s" % (num2kr(i), _U[f])
+    return ("영하 " + s) if neg else s
 
 
 def online():
@@ -101,6 +104,13 @@ def online():
 def temp(d, key):
     try:
         return round(d[key]["temp"])
+    except Exception:
+        return None
+
+
+def tempf(d, key):
+    try:
+        return float(d[key]["temp"])
     except Exception:
         return None
 
@@ -128,17 +138,17 @@ def forecast_text():
     return s
 
 
-def full_text(d, n, verb):
+def full_text(d, t, verb):
     if online():
-        s = forecast_text(); o = temp(d, "바닥외부")
+        s = forecast_text(); o = tempf(d, "바닥외부")
         if o is not None:
-            s += "지금 바깥 %s도. " % num2kr(o)
-        return s + "실내 %s도. %s" % (num2kr(n), verb)
+            s += "지금 바깥 %s도. " % dec1(o)
+        return s + "실내 %s도. %s" % (dec1(t), verb)
     parts = []
     for key, label in (("바닥외부", "바깥"), ("내부1층", "실내"), ("다락", "다락")):
-        v = temp(d, key)
+        v = tempf(d, key)
         if v is not None:
-            parts.append("%s %s도" % (label, num2kr(v)))
+            parts.append("%s %s도" % (label, dec1(v)))
     return (", ".join(parts) + ". " if parts else "") + verb
 
 
@@ -246,6 +256,8 @@ def floor_fresh(d, status):
 def loop():
     setvol()
     over = False; close_armed = False; last = 0.0
+    repeating = False; alert_temp = None   # 열기 반복 중 여부 + 직전 알림 온도(하강 감지)
+    closing = False; close_temp = None     # 닫기 반복 중 여부 + 직전 알림 온도(상승 감지)
     peak = None                       # close_armed 동안 최고 1층 온도(하락량 계산)
     fhist = []                        # [(ts, t_floor)] 급락용(~20분)
     chist = []                        # [(ts, t_ctl)] 정체용(~35분)
@@ -263,24 +275,31 @@ def loop():
                 chist.append((now, status.get("t_ctl"))); chist[:] = [x for x in chist if now - x[0] <= 2100]
 
             if comfort and fresh:
-                # ---- 26°C 환기(열기) ----
+                # ---- 26°C 환기(열기): 변화없으면 5분 반복, 온도 하강 시작하면 중지 ----
                 if t >= ON_T:
                     if not over:
-                        say(full_text(d, n, "문을 여세요.")); over = True; last = now
-                    elif now - last >= REPEAT:
-                        say("실내 %s도. 문을 여세요." % num2kr(n)); last = now
-                    close_armed = True; peak = t if peak is None else max(peak, t)
+                        say(full_text(d, t, "문을 여세요.")); over = True; repeating = True; last = now; alert_temp = t
+                    elif repeating:
+                        if t <= alert_temp - CHANGE_EPS:        # 하강 시작(문 열어 반응) → 반복 중지
+                            repeating = False
+                        elif now - last >= REPEAT:              # 변화 없으면 5분마다 상기
+                            say("실내 %s도. 문을 여세요." % dec1(t)); last = now; alert_temp = t
+                    close_armed = True; closing = False; peak = t if peak is None else max(peak, t)
                 else:
+                    over = False; repeating = False
                     if t >= CLOSE_ARM:
-                        close_armed = True; peak = t if peak is None else max(peak, t)
-                    if t < CLOSE_ARM:
-                        over = False
-                    # ---- 25°C 닫기(열렸다가 식음) : 하락량 덧붙임 ----
-                    if close_armed and t < OFF_T:
+                        close_armed = True; closing = False; peak = t if peak is None else max(peak, t)
+                    # ---- 25°C 닫기(열렸다 식음): 변화없으면 5분 반복, 온도 상승 시작하면 중지 ----
+                    if close_armed and not closing and t < OFF_T:
                         drop = (peak - t) if peak else 0.0
                         extra = ("%s도 내렸습니다. " % dec1(drop)) if drop >= 1.0 else ""
-                        say(full_text(d, n, extra + "문을 닫으세요."))
-                        close_armed = False; peak = None
+                        say(full_text(d, t, extra + "문을 닫으세요."))
+                        closing = True; last = now; close_temp = t
+                    elif closing:
+                        if t >= close_temp + CHANGE_EPS or t >= CLOSE_ARM:   # 상승 시작(문 닫음) 또는 재가온 → 중지
+                            closing = False; close_armed = False; peak = None
+                        elif now - last >= REPEAT:
+                            say("실내 %s도. 문을 닫으세요." % dec1(t)); last = now; close_temp = t
 
                 # ---- 급락 감지(26/닫기 상태가 아닐 때만; 문 열어 식는 정상과 중복 방지) ----
                 if not over and not close_armed:
@@ -306,7 +325,7 @@ def loop():
                         if oldc and (tctl - oldc[-1][1]) <= STALL_RISE and now - stall_last >= STALL_REPEAT:
                             say("난방 중인데 온도가 오르지 않습니다. 히터 다이얼을 확인하세요."); stall_last = now
             else:
-                over = False; close_armed = False; peak = None; drop_said = False
+                over = False; close_armed = False; closing = False; peak = None; drop_said = False; repeating = False
         except Exception:
             pass
         time.sleep(20)
@@ -316,10 +335,10 @@ if __name__ == "__main__":
     if len(sys.argv) >= 2 and sys.argv[1] == "say":
         setvol(); say(" ".join(sys.argv[2:]) or "테스트입니다."); sys.exit(0)
     if len(sys.argv) >= 2 and sys.argv[1] == "demo":
-        setvol(); d = json.load(open(LATEST)); n = temp(d, "내부1층") or 26
+        setvol(); d = json.load(open(LATEST)); t = tempf(d, "내부1층") or 26.2
         print("PIPER:", PIPER, "| online:", online())
-        print("여세요:", full_text(d, n, "문을 여세요."))
-        print("닫으세요:", full_text(d, n, "%s도 내렸습니다. 문을 닫으세요." % dec1(1.5)))
+        print("여세요:", full_text(d, t, "문을 여세요."))
+        print("닫으세요:", full_text(d, t, "%s도 내렸습니다. 문을 닫으세요." % dec1(1.5)))
         print("급락:", "실내 온도가 %s도 떨어졌습니다. 문을 닫으세요." % dec1(2.3))
         print("플러그:", "난방 플러그 연결이 끊겼습니다. 확인하세요.")
         print("정체:", "난방 중인데 온도가 오르지 않습니다. 히터 다이얼을 확인하세요.")
