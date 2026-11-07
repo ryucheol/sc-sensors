@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """난방(comfort) 과열/환기 음성알림 — 3.5mm 잭.
- 엔진: piper(신경망 한국어) 우선, 실패 시 espeak 폴백.
+ 엔진: gTTS(온라인, 영구캐시) → espeak 폴백(오프라인/실패). piper는 추후 연구(USE_PIPER).
  온라인(인터넷O): 기상청 예보 + 지금 바깥 → 명령.  오프라인: 바깥·1층·다락 센서 차례 → 명령만.
  - 26°C↑  : "문 여세요"(첫회 전체, 반복은 짧게 60초 간격)
  - 25.5°C↑로 데워졌다가 25°C↓ : 1회 "문 닫으세요"(+하락량), 26 도달 불필요
@@ -12,7 +12,7 @@
  유닛은 /usr/bin/python3로 실행돼도 아래 re-exec 심이 piper-venv 파이썬으로 재진입."""
 import os, sys
 
-USE_PIPER = False  # 현재 엔진=espeak(즉시·오프라인·안정). piper(KSS)는 품질·콜드스타트 이슈로 추후 연구(코드·모델 보존).
+USE_PIPER = False  # 엔진: gTTS(온라인,자연스러움,영구캐시) → espeak(오프라인/폴백). piper(KSS)는 추후 연구(코드·모델 보존).
 
 # ---- piper 쓸 때만 piper-venv 파이썬으로 재진입(espeak 전용이면 시스템 python 그대로) ----
 VENV_PY = "/home/ryuch/piper-venv/bin/python"
@@ -23,7 +23,7 @@ if USE_PIPER and os.path.exists(VENV_PY) and not os.environ.get("ALERT_VENV"):
     except Exception:
         pass
 
-import json, time, subprocess, shutil, wave, datetime, socket
+import json, time, subprocess, shutil, wave, datetime, socket, hashlib
 BASE = os.path.expanduser("~/smart-cabin")
 CARD = "plughw:Headphones,0"
 ON_T = 26.0; OFF_T = 25.0; CLOSE_ARM = 25.5; REPEAT = 60; LEAD = 1.0; VOL = "80%"
@@ -35,6 +35,13 @@ STALL_WIN = 1800; STALL_RISE = 0.2; STALL_MARGIN = 0.3; STALL_REPEAT = 900
 FRESH_SENSOR = 180; FRESH_STATUS = 150; FAULT_REPEAT = 900
 FORECAST = os.path.join(BASE, "forecast.json"); LATEST = os.path.join(BASE, "latest.json")
 STATE = os.path.join(BASE, "heater_state.json"); STATUS = os.path.join(BASE, "heater_status.json")
+CACHE = os.path.join(BASE, "tts_cache")  # gTTS 영구 캐시(문구당 1회 다운로드 → 오프라인 재사용)
+try:
+    os.makedirs(CACHE, exist_ok=True)
+except Exception:
+    pass
+DEVNULL = subprocess.DEVNULL
+GTTS_GEN = "import sys;from gtts import gTTS;gTTS(sys.argv[1], lang='ko').save(sys.argv[2])"
 PDIR = os.path.join(BASE, "piper")
 PMODEL = os.path.join(PDIR, "piper-kss-korean.onnx"); PCFG = os.path.join(PDIR, "piper-kss-korean.onnx.json")
 TTS = shutil.which("espeak-ng") or shutil.which("espeak")
@@ -167,22 +174,51 @@ def setvol():
         pass
 
 
+def _aplay(path):
+    subprocess.run(["aplay", "-q", "-D", CARD, path], timeout=45)
+
+
+def _espeak(text):
+    if not TTS:
+        return
+    subprocess.run([TTS, "-v", "ko", "-a", "200", "-s", "145", "-p", "42", "-g", "4", "-w", SPEECH, text],
+                   timeout=25, stdout=DEVNULL, stderr=DEVNULL)
+    w = wave.open(SPEECH, "rb"); p = w.getparams(); fr = w.readframes(w.getnframes()); w.close()
+    _write_wav(PLAY, fr, p.framerate)
+    _aplay(PLAY)
+
+
+def _gtts_to_cache(text, wav):
+    """gTTS(구글, 온라인) → mp3 → ffmpeg로 wav(앞 1초 무음) 캐시 저장."""
+    mp3 = "/tmp/tts_dl.mp3"
+    subprocess.run([VENV_PY, "-c", GTTS_GEN, text, mp3], timeout=25, check=True,
+                   stdout=DEVNULL, stderr=DEVNULL)
+    tmp = wav + ".tmp.wav"
+    subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-i", mp3, "-ar", "48000", "-ac", "1",
+                    "-af", "adelay=1000", tmp], timeout=25, check=True)
+    os.replace(tmp, wav)   # 원자적 — 부분파일 캐시 방지
+
+
 def say(text):
+    # (추후 연구) piper 우선
     if PIPER:
         try:
-            piper_synth(text, PLAY)
-            subprocess.run(["aplay", "-q", "-D", CARD, PLAY], timeout=40); return
+            piper_synth(text, PLAY); _aplay(PLAY); return
         except Exception:
             pass
-    if TTS:
-        try:
-            subprocess.run([TTS, "-v", "ko", "-a", "200", "-s", "145", "-p", "42", "-g", "4", "-w", SPEECH, text],
-                           timeout=25, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            w = wave.open(SPEECH, "rb"); p = w.getparams(); fr = w.readframes(w.getnframes()); w.close()
-            _write_wav(PLAY, fr, p.framerate)
-            subprocess.run(["aplay", "-q", "-D", CARD, PLAY], timeout=40)
-        except Exception:
-            pass
+    # gTTS 캐시 재생 → 온라인이면 생성·캐시 → espeak 최후
+    try:
+        wav = os.path.join(CACHE, hashlib.md5(text.encode("utf-8")).hexdigest() + ".wav")
+        if os.path.exists(wav) and os.path.getsize(wav) > 0:
+            _aplay(wav); return
+        if online():
+            _gtts_to_cache(text, wav); _aplay(wav); return
+    except Exception:
+        pass
+    try:
+        _espeak(text)
+    except Exception:
+        pass
 
 
 def read_status():
