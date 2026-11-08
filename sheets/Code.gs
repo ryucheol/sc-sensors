@@ -8,6 +8,8 @@
  *   (구버전이 배포돼 있으면 version 이 다르거나 없음 → 다시 붙여넣고 새 버전 배포)
  *
  * 변경 이력:
+ *   v10 (2026-11-08) 캘린더 연동 — 기본 캘린더에 '동지집 도착[, 희망온도 24도]' 일정이 있으면 cmd_pull 때(10분마다 검사)
+ *       '도착 YYYY-MM-DD HH:MM T' 명령을 '명령' 탭에 자동 기입(F 출처=캘린더). 일정 변경→교체, 삭제→'도착 취소'. 종일 일정은 19:00, 기본 23.5°C
  *   v9 (2026-11-08) '명령' 탭 원격 명령 — Pi가 매분 mode:cmd_pull 로 B(상태) 빈 행을 받아 실행하고 mode:cmd_ack 로 결과 기록. onEdit 가 입력시각 스탬프
  *   v8 (2026-11-08) mode:presence — 게이트웨이 재실 자동기록(도착=핫스팟 등장/난방·취침 명령, 출발=동파 명령)을 '재실기록' 탭에 기록
  *   v7 (2026-11-08) 배터리 예상일 재작성: pvvx 전압눈금(2.2V=0%,3.1V=100%) 전제, 종료 2.6V(44%),
@@ -27,7 +29,7 @@
  * 특징: 중복 제거를 서버에서 처리(멱등). 중복 기준 (센서, 정시 버킷). 시각은 실제 날짜값으로 저장.
  */
 
-var CODE_VERSION = '2026-11-08 v9';   // ← /exec(doGet) 응답·붙여넣기 확인용. 고칠 때마다 갱신.
+var CODE_VERSION = '2026-11-08 v10b';   // ← /exec(doGet) 응답·붙여넣기 확인용. 고칠 때마다 갱신.
 var SITE = '농막';                 // ← 장소 접두사. 두 번째 시트(예: 선반)는 '선반' 으로만 바꾸면 됨
 var SECRET = 'CHANGE-ME';          // ← 게이트웨이의 FARMHUT_SECRET 과 동일하게
 var SHEET_NAME = SITE + '_시간별';
@@ -364,7 +366,12 @@ function _postPresence(body) {
 // ── 원격 명령('명령' 탭) ───────────────────────────────────────
 // 사람이 A열에 "도착 내일 16:00" / "난방" / "동파" / "취침" / "상태" / "점검" 을 적으면
 // Pi 가 매분 cmd_pull 로 가져가 실행하고 cmd_ack 로 B 상태·C 처리시각·D 결과를 채운다.
-var CMD_HEADER = ['명령', '상태', '처리시각', '결과', '입력시각'];
+var CMD_HEADER = ['명령', '상태', '처리시각', '결과', '입력시각', '출처'];
+var CAL_KEYWORD = '동지집 도착';      // 캘린더 일정 제목에 이 말이 있으면 시작 시각 = 도착 시각
+var CAL_DEFAULT_HHMM = '19:00';     // 종일 일정일 때 도착 시각
+var CAL_DEFAULT_TEMP = 23.5;        // 제목에 '희망온도 24도' 없을 때
+var CAL_LOOKAHEAD_DAYS = 7;
+var CAL_CHECK_SEC = 600;            // cmd_pull 때 캘린더 검사 간격
 var CMD_NOTE = '여기에 명령을 적으면 농막 Pi가 1분 안에 실행하고 B~D에 결과를 씁니다.\n' +
   '난방 | 동파 | 취침 | 도착 16:00 | 도착 내일 07:00 | 도착 2026-11-14 20:00 24 | 도착 취소 | 상태 | 점검\n' +
   '입력 후 12시간이 지나도록 Pi가 못 받으면 "만료"로 표시되고 실행하지 않습니다.';
@@ -382,7 +389,8 @@ var CMD_EXAMPLES = [
   ['도착 2026-11-14 20:00', '날짜 지정'],
   ['도착 16:00 24', '목표 24°C로 도착'],
   ['도착 취소', '도착 예약 해제'],
-  ['점검', '히터 자가점검(플러그 5초 ON → 전력·단수 확인). 체류 중 사용']
+  ['점검', '히터 자가점검(플러그 5초 ON → 전력·단수 확인). 체류 중 사용'],
+  ['(캘린더)', '구글 캘린더에 "동지집 도착, 희망온도 24도" 일정을 만들면 시작 시각으로 도착 명령이 자동 기입됨(종일이면 19:00, 온도 생략 시 23.5)']
 ];
 function _cmdSheet() {
   var ss = SpreadsheetApp.getActiveSpreadsheet();
@@ -399,13 +407,73 @@ function _cmdSheet() {
     sh.getRange(1, 7, CMD_EXAMPLES.length, 2).setValues(CMD_EXAMPLES);
     sh.getRange(1, 7, 1, 2).setFontWeight('bold');
     sh.getRange(2, 7, CMD_EXAMPLES.length - 1, 1).setBackground('#f2f2f2').setFontFamily('Roboto Mono');
-    sh.setColumnWidth(6, 30); sh.setColumnWidth(7, 200); sh.setColumnWidth(8, 420);
+    sh.setColumnWidth(6, 70); sh.setColumnWidth(7, 200); sh.setColumnWidth(8, 420);
   }
   return sh;
+}
+// ── 캘린더 연동 ────────────────────────────────────────────────
+// 기본 캘린더에서 제목에 CAL_KEYWORD 가 든 가장 이른 일정(시작이 지금-3h ~ +7일)을 찾아
+// '도착 YYYY-MM-DD HH:MM T' 를 '명령' 탭에 자동 기입. 같은 내용이면 다시 쓰지 않음(PropertiesService).
+// 일정이 사라지면(삭제·지남) 마지막 도착 명령이 캘린더 출처일 때만 '도착 취소' 기입(사람이 직접 쓴 도착은 건드리지 않음).
+function _calDesired() {
+  var now = new Date();
+  var from = new Date(now.getTime() - 3 * 3600 * 1000);
+  var to = new Date(now.getTime() + CAL_LOOKAHEAD_DAYS * 86400 * 1000);
+  var evs = CalendarApp.getDefaultCalendar().getEvents(from, to, { search: CAL_KEYWORD });
+  var best = null;
+  for (var i = 0; i < evs.length; i++) {
+    var ev = evs[i]; var title = String(ev.getTitle() || '');
+    if (title.indexOf(CAL_KEYWORD) < 0) continue;
+    var start;
+    if (ev.isAllDayEvent()) {
+      var d = ev.getAllDayStartDate();
+      var hm = CAL_DEFAULT_HHMM.split(':');
+      start = new Date(d.getFullYear(), d.getMonth(), d.getDate(), Number(hm[0]), Number(hm[1]), 0);
+    } else start = ev.getStartTime();
+    if (start.getTime() < from.getTime()) continue;
+    var temp = CAL_DEFAULT_TEMP;
+    var m = title.match(/희망온도\s*([0-9]+(?:\.[0-9]+)?)\s*도?/);
+    if (m) { var t = Number(m[1]); if (t >= 10 && t <= 30) temp = t; }
+    if (!best || start.getTime() < best.start.getTime()) best = { start: start, temp: temp, title: title };
+  }
+  if (!best) return null;
+  var ymd = Utilities.formatDate(best.start, 'Asia/Seoul', 'yyyy-MM-dd HH:mm');
+  return { cmd: '도착 ' + ymd + ' ' + best.temp, key: ymd + '|' + best.temp, title: best.title };
+}
+function _calAppend(sh, cmd) {
+  // A열 기준 마지막 행(+1). sh.getLastRow()는 G:H 예시 목록까지 세므로 쓰지 않음
+  var a = sh.getRange(1, 1, sh.getMaxRows(), 1).getValues(); var row = 2;
+  for (var i = a.length - 1; i >= 0; i--) if (String(a[i][0] || '').trim()) { row = i + 2; break; }
+  sh.getRange(row, 1, 1, 6).setValues([[cmd, '', '', '', new Date(), '캘린더']]);
+}
+function _calLastArrivalSource(sh) {
+  var last = sh.getLastRow(); if (last < 2) return null;
+  var vals = sh.getRange(2, 1, last - 1, 6).getValues();
+  for (var i = vals.length - 1; i >= 0; i--) {
+    var a = String(vals[i][0] || '').trim();
+    if (a.indexOf('도착') === 0 || a.toLowerCase().indexOf('arrive') === 0) return String(vals[i][5] || '').trim();
+  }
+  return null;
+}
+function _calSync(sh) {
+  var cache = CacheService.getScriptCache();
+  if (cache.get('cal_checked')) return;
+  cache.put('cal_checked', '1', CAL_CHECK_SEC);
+  var props = PropertiesService.getScriptProperties();
+  var prev = props.getProperty('CAL_LAST') || '';
+  var want = _calDesired();
+  if (want) {
+    if (want.key !== prev) { _calAppend(sh, want.cmd); props.setProperty('CAL_LAST', want.key); }
+  } else if (prev) {
+    if (_calLastArrivalSource(sh) === '캘린더') _calAppend(sh, '도착 취소');
+    props.deleteProperty('CAL_LAST');
+  }
 }
 // Pi → 대기 중(B 빈칸) 행 목록. 입력시각(E)이 비어 있으면 지금으로 채움(onEdit 가 못 찍은 경우).
 function _cmdPull(body) {
   var sh = _cmdSheet();
+  var calErr = null;
+  try { _calSync(sh); } catch (err) { calErr = String(err); Logger.log('calSync: ' + err); }
   var last = sh.getLastRow();
   var out = [];
   if (last >= 2) {
@@ -419,7 +487,7 @@ function _cmdPull(body) {
       out.push({ row: i + 2, cmd: cmd, entered_ms: ent.getTime() });
     }
   }
-  return _json({ ok: true, mode: 'cmd_pull', commands: out });
+  return _json({ ok: true, mode: 'cmd_pull', commands: out, cal_error: calErr });
 }
 // Pi → 실행 결과. acks=[{row, status, result, done_ms}]
 function _cmdAck(body) {
@@ -448,6 +516,8 @@ function onEdit(e) {
     }
   } catch (err) {}
 }
+
+function calTest() { Logger.log(JSON.stringify(_calDesired())); }
 
 function doPost(e) {
   var lock = LockService.getScriptLock();

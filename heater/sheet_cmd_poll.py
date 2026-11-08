@@ -122,6 +122,7 @@ def main():
     try: res = post(url, {"secret": secret, "mode": "cmd_pull"})
     except Exception as e: log("pull 실패: %s" % e); return
     if not res.get("ok"): log("pull 오류: %s" % res); return
+    if res.get("cal_error"): log("캘린더 오류(시트): %s" % res["cal_error"])
     cmds = res.get("commands") or []
     if not cmds: return
     acks = []
