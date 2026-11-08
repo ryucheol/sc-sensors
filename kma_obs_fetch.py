@@ -58,6 +58,8 @@ def main():
         print("KMA_AUTH_KEY 없음(kma.env)", file=sys.stderr); sys.exit(2)
     now = datetime.datetime.now()
     tm2 = now.strftime("%Y%m%d%H00"); tm1 = (now - datetime.timedelta(hours=6)).strftime("%Y%m%d%H00")
+    if len(sys.argv) >= 2: tm1 = sys.argv[1]          # 백필: python3 kma_obs_fetch.py 202611010000 [202611080900]
+    if len(sys.argv) >= 3: tm2 = sys.argv[2]
     main_rows = fetch(key, STN_MAIN, tm1, tm2)
     try:
         si_rows = fetch(key, STN_SI, tm1, tm2)
@@ -69,9 +71,10 @@ def main():
             for r in csv.DictReader(f): have.add(r["tm"])
     new = []
     for tm in sorted(main_rows):
-        if tm in have: continue
+        tm_s = datetime.datetime.strptime(tm, "%Y%m%d%H%M").strftime("%Y-%m-%d %H:%M")
+        if tm_s in have: continue   # 멱등: CSV의 포맷된 tm과 비교(원시 tm과 비교하면 중복 기록됨)
         t = main_rows[tm]
-        rec = {"tm": datetime.datetime.strptime(tm, "%Y%m%d%H%M").strftime("%Y-%m-%d %H:%M")}
+        rec = {"tm": tm_s}
         for k, i in IDX.items(): rec[k] = val(t, i)
         rec["si_133"] = val(si_rows[tm], IDX["si"]) if tm in si_rows else ""
         new.append(rec)
