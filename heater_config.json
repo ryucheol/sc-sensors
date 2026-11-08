@@ -1,9 +1,23 @@
 {
   "sensor": "내부1층",
-  "frost":   { "on": 3,  "off": 5 },
-  "comfort": { "on": 23, "off": 23.5 },
-  "sleep":   { "on": 20, "off": 21, "sensor": "다락" },
-
+  "frost": {
+    "on": 3,
+    "off": 5
+  },
+  "comfort": {
+    "on": 23,
+    "off": 23.5
+  },
+  "sleep": {
+    "on": 20,
+    "off": 21,
+    "sensor": "다락"
+  },
+  "stages": [
+    720,
+    1102,
+    1763
+  ],
   "preheat": {
     "enabled": true,
     "weekday": 4,
@@ -18,15 +32,22 @@
     "margin": 1.25,
     "max_lead_hours": 10
   },
-
-  "redundancy": { "delta_init": 3.0, "tau_min": 60, "fallback_margin_frost": 1.5, "disagree_c": 5.0 },
-
-  "deadman": { "enabled": true, "dp": 9, "sec": 1800, "rearm_sec": 300 },
-
+  "redundancy": {
+    "delta_init": 3.0,
+    "tau_min": 60,
+    "fallback_margin_frost": 1.5,
+    "disagree_c": 5.0
+  },
+  "deadman": {
+    "enabled": true,
+    "dp": 9,
+    "sec": 1800,
+    "rearm_sec": 300
+  },
   "backstop_comfort_hours": 36,
   "stale_temp_min": 45,
   "poll_sec": 60,
   "fault_min_watt": 100,
   "fault_grace_sec": 300,
-  "_comment": "frost/comfort/sleep = 히스테리시스 ON/OFF(°C). sleep.sensor=취침 제어센서(다락). preheat: weekday 0=월..4=금, target_hour=도착시각(그때 target_temp 되도록 적응형 선행가열), noshow_hour=이 시각까지 '난방' 명령 없으면 동파 복귀(24=토 00:00). tau_hours=C/UA 열시정수, margin=선행시간 안전계수. backstop=난방 상태로 이 시간 무신호면 동파. stale_temp_min=온도 이보다 오래되면 고장으로 봄(센서 자체 방송 ~10분 + 파일 갱신 ≤10분 + 비콘 1회 누락 ≈ 31분 → 45). redundancy: 실내센서 이중화(1층↔다락). delta_init=다락−1층 초기값(학습 전), tau_min=학습 시정수(분), fallback_margin_frost=대체·불일치 시 동파모드에서 더 춥게 볼 여유(°C), disagree_c=두 센서 추정이 이만큼 어긋나면 고장 의심(학습 중단·동파는 더 추운 쪽). deadman: Pi·공유기 고장 시 fail-on. 꺼짐 동안 플러그 카운트다운(dp, 현재상태 반전)을 sec초로 걸고 rearm_sec마다 연장, 켜질 땐 지움. 값 바꾸면 즉시 반영(파일만 저장)."
+  "_comment": "frost/comfort/sleep = 히스테리시스 ON/OFF(°C). sleep.sensor=취침 제어센서(다락). preheat: weekday 0=월..4=금, target_hour=도착시각(그때 target_temp 되도록 적응형 선행가열), noshow_hour=이 시각까지 '난방' 명령 없으면 동파 복귀(24=토 00:00). tau_hours=C/UA 열시정수, margin=선행시간 안전계수. backstop=난방 상태로 이 시간 무신호면 동파. stale_temp_min=온도 이보다 오래되면 고장으로 봄(센서 자체 방송 ~10분 + 파일 갱신 ≤10분 + 비콘 1회 누락 ≈ 31분 → 45). redundancy: 실내센서 이중화(1층↔다락). delta_init=다락−1층 초기값(학습 전), tau_min=학습 시정수(분), fallback_margin_frost=대체·불일치 시 동파모드에서 더 춥게 볼 여유(°C), disagree_c=두 센서 추정이 이만큼 어긋나면 고장 의심(학습 중단·동파는 더 추운 쪽). deadman: Pi·공유기 고장 시 fail-on. 꺼짐 동안 플러그 카운트다운(dp, 현재상태 반전)을 sec초로 걸고 rearm_sec마다 연장, 켜질 땐 지움. 값 바꾸면 즉시 반영(파일만 저장). stages: 히터 기계식 단수별 실측 W(11-08: 720/1102/1763) — 플러그 W로 단 인식, 예열 P·조언에 사용."
 }

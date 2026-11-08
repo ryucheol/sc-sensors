@@ -4,7 +4,7 @@
    제어센서는 mode에서 유도: 취침=다락, 그 외=기본(내부1층). 계측(전력량·열모델)은 항상 1층 기준.
    venv(~/tuya-venv)로 실행. 게이트웨이가 쓰는 latest.json에서 온도를 읽고 Tuya 플러그를 로컬(LAN) 제어.
    설정: heater_config.json (즉시 반영) / 모드·임계값: heater_state.json (난방/동파 명령이 갱신)."""
-import os, json, time, math, datetime
+import os, json, time, math, datetime, collections
 
 BASE   = os.path.expanduser("~/smart-cabin")
 CFG    = os.path.join(BASE, "heater_config.json")
@@ -67,9 +67,64 @@ def get_device():
         if d.get("name") == "Main heater": return d
     return devs[0] if devs else None
 
-def preheat_lead_hours(cfg, t_in, t_out):
+
+# ── 히터 단수(기계식 3단) 인식·활용 ───────────────────────────────────────────
+# 플러그 실측 W로 현재 단을 알아내(720/1102/1763 W, 11-08 실측) ① 예열 선행시간에 실측 P를 쓰고
+# ② 재실 중 출력 부족, ③ 동파모드 한파, ④ 금요일 예열 불가를 조언한다. 단수 변경은 사람 손(기계식 스위치).
+STAGES_DEFAULT = [720, 1102, 1763]
+FORECAST = os.path.join(BASE, "forecast.json")
+
+def detect_stage(watt, stages=STAGES_DEFAULT, tol=0.12):
+    """실측 W → 단수(1..n) 또는 None(무부하·미상). 순수."""
+    if watt is None or watt < 100: return None
+    best = None
+    for i, w in enumerate(stages, 1):
+        if abs(watt - w) <= tol * w and (best is None or abs(watt - w) < abs(watt - stages[best - 1])):
+            best = i
+    return best
+
+def forecast_min_temp(path=FORECAST, hours=48, now_ms=None):
+    """forecast.json 시간별 예보에서 앞으로 hours 시간의 최저 기온. 없으면 None."""
+    try:
+        fc = json.load(open(path)); now_ms = now_ms or time.time() * 1000
+        ts = [h["tmp"] for h in fc.get("hourly", []) if "tmp" in h and now_ms - 3600e3 <= h["ms"] <= now_ms + hours * 3600e3]
+        return min(ts) if ts else None
+    except Exception:
+        return None
+
+def stage_advice(cfg, mode, stage, p_watt, t_min48, t_min12, t_ctl, on_th, relay, on_minutes, falling):
+    """단수 조언(순수). 반환 문자열 또는 None. p_watt=현재 단 실측 W.
+       - 재실(comfort/sleep): 연속 ON 60분·설정 0.3°C 아래·하강 중 → 한 단 올리기 / 12h 예보상 유지 불가 → 올리기
+       - 동파(frost): 48h 예보 최저로 도달가능 온도가 동파 ON+2°C 미만 → 올리기 / 금요일 예열 도달 불가 → 떠나기 전 올리기"""
+    stages = cfg.get("stages", STAGES_DEFAULT); top = len(stages)
+    if stage is None or p_watt is None: return None
+    ua = cfg["preheat"]["ua_w_per_k"]
+    if mode in ("comfort", "sleep"):
+        if relay and on_minutes >= 60 and t_ctl is not None and on_th is not None and t_ctl < on_th - 0.3 and falling and stage < top:
+            return "히터 출력 부족: %d단 %.0fW로 %d분 연속 가동에도 %.1f°C로 내려가는 중 → %d단으로 올리세요" % (stage, p_watt, on_minutes, t_ctl, stage + 1)
+        if t_min12 is not None and on_th is not None and stage < top and t_min12 + p_watt / ua < on_th + 1:
+            return "12시간 내 예보 최저 %.0f°C: %d단 %.0fW로는 최고 %.0f°C까지만 유지 가능 → %d단 이상으로 올리세요" % (
+                t_min12, stage, p_watt, t_min12 + p_watt / ua, stage + 1)
+        return None
+    if mode == "frost" and t_min48 is not None:
+        t_eq = t_min48 + p_watt / ua
+        if t_eq < cfg["frost"]["on"] + 2 and stage < top:
+            return "한파 예보 최저 %.0f°C: %d단 %.0fW로는 실내 %.0f°C까지만 → 동파 위험, %d단 이상으로 올리세요" % (t_min48, stage, p_watt, t_eq, stage + 1)
+        p = cfg.get("preheat", {})
+        if p.get("enabled") and stage < top and t_eq <= p.get("target_temp", 23) + 1:
+            return "금요일 예열 불가: %d단 %.0fW·예보 최저 %.0f°C면 최고 %.0f°C → 떠나기 전 %d단으로 올리세요" % (
+                stage, p_watt, t_min48, t_eq, top)
+    return None
+
+def advice_speech(adv):
+    """음성용 문구: 기호를 한국어로."""
+    return (adv.replace("°C", "도").replace("W로", "와트로").replace("W ", "와트 ").replace("→", ", ")
+               .replace("·", ", ").replace("%", "퍼센트"))
+
+def preheat_lead_hours(cfg, t_in, t_out, P=None):
     p = cfg["preheat"]
-    tgt, tau, ua, P = p["target_temp"], p["tau_hours"], p["ua_w_per_k"], p["heater_watts"]
+    tgt, tau, ua = p["target_temp"], p["tau_hours"], p["ua_w_per_k"]
+    P = P or p["heater_watts"]   # 실측 단 W가 있으면 그것(1단으로 두면 선행시간·도달가능이 달라진다)
     margin, maxlead = p["margin"], p["max_lead_hours"]
     if t_in is None:        return maxlead          # 온도 모르면 안전하게 최대 선행
     if t_in >= tgt:         return 0.0
@@ -84,13 +139,13 @@ def default_state(cfg):
     return {"mode":"frost","on":f["on"],"off":f["off"],"source":"default",
             "since":now(),"last_cmd_ts":0,"relay":None}
 
-def schedule_step(cfg, st, t_in, t_out, dtn, tnow):
+def schedule_step(cfg, st, t_in, t_out, dtn, tnow, P=None):
     """스케줄 판단(순수): 금요일 예열 / 노쇼 복귀 / 안전 백스톱. st를 제자리 수정, (changed, 로그메시지목록) 반환."""
     p = cfg["preheat"]; changed = False; logs = []
     if p.get("enabled") and dtn.weekday() == p["weekday"]:
         target = dtn.replace(hour=p["target_hour"], minute=p["target_min"], second=0, microsecond=0)
         if dtn < target and st["mode"] == "frost":
-            lead = preheat_lead_hours(cfg, t_in, t_out)
+            lead = preheat_lead_hours(cfg, t_in, t_out, P)
             if dtn >= target - datetime.timedelta(hours=lead):
                 c = cfg["comfort"]
                 st.update(mode="comfort", on=c["on"], off=c["off"], source="preheat", since=tnow); changed = True
@@ -216,6 +271,8 @@ def main():
     delta = _ss.get("delta_attic_floor", red_cfg(load(CFG, {}) or {})["delta_init"])
     red_last = None; last_src = None; last_sensor_warn = {}
     prev_mode = None   # 모드 전환을 정확한 시각으로 로깅(현황 30분 간격 보완)
+    stage = _ss.get("stage"); stage_w = _ss.get("stage_w")   # 단수(실측 W로 인식, 재시작 시 복원)
+    on_since = None; thist = collections.deque(); advice = None; advice_log = 0.0
     while True:
         poll = 60
         try:
@@ -249,7 +306,7 @@ def main():
             t_floor_est, _ = fuse_control("frost", t_in, not stale, t_at, at_ok, -delta, R)
 
             # ── 스케줄: 금요일 적응형 예열 / 노쇼 복귀 / 안전 백스톱 ──
-            changed, slogs = schedule_step(cfg, st, t_floor_est, t_out, datetime.datetime.now(), now())
+            changed, slogs = schedule_step(cfg, st, t_floor_est, t_out, datetime.datetime.now(), now(), stage_w)
             for m in slogs: log(m)
             if changed: save_atomic(STATE, st)
 
@@ -379,6 +436,28 @@ def main():
                 else:
                     if fault_active and status_ok and cur_watt >= wmin: log("히터 정상 복귀(%.0fW)" % cur_watt)
                     if not (expecting and cur_watt < wmin): fault_dt = 0.0; fault_active = False
+                # 단수 인식(켜져서 전력이 잡힐 때만) · 연속 ON 시간 · 30분 전 대비 하강 여부 · 조언
+                if status_ok and cur_relay and cur_watt >= 100:
+                    _sg = detect_stage(cur_watt, cfg.get("stages", STAGES_DEFAULT))
+                    if _sg is not None:
+                        if _sg != stage: log("히터 단수 감지: %s단 → %d단 (%.0fW)" % (stage if stage else "?", _sg, cur_watt))
+                        stage, stage_w = _sg, round(cur_watt)
+                if cur_relay and status_ok:
+                    on_since = on_since or tnow
+                else:
+                    on_since = None
+                if t_ctl is not None:
+                    thist.append((tnow, t_ctl))
+                    while thist and tnow - thist[0][0] > 1900: thist.popleft()
+                _old = [v for ts_, v in thist if tnow - ts_ >= 1500]
+                falling = bool(_old) and t_ctl is not None and t_ctl < _old[0] - 0.05
+                on_min = int((tnow - on_since) / 60) if on_since else 0
+                new_adv = stage_advice(cfg, st.get("mode"), stage, stage_w, forecast_min_temp(hours=48),
+                                       forecast_min_temp(hours=12), t_ctl, on_th, cur_relay, on_min, falling)
+                if new_adv != advice or (new_adv and tnow - advice_log > 3600):
+                    if new_adv: log("⚠ 단수 조언: " + new_adv)
+                    elif advice: log("단수 조언 해제")
+                    advice, advice_log = new_adv, tnow
                 # 스냅샷(heater_status.json — 서비스만 기록)
                 save_atomic(STATUS, {
                     "updated": stamp(), "mode": st.get("mode"), "relay": cur_relay,
@@ -389,7 +468,9 @@ def main():
                     "ctl_sensor": ctl_sensor, "ctl_src": ctl_src, "t_ctl": t_ctl,
                     "sensor_ok": {floor_s: (not stale), **({attic_s: at_ok} if attic_s else {})},
                     "delta_attic_floor": round(delta, 2),
-                    "deadman_armed": bool(dm_armed_ts), "countdown_s": cur_cd})
+                    "deadman_armed": bool(dm_armed_ts), "countdown_s": cur_cd,
+                    "stage": stage, "stage_w": stage_w, "on_minutes": on_min,
+                    "advice": advice, "advice_say": advice_speech(advice) if advice else None})
                 thermal_log(st.get("mode"), cur_relay, cur_watt, cur_volt, t_ctl, delta,
                             floor_s, attic_s, cfg["preheat"].get("outdoor_sensor", ""))
             except Exception as e:

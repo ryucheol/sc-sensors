@@ -167,3 +167,25 @@ class Deadman(unittest.TestCase):
         self.assertIsNone(hc.deadman_action(False, None, None, dict(DM, enabled=False)))
     def test_fires_before_freeze(self):    # 30분: 외기 −19°C, 실내 3°C에서 냉각 ~2.4°C/h → 켜질 때 ~1.8°C
         self.assertLessEqual(DM["sec"], 1800)
+
+
+class TestStage(unittest.TestCase):
+    def test_detect(self):
+        self.assertEqual(hc.detect_stage(720), 1); self.assertEqual(hc.detect_stage(1086), 2)
+        self.assertEqual(hc.detect_stage(1775), 3); self.assertIsNone(hc.detect_stage(0)); self.assertIsNone(hc.detect_stage(2500))
+    def test_preheat_uses_measured_P(self):
+        # 1단(720W)이면 외기 0°C에서 T_eq=15°C → 목표 도달 불가 → 최대 선행
+        self.assertEqual(hc.preheat_lead_hours(CFG, 5, 0, 720), CFG["preheat"]["max_lead_hours"])
+        self.assertLess(hc.preheat_lead_hours(CFG, 5, 0, 1763), CFG["preheat"]["max_lead_hours"])
+    def test_advice_frost(self):
+        cfg = dict(CFG); cfg["stages"] = [720, 1102, 1763]
+        a = hc.stage_advice(cfg, "frost", 1, 720, -12, None, None, None, False, 0, False)   # T_eq=3.3<5
+        self.assertIn("동파 위험", a)
+        a = hc.stage_advice(cfg, "frost", 1, 720, 0, None, None, None, False, 0, False)
+        self.assertIn("예열 불가", a)
+        self.assertIsNone(hc.stage_advice(cfg, "frost", 3, 1763, 0, None, None, None, False, 0, False))
+    def test_advice_occupied(self):
+        cfg = dict(CFG); cfg["stages"] = [720, 1102, 1763]
+        a = hc.stage_advice(cfg, "comfort", 1, 720, None, 10, 22.4, 23.0, True, 75, True)
+        self.assertIn("출력 부족", a)
+        self.assertIsNone(hc.stage_advice(cfg, "comfort", 1, 720, None, 10, 23.2, 23.0, False, 0, False))

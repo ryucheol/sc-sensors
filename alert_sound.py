@@ -275,6 +275,7 @@ def loop():
     fhist = []                        # [(ts, t_floor)] 급락용(~20분)
     dropping = False; drop_base = None; drop_low = None; last_d = 0.0   # 급락: 시작점·최저점·반복시각
     stall_last = 0.0; fault_last = 0.0; hb_last = 0.0; gate_warned = False; prev_comfort = False
+    adv_last = None; adv_t = 0.0   # 단수 조언(heater_status.advice) 발화 추적
     heat_since = None; heat_tctl0 = None   # 난방 '시작' 시점·그때 온도(정체 판정 기준점)
     logline("서비스 시작")
     while True:
@@ -283,6 +284,14 @@ def loop():
             t = d["내부1층"]["temp"]; n = round(t); comfort = (st.get("mode") == "comfort")
             now = time.time(); fresh = floor_fresh(d, status)
             stat_fresh = (status is not None and status.get("_age", 1e9) <= FRESH_STATUS)
+            # (C) 히터 단수 조언: 제어기가 heater_status.advice 에 쓴 문장을 재실 모드에서만 말한다(30분 반복).
+            #     동파모드 조언(예열 불가 등)은 사람이 없으니 말하지 않고 히터점검·로그에서 보여준다.
+            adv = (status.get("advice") if stat_fresh else None)
+            if adv and st.get("mode") in ("comfort", "sleep") and (adv != adv_last or now - adv_t >= 1800):
+                say(status.get("advice_say") or adv); adv_last = adv; adv_t = now
+                logline("단수조언 발화: " + adv)
+            elif not adv:
+                adv_last = None
             # 이력 적재(신선할 때만)
             if fresh:
                 fhist.append((now, t)); fhist[:] = [x for x in fhist if now - x[0] <= 1200]
