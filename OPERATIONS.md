@@ -1,5 +1,8 @@
 # 운영 가이드 (OPERATIONS)
 
+> **2026-11-08 디렉토리 재편**: 스크립트는 `gateway/`·`heater/`·`alert/`·`weather/`·`sheets/`·`systemd/`·`scripts/` 아래로 옮겼다(데이터·설정·비밀 파일은 루트 그대로). 아래 본문의 파일명은 그 폴더 안에서 찾을 것. 구조는 [README §7](README.md#7-디렉토리와-파일).
+
+
 > 2026-11-07 기준. **설치 절차는 [PI_SETUP.md](PI_SETUP.md)**, 이 문서는 **구성 요약 + 운영 + 사이트 전환**.
 > 비밀값(SECRET·bindkey·핫스팟 비번·2차 /exec URL)은 이 문서에 쓰지 않는다(공개 저장소). `gateway.env`·`shelf.env`·`sensor_keys.json`·`shelf_keys.json`(모두 gitignore)에만 둔다.
 

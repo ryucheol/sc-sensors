@@ -4,7 +4,7 @@
    thermal_backfill.csv 를 만든다(thermal_log.csv 와 같은 열, 로거 투입 이전 구간용).
    relay/watt 는 히터 로그의 전환 이벤트로 복원(사이 구간은 마지막 상태 유지), 현황 줄의 W 로 보정."""
 import subprocess, re, csv, datetime, os
-BASE = os.path.dirname(os.path.abspath(__file__))
+BASE = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
 OUT = os.path.join(BASE, "thermal_backfill.csv")
 
 def journal(unit):

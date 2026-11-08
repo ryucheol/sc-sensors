@@ -4,7 +4,7 @@
    passive_gateway 의 decrypt_mibeacon/parse_objects 를 그대로 빌려 FE95 프레임을 복호화하고
    프레임(카운터)별 객체 종류·값·RSSI, 복제 수, 온도 도착 간격을 출력한다."""
 import sys, os, time, json, asyncio, statistics, collections
-sys.path.insert(0, os.path.expanduser("~/smart-cabin"))
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import passive_gateway as G
 from bleak import BleakScanner
 

@@ -10,7 +10,7 @@
 #   - 종료: Ctrl+C
 # =============================================================
 set -euo pipefail
-cd "$(dirname "$(readlink -f "$0")")"
+cd "$(dirname "$(readlink -f "$0")")/.."   # 저장소 루트(데이터·env 위치)
 
 export GW_MONITOR=1
-exec python3 passive_gateway.py "$@"
+exec python3 gateway/passive_gateway.py "$@"

@@ -28,7 +28,7 @@ from bleak import BleakScanner
 from cryptography.hazmat.primitives.ciphers.aead import AESCCM
 
 FE95 = "0000fe95-0000-1000-8000-00805f9b34fb"
-CFG = os.path.join(os.path.dirname(os.path.abspath(__file__)), "sensor_keys.json")
+CFG = os.path.join(os.path.dirname(os.path.dirname(os.path.realpath(__file__))), "sensor_keys.json")
 
 WEBAPP_URL = "https://script.google.com/macros/s/AKfycbzEJn5u4lIAJprA69xR_yRSEeRmk2I_qe_igsAlPqEq1umHdsNkykOcF_imW3Zj5s_Rzg/exec"
 SECRET = os.environ.get("FARMHUT_SECRET", "CHANGE-ME")

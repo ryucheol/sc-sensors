@@ -1,13 +1,11 @@
 @echo off
 chcp 65001 >nul
 REM ==============================================================
-REM  Farmhut CURRENT-value sync launcher (lightweight)
-REM   - Uses FARMHUT_SECRET. If not set, loads saved value from
-REM     user env (registry); if none, asks once and saves it.
-REM   - Works even in the same terminal (reads registry directly).
-REM   - Reads current values only (no history) -> fast.
-REM  Usage:  run_current_sync.bat            (update current tab)
-REM          run_current_sync.bat --dry-run  (read + time only)
+REM  Farmhut gateway launcher (Windows test)
+REM   - Loads FARMHUT_SECRET from session or saved user env (registry);
+REM     if none, asks once and saves it.
+REM   - Runs gateway/passive_gateway.py (continuous). Ctrl+C to stop.
+REM   - (On Raspberry Pi use systemd / farmhut-gateway.service instead.)
 REM ==============================================================
 setlocal
 
@@ -20,7 +18,7 @@ echo Saved. Future runs will not ask.
 
 :run
 set "PY=C:\Users\ryuch\AppData\Local\Programs\Python\Python39\python.exe"
-set "SCRIPT=%~dp0current_sync.py"
+set "SCRIPT=%~dp0..\gateway\passive_gateway.py"
 "%PY%" "%SCRIPT%" %*
-set "rc=%errorlevel%"
-endlocal & exit /b %rc%
+
+endlocal

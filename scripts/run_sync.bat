@@ -20,7 +20,7 @@ echo Saved. Future runs will not ask.
 
 :run
 set "PY=C:\Users\ryuch\AppData\Local\Programs\Python\Python39\python.exe"
-set "SCRIPT=%~dp0farmhut_sync.py"
+set "SCRIPT=%~dp0..\gateway\farmhut_sync.py"
 "%PY%" "%SCRIPT%" %*
 set "rc=%errorlevel%"
 endlocal & exit /b %rc%

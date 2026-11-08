@@ -29,7 +29,7 @@
 |---|---|---|---|
 | 2 | The problem | 동파·도착·오프라인 | [HEATER.md](HEATER.md) §개요 |
 | 3 | The cabin | 3층 구조, 센서 위치 | 센서표 §4, [docs/SENSOR_GUIDE.ko.md](docs/SENSOR_GUIDE.ko.md) |
-| 4 | Sense, think, act | 게이트웨이와 제어기는 파일 하나(`latest.json`)로만 결합 | `passive_gateway.py`, `heater_control.py` |
+| 4 | Sense, think, act | 게이트웨이와 제어기는 파일 하나(`latest.json`)로만 결합 | `gateway/passive_gateway.py`, `heater/heater_control.py` |
 | 5–6 | Network / Going online | 폰 핫스팟 → LTE(OpenWrt) → 광랜 | [NETWORK_MIGRATION.md](NETWORK_MIGRATION.md), [docs/WORKLOG_2026-11-08.ko.md](docs/WORKLOG_2026-11-08.ko.md) §6 |
 | 7 | Cheap sensors, quietly listening | 암호화 MiBeacon 복호화, 연결 없음, 1분 갱신 | `passive_gateway.py`, [docs/SENSOR_GUIDE.ko.md](docs/SENSOR_GUIDE.ko.md) |
 | 8 | Every reading lands in a Sheet | 시트 탭·store-and-forward | `Code.gs`, [OPERATIONS.md](OPERATIONS.md) |
@@ -85,22 +85,36 @@
 | **추가(2026-11)**: GL.iNet Mango(OpenWrt) $31 · Huawei E3372h-607 LTE 동글 ₩31,700 · 알뜰폰 유심 **월 1,900원** | |
 | pvvx 펌웨어, 기상청 API | 무료 |
 
-## 7. 파일 지도
+## 7. 디렉토리와 파일
 
-| 파일 | 역할 | 위치 |
+```
+smart-cabin/
+├─ gateway/   passive_gateway.py(게이트웨이) · passive_current.py · farmhut_sync.py · current_sync.py · verify_attic.py · verify_shelf.py · backfill_thermal.py
+├─ heater/    heater_control.py(제어기) · heater_cmd.py · heater_selftest.py · heater_probe.py · heater_sim.py · sim_*.py · test_heater_logic.py · heater_aliases.sh
+├─ alert/     alert_sound.py(음성 알림)
+├─ weather/   forecast_fetch.py(단기예보) · kma_obs_fetch.py(ASOS 관측)
+├─ sheets/    Code.gs(Apps Script v8)
+├─ systemd/   farmhut-gateway · heater-control · alert-sound · shelf-gateway .service
+├─ scripts/   run_*.bat / run_*.sh (PC·수동 실행 런처)
+├─ docs/      특강 PDF · 분석 문서 · 시뮬레이터
+├─ piper/     TTS 모델(예비)
+├─ index.html (폰 웹앱, GitHub Pages 루트라 이동 안 함) · heater_config.json · *.md
+└─ (루트, gitignore) latest.json · heater_state/status.json · *.csv · gateway_queue.db · sensor_keys.json · tuya_keys.json · gateway.env · kma.env
+```
+
+데이터·설정·비밀 파일은 **저장소 루트**에 둔다(스크립트는 `BASE`/`_HERE`로 루트를 가리킴). 루트의 `passive_gateway.py`·`heater_control.py`·`alert_sound.py`·`*.service`는 구경로 호환용 **심볼릭 링크**(기존 systemd 유닛·sudoers 규칙이 그 경로를 쓴다).
+
+| 파일 | 역할 | 실행 |
 |---|---|---|
-| `passive_gateway.py` | 게이트웨이: BLE 수신·복호화, `latest.json`, 시간 평균·이력·배터리·재실 큐 → 시트(store-and-forward) | Pi (`farmhut-gateway.service`) |
-| `heater_control.py` | 제어기: 모드·히스테리시스·예열·안전·단수 인식·조언·계측(`thermal_log.csv`) | Pi (`heater-control.service`, tuya-venv) |
-| `alert_sound.py` | 음성 알림(문 여닫기·고장·정체·단수 조언) | Pi (`alert-sound.service`) |
-| `heater_cmd.py` / `heater_selftest.py` | 모드 명령 / 떠나기 전 자가점검 | Pi |
-| `forecast_fetch.py` / `kma_obs_fetch.py` | 기상청 단기예보(매시) / ASOS 관측(매시 15분) | Pi cron |
-| `backfill_thermal.py` / `verify_attic.py` / `verify_shelf.py` | 로그 복원 / 센서 검증 도구 | Pi |
-| `test_heater_logic.py` / `heater_sim.py` | 순수 로직 단위테스트(61) / 시뮬레이터 | 어디서나 |
-| `Code.gs` | Apps Script 웹앱 **v8**: current/avg/hist/batt/**presence**, 배터리 예상일 | 시트 |
-| `index.html` · `farmhut_sync.py` · `current_sync.py` | 폰 웹앱(Web Bluetooth) · PC 동기화(연결) — 초기 경로, 지금은 보조 | GitHub Pages · PC |
-| `heater_config.json` | 임계값·예열·단수·이중화·데드맨 설정(즉시 반영) | Pi |
-| `sensor_keys.json` · `tuya_keys.json` · `gateway.env` · `kma.env` | **비밀 · gitignore** | Pi |
-| `thermal_log.csv` · `kma_obs.csv` · `forecast_hist.csv` · `thermal_backfill.csv` | 열모델 학습 원시 로그(**로컬 · gitignore**) | Pi |
+| `gateway/passive_gateway.py` | BLE 수신·복호화, `latest.json`, 시간 평균·이력·배터리·재실 큐 → 시트(store-and-forward) | `farmhut-gateway.service` |
+| `heater/heater_control.py` | 모드·히스테리시스·예열·안전·단수 인식·조언·계측(`thermal_log.csv`) | `heater-control.service` (tuya-venv) |
+| `alert/alert_sound.py` | 음성 알림(문 여닫기·고장·정체·단수 조언) | `alert-sound.service` |
+| `heater/heater_cmd.py` / `heater/heater_selftest.py` | 모드 명령(`난방`·`취침`·`동파`) / 떠나기 전 자가점검(`히터점검`) | 별칭 `heater/heater_aliases.sh` |
+| `weather/forecast_fetch.py` / `weather/kma_obs_fetch.py` | 기상청 단기예보(매시 10분) / ASOS 관측(매시 15분) | cron |
+| `heater/test_heater_logic.py` | 순수 로직 단위테스트 61개 — `cd heater && python3 -m unittest test_heater_logic` | 어디서나 |
+| `sheets/Code.gs` | Apps Script 웹앱 v8: current/avg/hist/batt/presence, 배터리 예상일 | 시트에 붙여넣기 |
+| `index.html` · `gateway/farmhut_sync.py` · `gateway/current_sync.py` | 폰 웹앱(Web Bluetooth) · PC 동기화 — 초기 경로, 지금은 보조 | GitHub Pages · PC |
+| `heater_config.json` | 임계값·예열·단수·이중화·데드맨 설정(즉시 반영) | 루트 |
 
 ## 8. 구글시트 탭
 

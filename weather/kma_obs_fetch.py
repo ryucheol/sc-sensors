@@ -5,7 +5,7 @@
    cron 매시 15분. 최근 6시간을 받아 tm 기준 멱등 append. 인증키는 kma.env(KMA_AUTH_KEY) — 출력·로그에 찍지 않음."""
 import os, sys, csv, datetime, urllib.request, urllib.parse
 
-BASE = os.path.dirname(os.path.abspath(__file__))
+BASE = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
 OUT = os.path.join(BASE, "kma_obs.csv")
 URL = "https://apihub.kma.go.kr/api/typ01/url/kma_sfctm3.php"
 STN_MAIN, STN_SI = "236", "133"

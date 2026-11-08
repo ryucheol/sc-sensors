@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """heater_control 순수 판단 로직 테스트 (tinytuya·하드웨어 불필요).  실행: python3 -m unittest -v test_heater_logic"""
-import json, datetime, unittest
+import json, os, datetime, unittest
 import heater_control as hc
 
-CFG = json.load(open("heater_config.json", encoding="utf-8"))
+CFG = json.load(open(os.path.join(os.path.dirname(os.path.dirname(os.path.realpath(__file__))), "heater_config.json"), encoding="utf-8"))
 FRI = datetime.datetime(2026, 11, 6)   # 금요일(weekday 4)
 assert FRI.weekday() == 4
 

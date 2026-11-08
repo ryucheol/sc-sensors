@@ -1,17 +1,1 @@
-[Unit]
-Description=Farmhut passive BLE gateway
-After=bluetooth.service network-online.target
-Wants=bluetooth.service network-online.target
-
-[Service]
-Type=simple
-User=ryuch
-WorkingDirectory=/home/ryuch/smart-cabin
-EnvironmentFile=/home/ryuch/smart-cabin/gateway.env
-ExecStartPre=+/usr/sbin/rfkill unblock bluetooth
-ExecStart=/usr/bin/python3 /home/ryuch/smart-cabin/passive_gateway.py
-Restart=always
-RestartSec=10
-
-[Install]
-WantedBy=multi-user.target
+systemd/farmhut-gateway.service

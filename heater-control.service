@@ -1,15 +1,1 @@
-[Unit]
-Description=Farmhut heater frost/comfort control (Tuya plug via tinytuya)
-After=farmhut-gateway.service network-online.target
-Wants=farmhut-gateway.service
-
-[Service]
-Type=simple
-User=ryuch
-WorkingDirectory=/home/ryuch/smart-cabin
-ExecStart=/home/ryuch/tuya-venv/bin/python /home/ryuch/smart-cabin/heater_control.py
-Restart=always
-RestartSec=10
-
-[Install]
-WantedBy=multi-user.target
+systemd/heater-control.service

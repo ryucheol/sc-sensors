@@ -10,6 +10,6 @@ REM ==============================================================
 setlocal
 set "GW_MONITOR=1"
 set "PY=C:\Users\ryuch\AppData\Local\Programs\Python\Python39\python.exe"
-set "SCRIPT=%~dp0passive_gateway.py"
+set "SCRIPT=%~dp0..\gateway\passive_gateway.py"
 "%PY%" "%SCRIPT%" %*
 endlocal

@@ -6,7 +6,7 @@
    ※ 이 플러그는 켠 뒤 ~12초쯤 지나야 전력을 보고함 → 전력 잡히면 즉시 PASS,
      안 잡히면 최대초까지 기다렸다 판정. 전압은 있는데 전류만 0이면 플러그 정상·히터쪽 문제."""
 import os, sys, json, time, tinytuya
-sys.path.insert(0, os.path.expanduser("~/smart-cabin"))
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import heater_control as hc   # 순수 함수만 사용(detect_stage·stage_advice·forecast_min_temp)
 
 BASE = os.path.expanduser("~/smart-cabin")

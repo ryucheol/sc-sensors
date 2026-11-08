@@ -1,0 +1,13 @@
+[Unit]
+Description=Cabin overheat voice alert (3.5mm jack, comfort mode)
+After=farmhut-gateway.service
+
+[Service]
+Type=simple
+User=ryuch
+ExecStart=/home/ryuch/piper-venv/bin/python /home/ryuch/smart-cabin/alert/alert_sound.py
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

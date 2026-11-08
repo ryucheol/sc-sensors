@@ -10,7 +10,7 @@
 #   - 종료: Ctrl+C
 # =============================================================
 set -euo pipefail
-cd "$(dirname "$(readlink -f "$0")")"
+cd "$(dirname "$(readlink -f "$0")")/.."   # 저장소 루트(데이터·env 위치)
 
 # 환경파일 로드 (기본 gateway.env, 1번째 인자로 지정 가능)
 ENVF="${1:-gateway.env}"
@@ -24,4 +24,4 @@ if [ -z "${FARMHUT_SECRET:-}" ]; then
   exit 2
 fi
 
-exec python3 passive_gateway.py "$@"
+exec python3 gateway/passive_gateway.py "$@"
