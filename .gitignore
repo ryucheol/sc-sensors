@@ -51,3 +51,4 @@ thermal_log.csv
 kma_obs.csv
 forecast_hist.csv
 thermal_backfill.csv
+fan_on

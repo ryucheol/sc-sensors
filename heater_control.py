@@ -25,12 +25,13 @@ def thermal_log(mode, relay, watt, volt, t_ctl, delta, floor_s, attic_s, out_s):
             v = lat.get(s, {}).get(k) if s else None
             return "" if v is None else v
         new = not os.path.exists(THERMAL_CSV)
+        fan = 1 if os.path.exists(os.path.join(BASE, "fan_on")) else 0   # 수동 플래그: touch fan_on / rm fan_on
         with open(THERMAL_CSV, "a") as f:
             if new: f.write(_THERMAL_COLS)
-            f.write("%s,%s,%d,%.0f,%.0f,%s,%s,%s,%s,%s,%s,%s,%.2f,\n" % (
+            f.write("%s,%s,%d,%.0f,%.0f,%s,%s,%s,%s,%s,%s,%s,%.2f,%d\n" % (
                 stamp(), mode or "", 1 if relay else 0, watt or 0, volt or 0,
                 g(floor_s, "temp"), g(floor_s, "hum"), g(attic_s, "temp"), g(attic_s, "hum"),
-                g(out_s, "temp"), g(out_s, "hum"), "" if t_ctl is None else t_ctl, delta))
+                g(out_s, "temp"), g(out_s, "hum"), "" if t_ctl is None else t_ctl, delta, fan))
     except Exception:
         pass
 
