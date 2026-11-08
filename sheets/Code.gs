@@ -8,6 +8,7 @@
  *   (구버전이 배포돼 있으면 version 이 다르거나 없음 → 다시 붙여넣고 새 버전 배포)
  *
  * 변경 이력:
+ *   v9 (2026-11-08) '명령' 탭 원격 명령 — Pi가 매분 mode:cmd_pull 로 B(상태) 빈 행을 받아 실행하고 mode:cmd_ack 로 결과 기록. onEdit 가 입력시각 스탬프
  *   v8 (2026-11-08) mode:presence — 게이트웨이 재실 자동기록(도착=핫스팟 등장/난방·취침 명령, 출발=동파 명령)을 '재실기록' 탭에 기록
  *   v7 (2026-11-08) 배터리 예상일 재작성: pvvx 전압눈금(2.2V=0%,3.1V=100%) 전제, 종료 2.6V(44%),
  *                   전지교체·펌웨어전환 불연속(>8%p)에서 추세창 재시작, CR2032 방전곡선 추정과 추세 추정 중
@@ -26,13 +27,14 @@
  * 특징: 중복 제거를 서버에서 처리(멱등). 중복 기준 (센서, 정시 버킷). 시각은 실제 날짜값으로 저장.
  */
 
-var CODE_VERSION = '2026-11-08 v8';   // ← /exec(doGet) 응답·붙여넣기 확인용. 고칠 때마다 갱신.
+var CODE_VERSION = '2026-11-08 v9';   // ← /exec(doGet) 응답·붙여넣기 확인용. 고칠 때마다 갱신.
 var SITE = '농막';                 // ← 장소 접두사. 두 번째 시트(예: 선반)는 '선반' 으로만 바꾸면 됨
 var SECRET = 'CHANGE-ME';          // ← 게이트웨이의 FARMHUT_SECRET 과 동일하게
 var SHEET_NAME = SITE + '_시간별';
 var CURRENT_SHEET = SITE + '_현재';   // 현재값 스냅샷(센서별 1행, 덮어쓰기)
 var AVG_SHEET = SITE + '_평균';       // 게이트웨이가 passive로 계산한 시간가중 평균(파생값)
 var BATT_SHEET = SITE + '_배터리';    // 배터리 전압·% 이력(수명 추세 → 현재 탭 예상 소진일)
+var CMD_SHEET = '명령';           // A 명령(사람 입력) B 상태 C 처리시각 D 결과 E 입력시각. Pi(heater/sheet_cmd_poll.py)가 매분 폴링
 var PRESENCE_SHEET = '재실기록';      // A도착 B출발(빈칸=체류 중) C메모. 게이트웨이 mode:presence 가 자동 기록
 // 컬럼: A시각 B센서 C최고온도 D최저온도 E최고습도 F최저습도 G센서idx H업로드시각
 
@@ -359,6 +361,94 @@ function _postPresence(body) {
   return _json({ ok: true, mode: 'presence', added: added, closed: closed, skipped: skipped });
 }
 
+// ── 원격 명령('명령' 탭) ───────────────────────────────────────
+// 사람이 A열에 "도착 내일 16:00" / "난방" / "동파" / "취침" / "상태" / "점검" 을 적으면
+// Pi 가 매분 cmd_pull 로 가져가 실행하고 cmd_ack 로 B 상태·C 처리시각·D 결과를 채운다.
+var CMD_HEADER = ['명령', '상태', '처리시각', '결과', '입력시각'];
+var CMD_NOTE = '여기에 명령을 적으면 농막 Pi가 1분 안에 실행하고 B~D에 결과를 씁니다.\n' +
+  '난방 | 동파 | 취침 | 도착 16:00 | 도착 내일 07:00 | 도착 2026-11-14 20:00 24 | 도착 취소 | 상태 | 점검\n' +
+  '입력 후 12시간이 지나도록 Pi가 못 받으면 "만료"로 표시되고 실행하지 않습니다.';
+var CMD_EXAMPLES = [
+  ['명령 예시 (복사해서 A열에 붙여넣기)', '설명'],
+  ['상태', '현재 모드·실내온도·히터 ON/단수·오늘 kWh·도착예약 한 줄'],
+  ['난방', '도착했을 때. 1층 기준 ON 23 / OFF 23.5'],
+  ['난방 25', '임시 목표 25°C (OFF는 +0.5)'],
+  ['동파', '떠날 때. 3 / 5°C 유지, 재실기록에 출발 기록'],
+  ['취침', '다락 센서 기준 20 / 21°C'],
+  ['취침 19', '다락 기준 ON 19°C'],
+  ['도착 16:00', '오늘 16:00에 23°C가 되도록 자동 시작 (지났으면 내일)'],
+  ['도착 내일 07:00', '내일 07:00 도착'],
+  ['도착 모레 20:00', '모레 20:00 도착'],
+  ['도착 2026-11-14 20:00', '날짜 지정'],
+  ['도착 16:00 24', '목표 24°C로 도착'],
+  ['도착 취소', '도착 예약 해제'],
+  ['점검', '히터 자가점검(플러그 5초 ON → 전력·단수 확인). 체류 중 사용']
+];
+function _cmdSheet() {
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var sh = ss.getSheetByName(CMD_SHEET);
+  if (!sh) {
+    sh = ss.insertSheet(CMD_SHEET);
+    sh.getRange(1, 1, 1, CMD_HEADER.length).setValues([CMD_HEADER]).setFontWeight('bold');
+    sh.setFrozenRows(1);
+    sh.setColumnWidth(1, 220); sh.setColumnWidth(2, 60); sh.setColumnWidth(3, 140); sh.setColumnWidth(4, 520); sh.setColumnWidth(5, 140);
+    sh.getRange(1, 1).setNote(CMD_NOTE);
+    sh.getRange('C:C').setNumberFormat('MM-dd HH:mm'); sh.getRange('E:E').setNumberFormat('MM-dd HH:mm');
+    sh.getRange('D:D').setWrap(true);
+    // G:H 명령 예시(복사해서 A열에 붙여넣기)
+    sh.getRange(1, 7, CMD_EXAMPLES.length, 2).setValues(CMD_EXAMPLES);
+    sh.getRange(1, 7, 1, 2).setFontWeight('bold');
+    sh.getRange(2, 7, CMD_EXAMPLES.length - 1, 1).setBackground('#f2f2f2').setFontFamily('Roboto Mono');
+    sh.setColumnWidth(6, 30); sh.setColumnWidth(7, 200); sh.setColumnWidth(8, 420);
+  }
+  return sh;
+}
+// Pi → 대기 중(B 빈칸) 행 목록. 입력시각(E)이 비어 있으면 지금으로 채움(onEdit 가 못 찍은 경우).
+function _cmdPull(body) {
+  var sh = _cmdSheet();
+  var last = sh.getLastRow();
+  var out = [];
+  if (last >= 2) {
+    var vals = sh.getRange(2, 1, last - 1, 5).getValues();
+    var now = new Date();
+    for (var i = 0; i < vals.length && out.length < 20; i++) {
+      var cmd = String(vals[i][0] || '').trim();
+      if (!cmd || String(vals[i][1] || '').trim()) continue;
+      var ent = vals[i][4];
+      if (!(ent instanceof Date)) { ent = now; sh.getRange(i + 2, 5).setValue(now); }
+      out.push({ row: i + 2, cmd: cmd, entered_ms: ent.getTime() });
+    }
+  }
+  return _json({ ok: true, mode: 'cmd_pull', commands: out });
+}
+// Pi → 실행 결과. acks=[{row, status, result, done_ms}]
+function _cmdAck(body) {
+  var sh = _cmdSheet();
+  var acks = body.acks || [];
+  var n = 0;
+  for (var i = 0; i < acks.length; i++) {
+    var a = acks[i]; var row = Number(a.row);
+    if (!(row >= 2)) continue;
+    var done = a.done_ms ? new Date(Number(a.done_ms)) : new Date();
+    sh.getRange(row, 2, 1, 3).setValues([[String(a.status || '완료'), done, String(a.result || '')]]);
+    n++;
+  }
+  return _json({ ok: true, mode: 'cmd_ack', updated: n });
+}
+// 단순 트리거: '명령' 탭 A열에 새로 적으면 입력시각(E) 스탬프, 상태(B) 비움
+function onEdit(e) {
+  try {
+    var r = e && e.range; if (!r) return;
+    var sh = r.getSheet(); if (sh.getName() !== CMD_SHEET) return;
+    if (r.getColumn() !== 1 || r.getRow() < 2) return;
+    for (var i = 0; i < r.getNumRows(); i++) {
+      var row = r.getRow() + i;
+      var v = String(sh.getRange(row, 1).getValue() || '').trim();
+      if (v) { sh.getRange(row, 5).setValue(new Date()); sh.getRange(row, 2, 1, 3).clearContent(); }
+    }
+  } catch (err) {}
+}
+
 function doPost(e) {
   var lock = LockService.getScriptLock();
   lock.waitLock(30000);
@@ -372,6 +462,8 @@ function doPost(e) {
     if (body.mode === 'hist') return _postHist(body);
     if (body.mode === 'batt') return _postBatt(body);
     if (body.mode === 'presence') return _postPresence(body);
+    if (body.mode === 'cmd_pull') return _cmdPull(body);
+    if (body.mode === 'cmd_ack') return _cmdAck(body);
     var sensor = String(body.sensor || '').trim();
     var records = body.records || [];
     if (!sensor || !records.length) return _json({ ok: true, added: 0, skipped: 0, note: 'empty' });

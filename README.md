@@ -109,16 +109,17 @@ smart-cabin/
 | `gateway/passive_gateway.py` | BLE 수신·복호화, `latest.json`, 시간 평균·이력·배터리·재실 큐 → 시트(store-and-forward) | `farmhut-gateway.service` |
 | `heater/heater_control.py` | 모드·히스테리시스·예열·안전·단수 인식·조언·계측(`thermal_log.csv`) | `heater-control.service` (tuya-venv) |
 | `alert/alert_sound.py` | 음성 알림(문 여닫기·고장·정체·단수 조언) | `alert-sound.service` |
-| `heater/heater_cmd.py` / `heater/heater_selftest.py` | 모드 명령(`난방`·`취침`·`동파`) / 떠나기 전 자가점검(`히터점검`) | 별칭 `heater/heater_aliases.sh` |
+| `heater/heater_cmd.py` / `heater/heater_selftest.py` | 모드 명령(`난방`·`취침`·`동파`·`도착 HH:MM`) / 떠나기 전 자가점검(`히터점검`) | 별칭 `heater/heater_aliases.sh` |
+| `heater/sheet_cmd_poll.py` | 시트 `명령` 탭 폴링 → 같은 명령을 원격 실행, 결과 기록 | cron 매분 |
 | `weather/forecast_fetch.py` / `weather/kma_obs_fetch.py` | 기상청 단기예보(매시 10분) / ASOS 관측(매시 15분) | cron |
 | `heater/test_heater_logic.py` | 순수 로직 단위테스트 61개 — `cd heater && python3 -m unittest test_heater_logic` | 어디서나 |
-| `sheets/Code.gs` | Apps Script 웹앱 v8: current/avg/hist/batt/presence, 배터리 예상일 | 시트에 붙여넣기 |
+| `sheets/Code.gs` | Apps Script 웹앱 v9: current/avg/hist/batt/presence/cmd_pull/cmd_ack, 배터리 예상일, `명령` 탭 onEdit | 시트에 붙여넣기 |
 | `index.html` · `gateway/farmhut_sync.py` · `gateway/current_sync.py` | 폰 웹앱(Web Bluetooth) · PC 동기화 — 초기 경로, 지금은 보조 | GitHub Pages · PC |
 | `heater_config.json` | 임계값·예열·단수·이중화·데드맨 설정(즉시 반영) | 루트 |
 
 ## 8. 구글시트 탭
 
-`농막_현재`(센서별 1행 + 배터리 예상일) · `농막_시간별`(권위 min/max) · `농막_평균`(passive 시간가중) · `농막_배터리` · `재실기록`(자동) · `농막_그래프` · `최근5일_시간별`(부여 기상 비교). 업로드는 `/exec`(Apps Script) 한 곳, 중복제거는 서버가 `(센서, 정시)`로.
+`농막_현재`(센서별 1행 + 배터리 예상일) · `농막_시간별`(권위 min/max) · `농막_평균`(passive 시간가중) · `농막_배터리` · `재실기록`(자동) · `명령`(A열에 `도착 내일 16:00`·`난방`·`동파`·`상태` 등을 적으면 Pi가 1분 내 실행, B~D에 결과 — [HEATER.md §명령](HEATER.md#명령--별칭-pi-ssh-셸)) · `농막_그래프` · `최근5일_시간별`(부여 기상 비교). 업로드는 `/exec`(Apps Script) 한 곳, 중복제거는 서버가 `(센서, 정시)`로.
 
 ## 9. 보안
 

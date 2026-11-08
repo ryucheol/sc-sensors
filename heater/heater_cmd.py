@@ -12,7 +12,8 @@
      heater_cmd.py 도착 16:00            # 오늘(지났으면 내일) 16:00에 23°C가 되도록 자동 시작(예보·실측 단 W로 역산)
      heater_cmd.py 도착 내일 07:00       # 내일 07:00  /  도착 2026-11-14 20:00  /  도착 16:00 24(목표 24°C)
      heater_cmd.py 도착 취소
-   제어 루프가 다음 주기(<=poll_sec)에 반영."""
+   제어 루프가 다음 주기(<=poll_sec)에 반영.
+   같은 명령을 구글 시트 '명령' 탭 A열에 적어도 됨(heater/sheet_cmd_poll.py 가 매분 폴링, Code.gs v9)."""
 import sys, os, json, time, datetime
 sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
 
