@@ -133,6 +133,22 @@ def main():
     with open(tmp, "w") as f:
         json.dump(out, f, ensure_ascii=False)
     os.replace(tmp, OUT)
+    try:   # 예보 이력(forecast_hist.csv): 같은 발표분(base)은 한 번만. 열모델 학습·예보 채점용.
+        hist = OUT.replace("forecast.json", "forecast_hist.csv")
+        base = out["base"]; seen = False
+        if os.path.exists(hist):
+            with open(hist) as f:
+                for line in f:
+                    if line.startswith(base + ","): seen = True; break
+        if not seen:
+            newf = not os.path.exists(hist)
+            with open(hist, "a") as f:
+                if newf: f.write("base,dt,tmp,sky,pty,pop,reh,wsd\n")
+                for r in rows:
+                    f.write("%s,%s,%s,%s,%s,%s,%s,%s\n" % (base, r["dt"], r.get("tmp", ""), r.get("sky", ""),
+                            r.get("pty", ""), r.get("pop", ""), r.get("reh", ""), r.get("wsd", "")))
+    except Exception as e:
+        print("forecast_hist 기록 실패: %s" % e, file=sys.stderr)
 
     tmn = min((v["tmn"] for v in daily.values() if "tmn" in v), default=None)
     print("저장 %s — 발표 %s, %d시간(%s~%s), 일최저 %s°C"

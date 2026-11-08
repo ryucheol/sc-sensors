@@ -45,3 +45,9 @@ alert_open.wav
 alert_close.wav
 tts_cache/
 alert.log
+
+# 열모델 학습 원시 로그(로컬 보관)
+thermal_log.csv
+kma_obs.csv
+forecast_hist.csv
+thermal_backfill.csv

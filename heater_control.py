@@ -14,6 +14,25 @@ LATEST = os.path.join(BASE, "latest.json")
 LOG    = os.path.join(BASE, "heater.log")
 STATUS = os.path.join(BASE, "heater_status.json")    # 계측·전력량·고장 스냅샷(서비스만 기록, 제어상태와 분리)
 ENERGY_CSV = os.path.join(BASE, "heater_energy.csv") # 시간별 열모델 원시데이터(오프라인 UA/C 피팅용)
+THERMAL_CSV = os.path.join(BASE, "thermal_log.csv")  # 1분 열모델 원시데이터(2노드 그레이박스 학습용, gitignore)
+_THERMAL_COLS = "ts,mode,relay,watt,volt,t1,h1,t2,h2,to,ho,t_ctl,delta,fan\n"
+
+def thermal_log(mode, relay, watt, volt, t_ctl, delta, floor_s, attic_s, out_s):
+    """1분마다 한 줄: 센서 3개 온·습도 + 히터 상태. 학습은 오프라인(scp 후 피팅). 실패해도 제어엔 무영향."""
+    try:
+        lat = load(LATEST, {}) or {}
+        def g(s, k):
+            v = lat.get(s, {}).get(k) if s else None
+            return "" if v is None else v
+        new = not os.path.exists(THERMAL_CSV)
+        with open(THERMAL_CSV, "a") as f:
+            if new: f.write(_THERMAL_COLS)
+            f.write("%s,%s,%d,%.0f,%.0f,%s,%s,%s,%s,%s,%s,%s,%.2f,\n" % (
+                stamp(), mode or "", 1 if relay else 0, watt or 0, volt or 0,
+                g(floor_s, "temp"), g(floor_s, "hum"), g(attic_s, "temp"), g(attic_s, "hum"),
+                g(out_s, "temp"), g(out_s, "hum"), "" if t_ctl is None else t_ctl, delta))
+    except Exception:
+        pass
 
 def now(): return time.time()
 def stamp(): return datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -370,6 +389,8 @@ def main():
                     "sensor_ok": {floor_s: (not stale), **({attic_s: at_ok} if attic_s else {})},
                     "delta_attic_floor": round(delta, 2),
                     "deadman_armed": bool(dm_armed_ts), "countdown_s": cur_cd})
+                thermal_log(st.get("mode"), cur_relay, cur_watt, cur_volt, t_ctl, delta,
+                            floor_s, attic_s, cfg["preheat"].get("outdoor_sensor", ""))
             except Exception as e:
                 log("계측 오류: %s" % e)
         except Exception as e:
