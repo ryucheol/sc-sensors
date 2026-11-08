@@ -17,7 +17,9 @@ Xiaomi LYWSD03MMC 온습도 센서를 라즈베리파이(`passive_gateway.py`)�
 ## 2. 현재 상태 (2026-11-07)
 - Pi는 **농막**에 있고 **`farmhut-gateway` 상주(active+enabled)**, `shelf-gateway`는 disabled. 난방 제어(`heater-control`)·음성 알림(`alert-sound`) 함께 상주.
 - **센서 3개 모두 pvvx v5.9**(Mi 암호화, 광고 5 s/측정 20 s, 온도 ~1분 갱신, `sensor_keys.json` 전부 `"history": false`). HW: 다락 B1.6, 1층·바닥 B1.5. 절차·검증·예측제어 검토는 [docs/PVVX_B16_FLASH.ko.md](docs/PVVX_B16_FLASH.ko.md).
-- 배터리(2026-11-08 pvvx 실측): 다락 96%, 1층 71%, 바닥 67%(1월 구입 둘은 2.7 V대). `농막_배터리`에 매시간 실제 %가 쌓이므로 60% 아래 기울기를 보고 교체.
+- 배터리(2026-11-08 pvvx 실측): 다락 96%, 1층 71%, 바닥 67%. pvvx %는 전압 눈금(2.2 V=0, 3.1 V=100)이라 **2.6 V(44%)가 교체 기준**. 전압곡선 추정 수명: 1층 ≈2027-07, 바닥 ≈2027-06, 다락 2028+. 시트 `농막_현재` H열 예상일은 Code.gs **v7 재배포 후** 유효.
+- 열모델 학습 로그(11-08~): `heater_control`이 `thermal_log.csv` 1분 기록, cron `15 * * * * kma_obs_fetch.py`(기상청 관측), `forecast_fetch.py`가 `forecast_hist.csv` 누적. 전부 로컬·gitignore. 첫 피팅 11-15, 신뢰 피팅 11-29 — [docs/THERMAL_MODEL.ko.md](docs/THERMAL_MODEL.ko.md).
+- 드리프트 실측(11-08): 1층 오버슈트 +0.40 → +0.10, 언더슈트 −0.30 → −0.10, 스윙 1.1 → 0.7 (PVVX 문서 13절). 다락 성층(격차 3°C) 시 선풍기로 분배.
 - 선반 센서는 2026-10-27 이후 침묵(배터리 추정).
 - 두 시트의 Apps Script **Code.gs = v5**(`/exec` 열면 `{"version":"2026-10-27 v5", "site":...}`로 확인).
 - 폰 핫스팟 자동접속(아래 3-D) 검증 완료.
