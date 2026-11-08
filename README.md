@@ -1,6 +1,6 @@
 # Smart Cabin — A Cabin That Keeps Itself Warm
 
-**[📑 Talk slides (PDF, 18 pages, English)](docs/smart-cabin-talk.pdf)** · 라오스 대학생 특강 "A Cabin That Keeps Itself Warm" (RYU Cheol, ETRI, Nov 2026)
+**[📑 Talk slides (PDF, 18 pages, English)](docs/smart-cabin-talk.pdf)** · iATER 특강 "A Cabin That Keeps Itself Warm" (RYU Cheol, ETRI, Nov 2026)
 
 > **For students:** this repository is the real system behind the talk. A small farm cabin in Korea is empty most of the winter. A Raspberry Pi listens to three cheap Bluetooth thermometers, decides whether a heater should run, switches it through a smart plug — with no internet needed for the decision — and logs everything to a Google Sheet when a connection exists. Total hardware about **US$150**. Every slide below points to the code or document that implements it. Start with the PDF, then follow the table in §2.
 
