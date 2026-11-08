@@ -48,7 +48,9 @@ AVG_BUCKET = float(os.environ.get("GW_AVG_BUCKET", 3600))               # 시간
 AVG_CHECK = 20.0                                                        # 버킷 경계 점검 간격(초)
 BEACON_LOG = os.environ.get("GW_BEACON_LOG", "change").lower()          # 수신 로그: change(값 바뀔 때만, 기본)|all(반복까지 모두)|off
 HUMI_DEADBAND = float(os.environ.get("GW_HUMI_DEADBAND", 1.0))          # 습도 데드밴드(%): 마지막 '변화'값 대비 이 미만이면 변화로 안 침(로그·업로드 트리거만. 평균은 전 샘플 사용)
-MONITOR = os.environ.get("GW_MONITOR", "0").lower() in ("1", "true", "yes", "on")   # 모니터(읽기전용): 수신 로그만, 서버 업로드·센서 연결 없음
+MONITOR = os.environ.get("GW_MONITOR", "0").lower() in ("1", "true", "yes", "on")
+PRESENCE_SSID = os.environ.get("GW_PRESENCE_SSID", "Ryuspot")   # 이 SSID(폰 핫스팟)에 붙으면 재실로 봄. 빈 문자열이면 재실 기록 끔
+PRESENCE_ABSENT_MIN = float(os.environ.get("GW_PRESENCE_ABSENT_MIN", 240))  # 동파 명령 없이 핫스팟만 사라진 경우 이 분이 지나면 출발(추정)로 기록   # 모니터(읽기전용): 수신 로그만, 서버 업로드·센서 연결 없음
 SCAN_TIMEOUT = 15.0
 IDLE_TIMEOUT = 10.0
 OVERLAP = 2
@@ -218,6 +220,10 @@ def post_batt(readings):
     return _post({"secret": SECRET, "mode": "batt", "readings": readings})
 
 
+def post_presence(events):
+    return _post({"secret": SECRET, "mode": "presence", "events": events})
+
+
 # ── store-and-forward 로컬 큐 (오프라인/재부팅/정전에도 무손실) ──
 # 농막은 인터넷이 방문 때만(폰 테더링). 모든 데이터를 로컬 SQLite에 영구 저장해 두고,
 # 인터넷이 있을 때만 시트로 보낸다(센서엔 다시 안 묻는다).
@@ -232,6 +238,7 @@ def q_connect():
     db.execute("CREATE TABLE IF NOT EXISTS hist_q ("
                "time_ms INTEGER, sensor TEXT, maxT REAL, minT REAL, maxH REAL, minH REAL, "
                "src TEXT, sent INTEGER DEFAULT 0, PRIMARY KEY(time_ms, sensor))")
+    db.execute("CREATE TABLE IF NOT EXISTS pres_q (time_ms INTEGER, kind TEXT, note TEXT, sent INTEGER DEFAULT 0, PRIMARY KEY(time_ms, kind))")  # 재실 도착/출발 이벤트
     db.execute("CREATE TABLE IF NOT EXISTS batt_q ("    # 배터리 이력(수명 추세·예상 소진일용)
                "time_ms INTEGER, sensor TEXT, volt REAL, pct INTEGER, sent INTEGER DEFAULT 0, "
                "PRIMARY KEY(time_ms, sensor))")
@@ -721,6 +728,77 @@ async def passive_loop(cfg, latest, avg_state, dirty, box, lock):
             await asyncio.sleep(10)
 
 
+PRESENCE_STATE = os.path.join(_HERE, "presence_state.json")
+HEATER_STATE = os.path.join(_HERE, "heater_state.json")
+
+
+def _pres_note(latest, mode):
+    t1 = latest.get("내부1층", {}).get("temp"); to = latest.get("바닥외부", {}).get("temp")
+    lab = {"comfort": "난방", "sleep": "취침", "frost": "동파"}.get(mode, mode or "")
+    parts = ["자동기록"]
+    if t1 is not None: parts.append("1층 %s℃" % t1)
+    if to is not None: parts.append("외기 %s℃" % to)
+    if lab: parts.append("모드 %s" % lab)
+    return " · ".join(parts)
+
+
+def _pres_send(db):
+    rows = db.execute("SELECT time_ms, kind, note FROM pres_q WHERE sent=0 ORDER BY time_ms").fetchall()
+    if not rows or not online(): return
+    try:
+        res = post_presence([{"time_ms": t, "kind": k, "note": n} for t, k, n in rows])
+        if res.get("mode") != "presence":
+            log("[재실] ⚠ Code.gs 재배포 필요(mode:presence) — 로컬 보관"); return
+        db.executemany("UPDATE pres_q SET sent=1 WHERE time_ms=? AND kind=?", [(t, k) for t, k, _ in rows]); db.commit()
+        log("[재실] 전송 %d (%s)" % (len(rows), ", ".join("%s %s" % (k, time.strftime("%m-%d %H:%M", time.localtime(t / 1000))) for t, k, _ in rows)))
+    except Exception as e:
+        log("[재실] 업로드 오류(로컬 보관): %s" % e)
+
+
+async def presence_task(latest, db):
+    """재실 자동기록. 도착 = 폰 핫스팟(PRESENCE_SSID) 등장 또는 난방/취침 명령.
+       출발 = 동파 명령(명령 시각으로 기록). 동파 명령 없이 핫스팟만 PRESENCE_ABSENT_MIN 이상 사라지면 마지막 접속 시각으로 출발(추정).
+       검증: 저널의 핫스팟 업로드 구간이 수동 재실기록(11-01 13:00~11-02 08:57, 11-06 19:25~)과 분 단위로 일치."""
+    if not PRESENCE_SSID or db is None: return
+    st = {"present": False, "since_ms": 0, "last_seen_ms": 0, "last_cmd_since": 0.0}
+    try: st.update(json.load(open(PRESENCE_STATE)))
+    except Exception: pass
+    def save():
+        try:
+            with open(PRESENCE_STATE, "w") as f: json.dump(st, f)
+        except Exception: pass
+    def queue(kind, t_ms, note):
+        db.execute("INSERT OR IGNORE INTO pres_q(time_ms, kind, note) VALUES(?,?,?)", (int(t_ms), kind, note)); db.commit()
+        log("[재실] %s %s — %s" % ("도착" if kind == "arrive" else "출발", time.strftime("%m-%d %H:%M", time.localtime(t_ms / 1000)), note))
+    while True:
+        try:
+            now_ms = int(time.time() * 1000)
+            ssid = (await asyncio.to_thread(net_info)).get("ssid", "")
+            hotspot = (ssid == PRESENCE_SSID)
+            hs = {}
+            try: hs = json.load(open(HEATER_STATE))
+            except Exception: pass
+            mode, src, since = hs.get("mode"), hs.get("source"), float(hs.get("since") or 0)
+            new_cmd = (src in ("cmd", "backstop")) and since > st["last_cmd_since"]
+            if hotspot: st["last_seen_ms"] = now_ms
+            if not st["present"]:
+                if hotspot or (new_cmd and mode in ("comfort", "sleep") and src == "cmd"):
+                    t = now_ms if hotspot else int(since * 1000)
+                    st.update(present=True, since_ms=t); queue("arrive", t, _pres_note(latest, mode)); save()
+            else:
+                if new_cmd and mode == "frost":
+                    t = int(since * 1000) if src == "cmd" else (st["last_seen_ms"] or int(since * 1000))
+                    note = _pres_note(latest, mode) + ("" if src == "cmd" else " · 추정(백스톱, 마지막 핫스팟 접속 시각)")
+                    st.update(present=False); queue("depart", t, note); save()
+                elif (not hotspot) and st["last_seen_ms"] and now_ms - st["last_seen_ms"] > PRESENCE_ABSENT_MIN * 60000 and mode == "frost":
+                    st.update(present=False); queue("depart", st["last_seen_ms"], _pres_note(latest, mode) + " · 추정(핫스팟 소실)"); save()
+            if new_cmd: st["last_cmd_since"] = since; save()
+            _pres_send(db)
+        except Exception as e:
+            log("[재실] 오류: %s" % e)
+        await asyncio.sleep(60)
+
+
 async def drain_loop(db):
     # 인터넷이 중간에 생겼을 때(방문·테더링) 밀린 .db를 ~1분 내 올리기 위한 주기 드레인.
     while True:
@@ -767,7 +845,7 @@ async def main():
             hourly_flusher(cfg, avg_state, latest, db),
         ]
         if db is not None:
-            tasks += [history_syncer(cfg, box, scan_lock, db), drain_loop(db)]
+            tasks += [history_syncer(cfg, box, scan_lock, db), drain_loop(db), presence_task(latest, db)]
         await asyncio.gather(*tasks)
 
 

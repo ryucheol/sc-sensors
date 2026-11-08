@@ -1,13 +1,14 @@
 /*
  * Code.gs — 농막/선반 센서 데이터 수집 Apps Script 웹앱 (SITE 접두사로 여러 시트 공용).
  *
- * ★★ 버전: 2026-11-08 v7  ← 붙여넣기 전에 이 줄 확인! ★★
+ * ★★ 버전: 2026-11-08 v8  ← 붙여넣기 전에 이 줄 확인! ★★
  *   이 버전 요약: SITE 접두사 · mode current(+SSID/IP+배터리 예상일) · avg · hist(upsert) ·
  *                 batt(배터리 이력 → _배터리 탭) · 멱등 업로드.
  *   배포된 버전 확인법: 브라우저로 /exec 주소를 열면 {"version":"2026-10-27 v6", ...} 가 보임.
  *   (구버전이 배포돼 있으면 version 이 다르거나 없음 → 다시 붙여넣고 새 버전 배포)
  *
  * 변경 이력:
+ *   v8 (2026-11-08) mode:presence — 게이트웨이 재실 자동기록(도착=핫스팟 등장/난방·취침 명령, 출발=동파 명령)을 '재실기록' 탭에 기록
  *   v7 (2026-11-08) 배터리 예상일 재작성: pvvx 전압눈금(2.2V=0%,3.1V=100%) 전제, 종료 2.6V(44%),
  *                   전지교체·펌웨어전환 불연속(>8%p)에서 추세창 재시작, CR2032 방전곡선 추정과 추세 추정 중
  *                   보수적인 값 표시, 순정(3.1V/100% 고정)은 '순정 펌웨어' 표시. 2.65V 이하 즉시 빨강.
@@ -25,13 +26,14 @@
  * 특징: 중복 제거를 서버에서 처리(멱등). 중복 기준 (센서, 정시 버킷). 시각은 실제 날짜값으로 저장.
  */
 
-var CODE_VERSION = '2026-11-08 v7';   // ← /exec(doGet) 응답·붙여넣기 확인용. 고칠 때마다 갱신.
+var CODE_VERSION = '2026-11-08 v8';   // ← /exec(doGet) 응답·붙여넣기 확인용. 고칠 때마다 갱신.
 var SITE = '농막';                 // ← 장소 접두사. 두 번째 시트(예: 선반)는 '선반' 으로만 바꾸면 됨
 var SECRET = 'CHANGE-ME';          // ← 게이트웨이의 FARMHUT_SECRET 과 동일하게
 var SHEET_NAME = SITE + '_시간별';
 var CURRENT_SHEET = SITE + '_현재';   // 현재값 스냅샷(센서별 1행, 덮어쓰기)
 var AVG_SHEET = SITE + '_평균';       // 게이트웨이가 passive로 계산한 시간가중 평균(파생값)
 var BATT_SHEET = SITE + '_배터리';    // 배터리 전압·% 이력(수명 추세 → 현재 탭 예상 소진일)
+var PRESENCE_SHEET = '재실기록';      // A도착 B출발(빈칸=체류 중) C메모. 게이트웨이 mode:presence 가 자동 기록
 // 컬럼: A시각 B센서 C최고온도 D최저온도 E최고습도 F최저습도 G센서idx H업로드시각
 
 function _sheet() {
@@ -325,6 +327,38 @@ function _updateBatteryForecast(battSh) {
   }
 }
 
+// 재실 자동기록. events=[{time_ms, kind:'arrive'|'depart', note}]
+//  arrive: 마지막 행이 '체류 중'(B 빈칸)이고 그 도착이 24h 이내면 중복으로 보고 무시, 아니면 [도착, '', 메모] 추가
+//  depart: 마지막 '체류 중' 행의 B 를 채움(메모 덧붙임). 체류 중 행이 없으면 ['', 출발, 메모] 추가(수동 보정용)
+//  시각은 시트 표기 규약(yyyy-MM-dd HH:mm 문자열)과 맞춤. 멱등: 같은 분의 같은 kind 는 1회만.
+function _postPresence(body) {
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var sh = ss.getSheetByName(PRESENCE_SHEET);
+  if (!sh) { sh = ss.insertSheet(PRESENCE_SHEET); sh.appendRow(['도착', '출발 (빈칸 = 아직 머무는 중)', '메모']); sh.setFrozenRows(1); }
+  var tz = Session.getScriptTimeZone(), added = 0, closed = 0, skipped = 0;
+  var events = (body.events || []).slice().sort(function (a, b) { return Number(a.time_ms) - Number(b.time_ms); });
+  for (var i = 0; i < events.length; i++) {
+    var ev = events[i], ms = Number(ev.time_ms); if (isNaN(ms)) { skipped++; continue; }
+    var ts = Utilities.formatDate(new Date(ms), tz, 'yyyy-MM-dd HH:mm');
+    var note = String(ev.note || '');
+    var last = sh.getLastRow();
+    var lastRow = last >= 2 ? sh.getRange(last, 1, 1, 3).getValues()[0] : null;
+    var open = lastRow && String(lastRow[0]) !== '' && String(lastRow[1]) === '';
+    if (ev.kind === 'arrive') {
+      if (open) { var a = new Date(String(lastRow[0]).replace(' ', 'T')).getTime(); if (!isNaN(a) && Math.abs(ms - a) < 24 * 3600000) { skipped++; continue; } }
+      if (lastRow && String(lastRow[0]) === ts) { skipped++; continue; }
+      sh.appendRow([ts, '', note]); added++;
+    } else if (ev.kind === 'depart') {
+      if (open) {
+        if (String(lastRow[1]) === ts) { skipped++; continue; }
+        sh.getRange(last, 2).setValue(ts);
+        var memo = String(lastRow[2] || ''); sh.getRange(last, 3).setValue(memo ? memo + ' / 출발 ' + note : '출발 ' + note); closed++;
+      } else { sh.appendRow(['', ts, '출발만 기록(도착 행 없음) ' + note]); added++; }
+    } else skipped++;
+  }
+  return _json({ ok: true, mode: 'presence', added: added, closed: closed, skipped: skipped });
+}
+
 function doPost(e) {
   var lock = LockService.getScriptLock();
   lock.waitLock(30000);
@@ -337,6 +371,7 @@ function doPost(e) {
     if (body.mode === 'avg') return _postAvg(body);
     if (body.mode === 'hist') return _postHist(body);
     if (body.mode === 'batt') return _postBatt(body);
+    if (body.mode === 'presence') return _postPresence(body);
     var sensor = String(body.sensor || '').trim();
     var records = body.records || [];
     if (!sensor || !records.length) return _json({ ok: true, added: 0, skipped: 0, note: 'empty' });
