@@ -1,194 +1,136 @@
-# 농막/동지집 센서 → 구글시트
+# Smart Cabin — A Cabin That Keeps Itself Warm
 
-Xiaomi **LYWSD03MMC** 온습도계 3개의 값을 BLE로 받아 구글시트 **「동지집 기온·습도 기록」**에
-자동 기록한다. Mi Home/Xiaomi Home 앱의 그래프를 캡처해 수기 입력하던 작업을 대체한다.
+**[📑 Talk slides (PDF, 18 pages, English)](docs/smart-cabin-talk.pdf)** · 라오스 대학생 특강 "A Cabin That Keeps Itself Warm" (RYU Cheol, ETRI, Nov 2026)
 
-세 가지 데이터:
-- **현재값** — 지금 온·습도 (스냅샷)
-- **시간별 평균** — passive 비콘으로 계산한 시간가중 평균 (파생값)
-- **시간별 최고/최저 이력** — 기기가 자체 보관하는 권위 min/max
-
-세 가지 사용 경로:
-- **폰(안드로이드 크롬)** — 방문 시 손으로 (Web Bluetooth) · `index.html`
-- **PC(파이썬)** — 명령 하나로 (`farmhut_sync.py`, `current_sync.py`)
-- **라즈베리파이 게이트웨이** — 상주시켜 24시간 전자동 (`passive_gateway.py`) ← 권장
+> **For students:** this repository is the real system behind the talk. A small farm cabin in Korea is empty most of the winter. A Raspberry Pi listens to three cheap Bluetooth thermometers, decides whether a heater should run, switches it through a smart plug — with no internet needed for the decision — and logs everything to a Google Sheet when a connection exists. Total hardware about **US$150**. Every slide below points to the code or document that implements it. Start with the PDF, then follow the table in §2.
 
 ---
 
-## 🔥 농막 히터 제어 (동파방지 + 난방)
+## 1. 한눈에
 
-같은 Pi가 **Tuya WiFi 스마트플러그로 PTC 히터를 온도제어**해 겨울 동파를 막고 방문 시 난방한다. 센서 게이트웨이와 **독립된 별도 서비스**(`heater-control`)이며, `latest.json`(게이트웨이가 쓰는 현재온도)을 읽어 인터넷 없이 **로컬(LAN)** 로 제어한다.
+| | |
+|---|---|
+| **문제** | 겨울에 비어 있는 농막(부여)의 **동파 방지**, 방문 때 **따뜻하게 도착**, 그리고 **인터넷 없이도** 동작 |
+| **구성** | Xiaomi LYWSD03MMC 온습도계 3개(BLE, pvvx 펌웨어) → Raspberry Pi 4(게이트웨이 + 제어기) → Wi-Fi 스마트플러그 → PTC 히터 1.7 kW(3단) · 기록은 Google Sheets |
+| **원칙** | Sense → Think → Act 를 전부 **로컬**에서. 인터넷은 기록·알림용 덤. 고장을 전제로 설계(동파모드는 fail-ON) |
+| **상태 (2026-11-08)** | 세 센서 모두 **1분 갱신**(pvvx), 오버슈트 **+0.4 → +0.1 °C** 실측, 히터 단수 자동 인식·예보 기반 조언, 재실 자동기록, 열모델 학습 데이터 수집 중, LTE 상시회선 준비 중 |
 
-- 도착 `난방`, 떠남 `동파`(SSH 별칭) · 금요일 자동 예열 · 전력량(플러그 하드웨어 누적)·고장 계측 · 떠나기 전 `히터점검`
-- **네트워크 전환(폰 핫스팟 → KT 상시회선) 계획: [NETWORK_MIGRATION.md](NETWORK_MIGRATION.md)**
-- **개발자 문서: [HEATER.md](HEATER.md)** — 아키텍처·네트워크·데이터형식·제어로직·명령·계측·Tuya 플러그·배포.
-
-## 파일
-
-| 파일 | 역할 | 실행 위치 |
-|---|---|---|
-| `index.html` | 폰 웹앱(Web Bluetooth): 방문 시 수동 | **GitHub Pages** → 안드로이드 크롬 |
-| `Code.gs` | Apps Script 서버(업로드 수신·중복제거·요약) | **구글시트 Apps Script** (GitHub선 백업용) |
-| `farmhut_sync.py` | 이력 증분 동기화(연결) → `농막_시간별` | 센서 근처 **PC** |
-| `current_sync.py` | 현재값 즉시 읽기(연결) → `농막_현재` | 센서 근처 **PC** |
-| `passive_current.py` | 현재값 passive 디코드(**연결 없이**) 테스트 | PC |
-| `passive_gateway.py` | **상주 게이트웨이**: passive 현재·평균 + 하루 1회 이력 | **라즈베리파이**(또는 PC) |
-| `verify_attic.py` / `verify_shelf.py` | 센서 수신·복호화·값갱신 간격 검증 도구(pvvx 플래시 전후) | Pi |
-| `docs/ENERGY_SAVINGS.ko.md` | 정밀 제어와 전력 절약 — 실측(평균 23.26 vs 23.27 °C → 단독 절감 <1 %)과 절약이 나는 네 곳(설정값·스케줄링·일사·2구역) | — |
-| `docs/WORKLOG_2026-11-08.ko.md` | 11-08 작업 일지(펌웨어 전환·드리프트 실측·로거·재실 자동기록·네트워크 주문·발표자료) | — |
-| `kma_obs_fetch.py` | 기상청 ASOS 시간 관측(부여 + 대전 일사) → `kma_obs.csv` (cron 매시 15분, 열모델 학습용) | Pi |
-| `backfill_thermal.py` | 저널·히터 로그에서 1분 열모델 데이터 복원 → `thermal_backfill.csv` | Pi |
-| `thermal_log.csv` / `kma_obs.csv` / `forecast_hist.csv` | 열모델 학습 원시 로그(**로컬 · gitignore**). 계획: [docs/THERMAL_MODEL.ko.md](docs/THERMAL_MODEL.ko.md) | Pi |
-| `PI_SETUP.md` | Pi 설치·systemd 가이드 | — |
-| `run_sync.bat` / `run_current_sync.bat` / `run_gateway.bat` | Windows 실행 런처 | PC |
-| `run_monitor.bat` | 모니터(읽기전용) 런처: 수신 로그만, 업로드·연결 없음 | PC |
-| `sensor_keys.json` | 비콘 복호화 bindkey (**비밀 · gitignore**). 항목에 `"history": false`를 두면 이력 sync 제외(커스텀 펌웨어 센서) | 로컬 |
-| `Code.gs` | Apps Script 웹앱 **v8**(2026-11-08): current/avg/hist/batt + **presence**(재실 자동기록), 배터리 예상일(전압곡선) | 시트 |
-| `gateway.env` / `gateway.env.example` | Pi용 `FARMHUT_SECRET` 환경파일 (**비밀 · gitignore**) | Pi |
-| `farmhut-gateway.service` | systemd 유닛(부팅 자동시작) | Pi |
-
-## 센서 ↔ 위치 ↔ MAC 끝자리
-
-| 위치 | MAC | 끝자리 |
-|---|---|---|
-| 내부1층 — **pvvx v5.9**(2026-11-08~, HW B1.5) | `A4:C1:38:6A:77:BE` | BE |
-| 바닥외부 — **pvvx v5.9**(2026-11-08~, HW B1.5) | `A4:C1:38:B4:5E:13` | 13 |
-| 다락(2026-11-04부터 고정. 이전엔 휴대) — **pvvx v5.9**(2026-11-07~, HW B1.6) | `A4:C1:38:32:8C:21` | 21 |
-
-> bindkey(복호화 키)는 비밀이라 `sensor_keys.json`(gitignore)에만 둔다. 형식:
-> `{"내부1층":{"mac":"A4:C1:38:6A:77:BE","key":"<32자리 hex>"}, …}`
-
-## 구글시트 탭
-
-| 탭 | 내용 | 출처 |
-|---|---|---|
-| **농막_시간별** | `시각·센서·최고온도·최저온도·최고습도·최저습도·센서idx·업로드시각` | 기기 이력(**연결**) — 권위 min/max |
-| **농막_현재** | `센서·온도·습도·배터리·갱신시각` (센서별 1행, 덮어쓰기) | passive 또는 연결 — 현재 스냅샷 |
-| **농막_평균** | `시각·센서·평균온도·평균습도·기록시각` | 게이트웨이 passive **시간가중 평균**(파생값) |
-| **농막_그래프** | QUERY 피벗 + 라인차트(센서별 일별 최고 온도/습도) | 농막_시간별 자동 집계. 온도축 −20~40℃ 고정 |
-
-> `농막_평균`은 센서가 주는 값이 아니라 게이트웨이가 passive 샘플로 계산한 **파생값**이라
-> 권위 데이터(`농막_시간별`)와 탭을 분리했다. 시각 라벨은 **정시 시작**(14:00 = 14~15시 평균).
-
-## 동작 원리 (요약)
-
-**연결(GATT) — 이력/현재값 읽기**
-- 서비스 `ebe0ccb0-…`, 이력 notify `ebe0ccbc-…`, 시작 인덱스 포인터 `ebe0ccba-…`(seek), 최신 레코드 `ebe0ccbb-…`, 현재값 notify `ebe0ccc1-…`, 시간 카운터 `ebe0ccb7-…`.
-- 이력 레코드 14바이트: `idx(u32)·ts(u32,부팅후초)·최고온도(i16/10)·최고습도(u8)·최저온도(i16/10)·최저습도(u8)`.
-- 기기 시계가 실제 시각이 아니라, 연결 시점의 카운터+현재시각으로 **절대시각 환산**.
-- **증분**: 시트의 해당 센서 마지막 시각 이후 인덱스부터만 받음(`ebe0ccba` seek).
-- **중복제거**: 서버(Apps Script)에서 `(센서, 정시)` 기준 — 겹쳐 받아도 중복 행 안 생김.
-
-**passive(비콘) — 연결 없이 현재값/평균**
-- MiBeacon 광고(service `0xFE95`)를 수신 → 센서별 **bindkey**로 AES-CCM 복호화 → 온·습도 추출.
-- 센서는 값이 바뀔 때 방송(event-driven) → 게이트웨이가 모아 **시간가중 평균** 계산.
-- 센서 쪽 배터리 소모 0(그냥 광고를 엿듣는 것). 연결은 배터리를 쓰므로 최소화.
-
-## 라즈베리파이 게이트웨이 (권장, 24/7)
-
-Pi를 농막에 상주시켜 폰·PC 없이 자동 수집. 자세한 설치는 **[PI_SETUP.md](PI_SETUP.md)** 참고.
-
-- **현재값**: 비콘 수신 → 값이 **바뀌면 즉시** `농막_현재` 갱신(최소 60초 간격, `GW_CURRENT_COOLDOWN`) + 변화 없을 땐 10분 하트비트(`GW_CURRENT_INTERVAL`)
-- **시간별 평균**: passive 샘플로 시간가중 평균 → 매 정시 `농막_평균` (연결 불필요)
-- **권위 이력**: 각 센서에 연결 → `농막_시간별` — **시작 시 1회 + 하루 1회**(`GW_HISTORY_INTERVAL`, 기본 86400s)로 배터리 절약. 꺼져 있던 공백은 다음 연결에서 자동 백필(기기 ~5개월 버퍼).
-- **로그**: 값이 바뀌면 새 줄 `[수신] 18.4(-0.1) 24.4 25.2 | 78 45 40 0`(온도3 `|` 습도3, 순서 **바닥·1층·다락**, 바뀐 센서만 괄호에 증분, 미수신은 `-`). 값이 같아도 **고유 비콘(counter 다른 광고)을 받을 때마다 그 줄에 수신 센서 번호(바닥 `0`·1층 `1`·다락 `2`)**를 이어붙여 어느 센서가 자주 방송하는지 표시 — 같은 counter의 반복 전송은 무시. `GW_BEACON_LOG=all`(고유 비콘마다 전체값)·`off`(끔). 습도는 `GW_HUMI_DEADBAND`(기본 1%) 이상만 변화로 처리(평균 계산엔 전 샘플 사용).
-
-```bash
-# Pi
-set -a; source gateway.env; set +a     # FARMHUT_SECRET 주입
-python3 passive_gateway.py
-# Windows 테스트
-run_gateway.bat
+```
+ 센서 3개 ──BLE──▶ Raspberry Pi ──latest.json──▶ 제어기 ──Wi-Fi(LAN)──▶ 스마트플러그 ──▶ 히터
+ (1층·다락·바닥외부)   게이트웨이                    (히스테리시스·예열·안전)                    720/1102/1763 W
+                         │ 인터넷 있을 때만
+                         ▼
+                    Google Sheets (현재·시간별·평균·배터리·재실기록)   기상청 예보/관측 ◀── Pi (매시)
 ```
 
-**모니터(읽기전용) 모드** — `GW_MONITOR=1`(또는 `run_monitor.bat`): 비콘 **수신 로그만** 출력하고 **서버 업로드·센서 연결을 하지 않음**. passive는 브로드캐스트라 실제 게이트웨이와 **동시에 켜도 안전**(값 구경·디버깅용). SECRET 불필요. 평균은 계산해서 로그만 남김.
-> 실제 업로드/연결 인스턴스는 **하나만** 돌리세요. 둘 이상이 업로드하면 Apps Script 실행시간이 배로 들고, 이력 연결은 센서가 동시 1개만 받아 서로 실패합니다(시트 중복 행은 서버의 LockService+키 중복제거로 방지됨).
+## 2. 발표 순서로 보는 저장소
 
-## 설치 / 배포
+| # | 슬라이드 | 무엇을 | 코드 · 문서 |
+|---|---|---|---|
+| 2 | The problem | 동파·도착·오프라인 | [HEATER.md](HEATER.md) §개요 |
+| 3 | The cabin | 3층 구조, 센서 위치 | 센서표 §4, [docs/SENSOR_GUIDE.ko.md](docs/SENSOR_GUIDE.ko.md) |
+| 4 | Sense, think, act | 게이트웨이와 제어기는 파일 하나(`latest.json`)로만 결합 | `passive_gateway.py`, `heater_control.py` |
+| 5–6 | Network / Going online | 폰 핫스팟 → LTE(OpenWrt) → 광랜 | [NETWORK_MIGRATION.md](NETWORK_MIGRATION.md), [docs/WORKLOG_2026-11-08.ko.md](docs/WORKLOG_2026-11-08.ko.md) §6 |
+| 7 | Cheap sensors, quietly listening | 암호화 MiBeacon 복호화, 연결 없음, 1분 갱신 | `passive_gateway.py`, [docs/SENSOR_GUIDE.ko.md](docs/SENSOR_GUIDE.ko.md) |
+| 8 | Every reading lands in a Sheet | 시트 탭·store-and-forward | `Code.gs`, [OPERATIONS.md](OPERATIONS.md) |
+| 9 | A smart plug switches the heater | 전력계로 고장 감지, 3단 인식 | `heater_control.py`(`detect_stage`), [HEATER.md](HEATER.md) |
+| 10 | Three modes, one simple rule | 동파 3/5 · 난방 23/23.5 · 취침 20/21(다락) | `heater_config.json`, `heater_cmd.py` |
+| 11 | Preheating with physics | τ·ln((T_eq−T_in)/(T_eq−T_target)) | `heater_control.py`(`preheat_lead_hours`), `test_heater_logic.py` |
+| 12 | Assume that things will fail | stale→ON, 이중 센서, 데드맨, 백스톱, 고장 감지, 자가점검 | `heater_control.py`, `heater_selftest.py`, `alert_sound.py` |
+| 13 | Tests, simulation, a real measurement | 61개 단위테스트, 시뮬 → 실측 0.4→0.1 | `test_heater_logic.py`, `docs/sim_pred4.py`, `docs/cycle_compare.py` |
+| 14 | Firmware update | pvvx 플래시, 효과 표 | [docs/PVVX_B16_FLASH.ko.md](docs/PVVX_B16_FLASH.ko.md) |
+| 15 | Using the public forecast | 예보 최저 + T_out + P/UA → 단수 조언 | `forecast_fetch.py`, `heater_control.py`(`stage_advice`) |
+| 16 | Let the cabin learn its physics | 2노드 열모델, 로거 3종 | [docs/THERMAL_MODEL.ko.md](docs/THERMAL_MODEL.ko.md), `kma_obs_fetch.py` |
+| 17 | What would you build in Laos? | 냉방·온실·저장고 | — |
+| 18 | Parts and budget | ≈$120–150 + LTE·Shelly 추가분 | §6 |
 
-### 1) Apps Script (서버)
-1. 시트 → **확장 프로그램 ▸ Apps Script** → `Code.gs` 붙여넣기
-2. 상단 `var SECRET = 'CHANGE-ME';` 를 실제 값으로 변경 (**붙여넣을 때마다 리셋되니 매번 확인**)
-3. **배포 ▸ 새 배포 ▸ 웹 앱** (실행: 나 / 액세스: 모든 사용자) → `…/exec` URL 확보
-   - ⚠ 코드 수정 후엔 **배포 ▸ 배포 관리 ▸ (기존 웹앱) 연필 ▸ 버전 "새 버전" ▸ 배포**. "새 배포"는 URL이 바뀌니 주의.
-4. 확인: `/exec` 를 브라우저로 열면 `{"ok":true,…}` JSON
+## 3. 실측으로 확인한 것 (2026-11)
 
-### 2) GitHub Pages (폰 앱)
-1. 리포에 `index.html` 업로드(루트)
-2. **Settings ▸ Pages ▸ Deploy from a branch ▸ main /(root)**
-3. `https://<아이디>.github.io/<repo>/` 를 안드로이드 크롬에서 열기
+| 주제 | 결과 | 근거 |
+|---|---|---|
+| 센서 지연이 드리프트의 원인 | 순정은 2 s마다 방송하지만 **값은 12분마다** 갱신 → 12분 늦게 스위칭 | PVVX 문서 §1 |
+| pvvx 1분 갱신 효과 | 오버슈트 +0.40 → +0.10, 스윙 1.1 → 0.7 °C, 라디오 29 → 12회/분(배터리↓), 배터리 실제 %(순정은 100% 고정) | PVVX 문서 §13 |
+| 히터 변조 | 3단 720/1,102/1,763 W. 1단에선 오버슈트 **0.0** — 가열 속도 × 지연 | WORKLOG §2 |
+| 성층 | 다락−1층 3.0 °C → 선풍기로 0 ± 0.2(가열 중 역전). 열은 충분, 분배 문제 | THERMAL_MODEL §7 |
+| 전력 절약 | 정밀 제어 단독 <1 %(평균 23.26 vs 23.27 °C). 절약은 설정값·스케줄링·일사·2구역에서 10~30 % | [docs/ENERGY_SAVINGS.ko.md](docs/ENERGY_SAVINGS.ko.md) |
+| 예측제어 | 분 단위 예측은 불필요(변조로 대체), **시간 단위 예보 스케줄링**은 유효 | THERMAL_MODEL §9 |
+| 재실 자동기록 | 핫스팟 등장 = 도착, 동파 명령 = 출발. 수동 기록과 분 단위 일치 | Code.gs v8, WORKLOG §5 |
 
-### 3) 폰 사용
-1. 설정에 `/exec` URL + SECRET 입력
-2. **Mi Home 완전 종료**
-3. 위치 버튼(**내부1층·BE / 바닥외부·13 / 다락·21**) 또는 **[전체 차례로]** → 선택창에서 **안내된 끝자리** 기기 선택 → 자동 업로드
+## 4. 센서
 
-### 4) PC 사용 (전자동)
-```bash
-python -m pip install bleak cryptography
-set FARMHUT_SECRET=당신의시크릿값      # Windows (PowerShell: $env:FARMHUT_SECRET="...")
-python farmhut_sync.py                 # 이력 증분 → 농막_시간별
-python current_sync.py                 # 현재값    → 농막_현재
-python farmhut_sync.py --dry-run       # 업로드 없이 미리보기
-```
-MAC 으로 직접 찾으므로 선택창/LCD 대조 없이 완전 자동. Mi Home 은 종료.
+| 위치 | MAC 끝 | 펌웨어 | 역할 |
+|---|---|---|---|
+| 내부1층 | …6A:77:BE | pvvx v5.9 (HW B1.5) | 동파·난방 제어, 계측 기준 |
+| 다락 | …32:8C:21 | pvvx v5.9 (HW B1.6) | 취침 제어, 1층 백업 |
+| 바닥외부 | …B4:5E:13 | pvvx v5.9 (HW B1.5) | 외기(예열·열모델) |
 
-## 보안
+설정: Mi 암호화 모드, 광고 5 s, 측정 ×4(20 s). bindkey는 `sensor_keys.json`(**gitignore**)에만. 플래시 절차: [docs/PVVX_B16_FLASH.ko.md](docs/PVVX_B16_FLASH.ko.md) §3.
 
-- **실제 SECRET·bindkey 는 커밋 금지.** `sensor_keys.json`·`gateway.env` 는 gitignore. 커밋된 코드의 SECRET 은 `CHANGE-ME` 플레이스홀더, PC/Pi 는 환경변수 `FARMHUT_SECRET` 로 주입.
-- `WEBAPP_URL` 은 공개되지만 쓰기는 SECRET 로 보호, doGet 은 요약(행수·마지막시각)만 노출 → 위험 낮음. 더 숨기려면 비공개 리포.
-- `index.html` 자체엔 비밀 없음(URL·시크릿은 사용 시 입력, 브라우저에만 저장).
+## 5. 운영 요약
 
-## 알려진 제약 / 참고
+- **명령(SSH 별칭)**: `난방`(도착) · `취침` · `동파`(떠남 = 재실기록 출발) · `히터점검`(떠나기 전: 전력·단수·예보·조언 출력)
+- **모드**: 동파 3/5 °C(1층) · 난방 23/23.5(1층) · 취침 20/21(다락). 금요일 20:00 도착 예열 자동, 36 h 무신호면 동파 복귀.
+- **히터 단수**는 기계식 스위치(손). 제어기가 실측 W로 단을 인식해 예열 계산·조언에 씀. 온화한 날 1단, 추운 밤 2~3단.
+- **선풍기**(성층 해소)는 수동, 기록 플래그 `fan_on`(touch/rm). 밤 취침모드엔 OFF.
+- 자세한 운영·사이트 전환: **[OPERATIONS.md](OPERATIONS.md)** · 설치: **[PI_SETUP.md](PI_SETUP.md)** · 제어기 내부: **[HEATER.md](HEATER.md)**
 
-- **iOS(아이폰/아이패드) Web Bluetooth 미지원** → 안드로이드 크롬(또는 데스크톱 크롬) 사용.
-- 센서 이력 저장: **시간당 1개**, 실측 **~5개월+ 보관**(가득 차면 가장 오래된 것부터 덮어쓰는 링버퍼). 월 1회 동기화도 데이터 손실 없음.
-- **Windows(WinRT)** 는 연결이 가끔 `Unreachable` 로 끊김 — 신호 약한 센서에서 빈번. **리눅스/라즈베리파이(BlueZ)가 더 안정적.**
-- 용량: 3센서 시간당 = 연 약 2.6만 행. 시트 한계 1천만 셀(수십 년 여유).
+## 6. 부품과 비용
 
-## 개발 메모
+| 품목 | 가격 |
+|---|---|
+| Raspberry Pi 4 + microSD | $60–90 |
+| Xiaomi LYWSD03MMC × 3 | ₩17,544 ($12.5) |
+| Wi-Fi 스마트플러그(Tuya) | ₩4,650 ($3.3) → Shelly Plug M Gen3 ×2(과열 차단) ₩29,200 주문 |
+| PTC 히터 1.7 kW(3단) | ₩59,900 ($43) |
+| **추가(2026-11)**: GL.iNet Mango(OpenWrt) $31 · Huawei E3372h-607 LTE 동글 ₩31,700 · 알뜰폰 유심 **월 1,900원** | |
+| pvvx 펌웨어, 기상청 API | 무료 |
 
-- 샤오미 순정(stock) 펌웨어 기준. 이력·비콘 프로토콜은 공식 문서 없는 리버스엔지니어링.
-- `ebe0ccba` 에 시작 인덱스를 write 하면 `ebe0ccbc` 가 그 지점부터 스트림(비파괴적) — 실기기로 검증됨.
-- bindkey 는 Xiaomi Home 계정에서 [Xiaomi-cloud-tokens-extractor](https://github.com/PiotrMachowski/Xiaomi-cloud-tokens-extractor) 로 추출.
-- 센서 펌웨어: **세 센서 모두 pvvx v5.9**(Mi 암호화 모드, 광고 5 s·측정 20 s → 온도 ~1분 갱신, 배터리 % 실측). 파서·키 무수정. 플래시 절차·근거·검증·예측제어 검토: **[docs/PVVX_B16_FLASH.ko.md](docs/PVVX_B16_FLASH.ko.md)**.
+## 7. 파일 지도
 
-> 2사이트 운영(농막/선반)·사이트 전환·오프라인 store-and-forward·배터리 예상 소진일 등
-> 최신 구성·운영은 **[OPERATIONS.md](OPERATIONS.md)** 참고.
->
-> 센서 동작(방송·GATT), **구조를 이렇게 바꾼 이유와 장단점**을 학습용으로 정리한 문서: **[한국어 docs/SENSOR_GUIDE.ko.md](docs/SENSOR_GUIDE.ko.md)** · **[English docs/SENSOR_GUIDE.md](docs/SENSOR_GUIDE.md)**.
+| 파일 | 역할 | 위치 |
+|---|---|---|
+| `passive_gateway.py` | 게이트웨이: BLE 수신·복호화, `latest.json`, 시간 평균·이력·배터리·재실 큐 → 시트(store-and-forward) | Pi (`farmhut-gateway.service`) |
+| `heater_control.py` | 제어기: 모드·히스테리시스·예열·안전·단수 인식·조언·계측(`thermal_log.csv`) | Pi (`heater-control.service`, tuya-venv) |
+| `alert_sound.py` | 음성 알림(문 여닫기·고장·정체·단수 조언) | Pi (`alert-sound.service`) |
+| `heater_cmd.py` / `heater_selftest.py` | 모드 명령 / 떠나기 전 자가점검 | Pi |
+| `forecast_fetch.py` / `kma_obs_fetch.py` | 기상청 단기예보(매시) / ASOS 관측(매시 15분) | Pi cron |
+| `backfill_thermal.py` / `verify_attic.py` / `verify_shelf.py` | 로그 복원 / 센서 검증 도구 | Pi |
+| `test_heater_logic.py` / `heater_sim.py` | 순수 로직 단위테스트(61) / 시뮬레이터 | 어디서나 |
+| `Code.gs` | Apps Script 웹앱 **v8**: current/avg/hist/batt/**presence**, 배터리 예상일 | 시트 |
+| `index.html` · `farmhut_sync.py` · `current_sync.py` | 폰 웹앱(Web Bluetooth) · PC 동기화(연결) — 초기 경로, 지금은 보조 | GitHub Pages · PC |
+| `heater_config.json` | 임계값·예열·단수·이중화·데드맨 설정(즉시 반영) | Pi |
+| `sensor_keys.json` · `tuya_keys.json` · `gateway.env` · `kma.env` | **비밀 · gitignore** | Pi |
+| `thermal_log.csv` · `kma_obs.csv` · `forecast_hist.csv` · `thermal_backfill.csv` | 열모델 학습 원시 로그(**로컬 · gitignore**) | Pi |
 
-## 이 프로젝트의 차별점
+## 8. 구글시트 탭
 
-대부분의 LYWSD03MMC DIY는 **Home Assistant/ESPHome + MQTT + 상시 네트워크 + 커스텀 펌웨어(ATC/pvvx)** 조합이다. 이 프로젝트는 다른 선택을 했다:
+`농막_현재`(센서별 1행 + 배터리 예상일) · `농막_시간별`(권위 min/max) · `농막_평균`(passive 시간가중) · `농막_배터리` · `재실기록`(자동) · `농막_그래프` · `최근5일_시간별`(부여 기상 비교). 업로드는 `/exec`(Apps Script) 한 곳, 중복제거는 서버가 `(센서, 정시)`로.
 
-- **클라우드·HA·MQTT·브로커 없음** — 초경량 단일 파이썬 게이트웨이가 **구글시트로 직접** 업로드. 서버·DB·대시보드 인프라 불필요(시트가 저장소+뷰+공유+차트). 샤오미 클라우드·앱도 데이터 경로에 없음.
-- **pvvx 펌웨어 + Mi 암호화 모드** — 암호화 MiBeacon + bindkey 복호화는 그대로 두고 센서 쪽만 바꿔 **측정값 갱신 12분→1분**, 라디오 소비 40%, 배터리 % 실측. 파서·키 무수정. (2026-11-07 다락 시범 → 11-08 전체 전환, [docs/PVVX_B16_FLASH.ko.md](docs/PVVX_B16_FLASH.ko.md))
-- **오프라인 우선 + 무손실 store-and-forward** — 간헐적 인터넷(농막=방문 때 폰 테더링)을 전제. **로컬 SQLite가 진실원천**, 인터넷 될 때만 업로드(정전·재부팅·오프라인에도 worst-case 손실 ≤1시간). "상시 인터넷"을 가정하는 흔한 설정과 반대.
-- **passive + 하루 1회 권위 이력 하이브리드** — 실시간·평균은 passive(센서 배터리 0 소모), 시간별 min/max는 센서 내부버퍼에서 **증분으로 하루 1회만** 연결(배터리 절약). passive만(공백) 또는 연결만(배터리 소모)인 방식과 다름.
-- **폰 핫스팟 자동접속 + 온라인 선검사(online gate)** — 무인·간헐연결 맞춤(오프라인이면 업로드 시도조차 안 함).
-- **한 Pi로 다중 사이트** — env 파라미터화로 같은 코드가 여러 시트(농막/선반)에 재사용·전환.
-- **배터리 수명 추세·예상 소진일**(시트에 임박 시 빨강 경고), **접속망 SSID/IP 가시화**, 정전·재부팅 자립.
+## 9. 보안
 
-한 줄 요약: **무인 + 간헐적 인터넷 환경을 위한, 인프라 없는 자립형 BLE→구글시트 게이트웨이.**
+- SECRET·bindkey·Tuya 로컬키·기상청 키는 **커밋 금지**(gitignore). 코드의 SECRET은 `CHANGE-ME` 플레이스홀더, 환경변수 `FARMHUT_SECRET`로 주입.
+- `/exec` URL은 공개돼도 쓰기는 SECRET, 읽기(doGet)는 요약만.
 
-## 관련 프로젝트 · 커뮤니티
+## 10. 이 프로젝트의 선택
 
-**센서 펌웨어 (수명·갱신 개선, 평문 방송)**
-- [pvvx/ATC_MiThermometer](https://github.com/pvvx/ATC_MiThermometer) — 중심 커스텀 펌웨어. 브라우저 OTA 플래시, BTHome. **Issues가 사실상 커뮤니티.**
-- [atc1441/ATC_MiThermometer](https://github.com/atc1441/ATC_MiThermometer) — 원조.
-- ⚠ 신형 HW **B1.6(2025.03~)** 는 소비전류↑·호환성 주의 — 추가 구매 시 리비전 확인.
+- **클라우드·HA·MQTT 없음** — 파이썬 하나가 시트로 직접. 시트가 저장소·뷰·공유·차트.
+- **오프라인 우선** — 로컬 SQLite가 진실원천, 인터넷 될 때만 전송(손실 ≤1 h).
+- **passive 수신 + 하루 1회 권위 이력** 하이브리드(센서 배터리 절약) → pvvx 전환 뒤엔 passive만으로 1분 갱신.
+- **고장 전제** — stale→ON, 센서 이중화, 플러그 데드맨(fail-ON), 백스톱, 전력계 고장 감지, 떠나기 전 자가점검.
+- **측정 먼저, 알고리즘 나중** — 예측제어를 구현했다 되돌리고, 센서 지연을 없애자 문제가 사라졌다.
 
-**개방형 방송 표준 / 연동**
-- [BTHome](https://bthome.io) — pvvx/ATC가 쓰는 개방형 BLE 방송 표준(HA 기본 통합).
-- Home Assistant 포럼(community.home-assistant.io), Reddit r/homeassistant · r/homeautomation, ESPHome(`atc_mithermometer`·`xiaomi_lywsd03mmc`).
+## 11. 문서
 
-**"자체 게이트웨이(파이썬)" 쪽 — 이 프로젝트와 가장 유사**
-- [JsBergbau/MiTemperature2](https://github.com/JsBergbau/MiTemperature2) — LYWSD03MMC 파이썬 리더(온습도·배터리, passive+연결).
-- [Theengs/decoder](https://github.com/theengs/decoder) · Theengs Gateway — 오픈소스 BLE 디코더(MiBeacon·ATC·BTHome) + MQTT 게이트웨이.
+| 문서 | 내용 |
+|---|---|
+| [docs/smart-cabin-talk.pdf](docs/smart-cabin-talk.pdf) | 특강 슬라이드(영문 18쪽) |
+| [docs/PVVX_B16_FLASH.ko.md](docs/PVVX_B16_FLASH.ko.md) | 센서 펌웨어 전환: 분석·절차·설정·검증·드리프트 실측 |
+| [docs/THERMAL_MODEL.ko.md](docs/THERMAL_MODEL.ko.md) | 열모델 학습 계획·데이터·성층·습도·우선순위 |
+| [docs/ENERGY_SAVINGS.ko.md](docs/ENERGY_SAVINGS.ko.md) | 정밀 제어와 전력 절약 정량화 |
+| [docs/WORKLOG_2026-11-08.ko.md](docs/WORKLOG_2026-11-08.ko.md) | 11-08 작업 일지 |
+| [docs/SENSOR_GUIDE.ko.md](docs/SENSOR_GUIDE.ko.md) · [EN](docs/SENSOR_GUIDE.md) | 센서 프로토콜(비콘·GATT)과 설계 이유 |
+| [HEATER.md](HEATER.md) · [OPERATIONS.md](OPERATIONS.md) · [PI_SETUP.md](PI_SETUP.md) · [NETWORK_MIGRATION.md](NETWORK_MIGRATION.md) | 제어기 내부 · 운영 · 설치 · 네트워크 전환 |
 
-**bindkey 추출**
-- [Xiaomi-cloud-tokens-extractor](https://github.com/PiotrMachowski/Xiaomi-cloud-tokens-extractor)
+## 12. 관련 프로젝트
 
-**한국**
-- HA 한국 사용자(네이버 카페 / 카카오톡 오픈채팅), 클리앙 홈네트워크 게시판. 검색어: `LYWSD03MMC 펌웨어`, `샤오미 온습도계 ATC pvvx`, `홈어시스턴트 블루투스 게이트웨이`.
+[pvvx/ATC_MiThermometer](https://github.com/pvvx/ATC_MiThermometer)(센서 펌웨어) · [BTHome](https://bthome.io) · [JsBergbau/MiTemperature2](https://github.com/JsBergbau/MiTemperature2) · [Theengs/decoder](https://github.com/theengs/decoder) · [Xiaomi-cloud-tokens-extractor](https://github.com/PiotrMachowski/Xiaomi-cloud-tokens-extractor)(bindkey)
