@@ -189,3 +189,29 @@ class TestStage(unittest.TestCase):
         a = hc.stage_advice(cfg, "comfort", 1, 720, None, 10, 22.4, 23.0, True, 75, True)
         self.assertIn("출력 부족", a)
         self.assertIsNone(hc.stage_advice(cfg, "comfort", 1, 720, None, 10, 23.2, 23.0, False, 0, False))
+
+
+class TestArrival(unittest.TestCase):
+    def test_plan_and_start(self):
+        import time as _t
+        arr_ts = at(16, 0, base=datetime.datetime(2026, 11, 9)).timestamp()   # 월요일 16:00(금요일 예열과 무관)
+        s = st(arrival={"ts": arr_ts, "target": 23})
+        start, lead = hc.arrival_plan(CFG, s, 5, 0, 1763)
+        self.assertGreater(lead, 0); self.assertLess(start, arr_ts)
+        dtn = datetime.datetime.fromtimestamp(start - 60)
+        ch, logs = hc.schedule_step(CFG, s, 5, 0, dtn, start - 60, 1763, 0)
+        self.assertFalse(ch); self.assertEqual(s["mode"], "frost")
+        dtn = datetime.datetime.fromtimestamp(start + 60)
+        ch, logs = hc.schedule_step(CFG, s, 5, 0, dtn, start + 60, 1763, 0)
+        self.assertTrue(ch); self.assertEqual(s["mode"], "comfort"); self.assertEqual(s["source"], "arrival"); self.assertEqual(s["on"], 23)
+    def test_noshow_clears(self):
+        arr_ts = at(16, 0, base=datetime.datetime(2026, 11, 9)).timestamp()
+        s = st(mode="comfort", source="arrival", arrival={"ts": arr_ts, "target": 23})
+        tn = arr_ts + CFG.get("arrival_noshow_hours", 3) * 3600 + 60
+        ch, logs = hc.schedule_step(CFG, s, 23, 0, datetime.datetime.fromtimestamp(tn), tn, 1763, 0)
+        self.assertTrue(ch); self.assertEqual(s["mode"], "frost"); self.assertNotIn("arrival", s)
+    def test_low_stage_uses_max_lead(self):
+        arr_ts = at(16, 0, base=datetime.datetime(2026, 11, 9)).timestamp()
+        s = st(arrival={"ts": arr_ts, "target": 23})
+        start, lead = hc.arrival_plan(CFG, s, 5, 0, 720)   # 1단·외기 0 → 도달 불가 → 최대 선행
+        self.assertEqual(lead, CFG["preheat"]["max_lead_hours"])

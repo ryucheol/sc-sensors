@@ -139,9 +139,35 @@ def default_state(cfg):
     return {"mode":"frost","on":f["on"],"off":f["off"],"source":"default",
             "since":now(),"last_cmd_ts":0,"relay":None}
 
-def schedule_step(cfg, st, t_in, t_out, dtn, tnow, P=None):
-    """스케줄 판단(순수): 금요일 예열 / 노쇼 복귀 / 안전 백스톱. st를 제자리 수정, (changed, 로그메시지목록) 반환."""
+def arrival_plan(cfg, st, t_in, t_out_fc, P=None):
+    """도착 예약(st["arrival"]={"ts","target"})의 시작 시각(epoch)과 선행시간(h). 예약 없으면 (None, None). 순수."""
+    arr = st.get("arrival")
+    if not arr or not arr.get("ts"): return None, None
+    cfg2 = dict(cfg); pre = dict(cfg["preheat"]); pre["target_temp"] = arr.get("target", cfg["comfort"]["on"]); cfg2["preheat"] = pre
+    lead = preheat_lead_hours(cfg2, t_in, t_out_fc, P)
+    return arr["ts"] - lead * 3600.0, lead
+
+def schedule_step(cfg, st, t_in, t_out, dtn, tnow, P=None, t_out_fc=None):
+    """스케줄 판단(순수): 도착 예약 / 금요일 예열 / 노쇼 복귀 / 안전 백스톱. st를 제자리 수정, (changed, 로그메시지목록) 반환.
+       t_out_fc = 지금~도착 사이 예보 최저(없으면 현재 외기)."""
     p = cfg["preheat"]; changed = False; logs = []
+    # ── 도착 예약("도착 16:00"): 예보 최저·실측 단 W로 역산한 시작 시각이 되면 난방(source=arrival) ──
+    arr = st.get("arrival")
+    if arr and arr.get("ts"):
+        noshow_h = cfg.get("arrival_noshow_hours", 3)
+        if st["mode"] != "comfort":
+            start_ts, lead = arrival_plan(cfg, st, t_in, t_out_fc if t_out_fc is not None else t_out, P)
+            if tnow >= start_ts:
+                c = cfg["comfort"]; on = arr.get("target", c["on"]); off = on + (c["off"] - c["on"])
+                st.update(mode="comfort", on=on, off=off, source="arrival", since=tnow); changed = True
+                logs.append("도착 예약 난방 시작: 도착 %s 목표 %s°C, 내부 %s°C 예보외기 %s°C P=%sW, 선행 %.1fh → 난방 %s/%s"
+                            % (time.strftime("%m-%d %H:%M", time.localtime(arr["ts"])), on, t_in,
+                               t_out_fc if t_out_fc is not None else t_out, int(P) if P else cfg["preheat"]["heater_watts"], lead, on, off))
+        if tnow > arr["ts"] + noshow_h * 3600 and st.get("source") == "arrival":
+            f = cfg["frost"]; st.update(mode="frost", on=f["on"], off=f["off"], source="noshow", since=tnow); st.pop("arrival", None); changed = True
+            logs.append("도착 예약 노쇼(%dh 내 난방 명령 없음) → 동파 복귀, 예약 해제" % noshow_h)
+        elif tnow > arr["ts"] + noshow_h * 3600:
+            st.pop("arrival", None); changed = True   # 이미 다른 명령으로 모드가 바뀜 → 예약만 정리
     if p.get("enabled") and dtn.weekday() == p["weekday"]:
         target = dtn.replace(hour=p["target_hour"], minute=p["target_min"], second=0, microsecond=0)
         if dtn < target and st["mode"] == "frost":
@@ -306,7 +332,10 @@ def main():
             t_floor_est, _ = fuse_control("frost", t_in, not stale, t_at, at_ok, -delta, R)
 
             # ── 스케줄: 금요일 적응형 예열 / 노쇼 복귀 / 안전 백스톱 ──
-            changed, slogs = schedule_step(cfg, st, t_floor_est, t_out, datetime.datetime.now(), now(), stage_w)
+            _arr = st.get("arrival") or {}
+            _t_fc = forecast_min_temp(hours=max(1.0, (_arr["ts"] - now()) / 3600.0)) if _arr.get("ts") else None
+            changed, slogs = schedule_step(cfg, st, t_floor_est, t_out, datetime.datetime.now(), now(), stage_w, _t_fc)
+            arr_start, arr_lead = arrival_plan(cfg, st, t_floor_est, _t_fc if _t_fc is not None else t_out, stage_w) if st.get("arrival") else (None, None)
             for m in slogs: log(m)
             if changed: save_atomic(STATE, st)
 
@@ -470,7 +499,8 @@ def main():
                     "delta_attic_floor": round(delta, 2),
                     "deadman_armed": bool(dm_armed_ts), "countdown_s": cur_cd,
                     "stage": stage, "stage_w": stage_w, "on_minutes": on_min,
-                    "advice": advice, "advice_say": advice_speech(advice) if advice else None})
+                    "advice": advice, "advice_say": advice_speech(advice) if advice else None,
+                    "arrival": st.get("arrival"), "arrival_start_est": arr_start, "arrival_lead_h": arr_lead})
                 thermal_log(st.get("mode"), cur_relay, cur_watt, cur_volt, t_ctl, delta,
                             floor_s, attic_s, cfg["preheat"].get("outdoor_sensor", ""))
             except Exception as e:
