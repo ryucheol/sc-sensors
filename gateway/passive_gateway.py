@@ -758,9 +758,10 @@ def _pres_send(db):
 async def presence_task(latest, db):
     """재실 자동기록. 도착 = 폰 핫스팟(PRESENCE_SSID) 등장 또는 난방/취침 명령.
        출발 = 동파 명령(명령 시각으로 기록). 동파 명령 없이 핫스팟만 PRESENCE_ABSENT_MIN 이상 사라지면 마지막 접속 시각으로 출발(추정).
+       출발 뒤 핫스팟이 아직 켜져 있어도(짐 싸는 동안) 재도착으로 기록하지 않는다 — 핫스팟이 한 번 사라진 뒤의 등장만 도착(await_absence).
        검증: 저널의 핫스팟 업로드 구간이 수동 재실기록(11-01 13:00~11-02 08:57, 11-06 19:25~)과 분 단위로 일치."""
     if not PRESENCE_SSID or db is None: return
-    st = {"present": False, "since_ms": 0, "last_seen_ms": 0, "last_cmd_since": 0.0}
+    st = {"present": False, "since_ms": 0, "last_seen_ms": 0, "last_cmd_since": 0.0, "await_absence": False}
     try: st.update(json.load(open(PRESENCE_STATE)))
     except Exception: pass
     def save():
@@ -781,17 +782,19 @@ async def presence_task(latest, db):
             mode, src, since = hs.get("mode"), hs.get("source"), float(hs.get("since") or 0)
             new_cmd = (src in ("cmd", "backstop")) and since > st["last_cmd_since"]
             if hotspot: st["last_seen_ms"] = now_ms
+            elif st.get("await_absence"): st["await_absence"] = False; save()   # 출발 뒤 핫스팟이 실제로 사라짐 → 다음 등장은 진짜 도착
             if not st["present"]:
-                if hotspot or (new_cmd and mode in ("comfort", "sleep") and src == "cmd"):
+                # 출발(동파) 직후 핫스팟이 아직 켜져 있는 동안은 도착으로 보지 않는다(await_absence). 난방/취침 명령은 언제나 도착.
+                if (hotspot and not st.get("await_absence")) or (new_cmd and mode in ("comfort", "sleep") and src == "cmd"):
                     t = now_ms if hotspot else int(since * 1000)
                     st.update(present=True, since_ms=t); queue("arrive", t, _pres_note(latest, mode)); save()
             else:
                 if new_cmd and mode == "frost":
                     t = int(since * 1000) if src == "cmd" else (st["last_seen_ms"] or int(since * 1000))
                     note = _pres_note(latest, mode) + ("" if src == "cmd" else " · 추정(백스톱, 마지막 핫스팟 접속 시각)")
-                    st.update(present=False); queue("depart", t, note); save()
+                    st.update(present=False, await_absence=True); queue("depart", t, note); save()
                 elif (not hotspot) and st["last_seen_ms"] and now_ms - st["last_seen_ms"] > PRESENCE_ABSENT_MIN * 60000 and mode == "frost":
-                    st.update(present=False); queue("depart", st["last_seen_ms"], _pres_note(latest, mode) + " · 추정(핫스팟 소실)"); save()
+                    st.update(present=False, await_absence=False); queue("depart", st["last_seen_ms"], _pres_note(latest, mode) + " · 추정(핫스팟 소실)"); save()
             if new_cmd: st["last_cmd_since"] = since; save()
             _pres_send(db)
         except Exception as e:
