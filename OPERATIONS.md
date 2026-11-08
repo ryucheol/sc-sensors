@@ -20,6 +20,9 @@ Xiaomi LYWSD03MMC 온습도 센서를 라즈베리파이(`passive_gateway.py`)�
 - 배터리(2026-11-08 pvvx 실측): 다락 96%, 1층 71%, 바닥 67%. pvvx %는 전압 눈금(2.2 V=0, 3.1 V=100)이라 **2.6 V(44%)가 교체 기준**. 전압곡선 추정 수명: 1층 ≈2027-07, 바닥 ≈2027-06, 다락 2028+. 시트 `농막_현재` H열 예상일은 Code.gs **v7 재배포 후** 유효.
 - 열모델 학습 로그(11-08~): `heater_control`이 `thermal_log.csv` 1분 기록, cron `15 * * * * kma_obs_fetch.py`(기상청 관측), `forecast_fetch.py`가 `forecast_hist.csv` 누적. 전부 로컬·gitignore. 첫 피팅 11-15, 신뢰 피팅 11-29 — [docs/THERMAL_MODEL.ko.md](docs/THERMAL_MODEL.ko.md).
 - 드리프트 실측(11-08): 1층 오버슈트 +0.40 → +0.10, 언더슈트 −0.30 → −0.10, 스윙 1.1 → 0.7 (PVVX 문서 13절). 다락 성층(격차 3°C) 시 선풍기로 분배.
+- **재실 자동기록**(11-08, Code.gs v8 배포됨): 도착 = 폰 핫스팟(`GW_PRESENCE_SSID`, 기본 Ryuspot) 등장 또는 `난방`/`취침` 명령, 출발 = **`동파` 명령**(떠나기 전 반드시 실행 — 그게 출발 기록). 핫스팟만 4 h 사라지면 '추정' 출발. 큐 `pres_q`, 상태 `presence_state.json`. 수동 보정은 시트 '재실기록' 탭에서.
+- 히터 3단(기계식): 720 / 1,102 / 1,763 W. 온화한 날 1단, 추운 날 3단. 선풍기 기록 플래그 `fan_on`(touch/rm). 밤 취침모드엔 선풍기 OFF.
+- 네트워크 전환 예정: Mango(OpenWrt) + E3372h-607 LTE(티플러스 KT 1,900원) 주문, KT 광랜 설치 가능 확인. 상세 [docs/WORKLOG_2026-11-08.ko.md](docs/WORKLOG_2026-11-08.ko.md).
 - 선반 센서는 2026-10-27 이후 침묵(배터리 추정).
 - 두 시트의 Apps Script **Code.gs = v5**(`/exec` 열면 `{"version":"2026-10-27 v5", "site":...}`로 확인).
 - 폰 핫스팟 자동접속(아래 3-D) 검증 완료.

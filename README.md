@@ -34,6 +34,7 @@ Xiaomi **LYWSD03MMC** 온습도계 3개의 값을 BLE로 받아 구글시트 **�
 | `passive_current.py` | 현재값 passive 디코드(**연결 없이**) 테스트 | PC |
 | `passive_gateway.py` | **상주 게이트웨이**: passive 현재·평균 + 하루 1회 이력 | **라즈베리파이**(또는 PC) |
 | `verify_attic.py` / `verify_shelf.py` | 센서 수신·복호화·값갱신 간격 검증 도구(pvvx 플래시 전후) | Pi |
+| `docs/WORKLOG_2026-11-08.ko.md` | 11-08 작업 일지(펌웨어 전환·드리프트 실측·로거·재실 자동기록·네트워크 주문·발표자료) | — |
 | `kma_obs_fetch.py` | 기상청 ASOS 시간 관측(부여 + 대전 일사) → `kma_obs.csv` (cron 매시 15분, 열모델 학습용) | Pi |
 | `backfill_thermal.py` | 저널·히터 로그에서 1분 열모델 데이터 복원 → `thermal_backfill.csv` | Pi |
 | `thermal_log.csv` / `kma_obs.csv` / `forecast_hist.csv` | 열모델 학습 원시 로그(**로컬 · gitignore**). 계획: [docs/THERMAL_MODEL.ko.md](docs/THERMAL_MODEL.ko.md) | Pi |
@@ -41,6 +42,7 @@ Xiaomi **LYWSD03MMC** 온습도계 3개의 값을 BLE로 받아 구글시트 **�
 | `run_sync.bat` / `run_current_sync.bat` / `run_gateway.bat` | Windows 실행 런처 | PC |
 | `run_monitor.bat` | 모니터(읽기전용) 런처: 수신 로그만, 업로드·연결 없음 | PC |
 | `sensor_keys.json` | 비콘 복호화 bindkey (**비밀 · gitignore**). 항목에 `"history": false`를 두면 이력 sync 제외(커스텀 펌웨어 센서) | 로컬 |
+| `Code.gs` | Apps Script 웹앱 **v8**(2026-11-08): current/avg/hist/batt + **presence**(재실 자동기록), 배터리 예상일(전압곡선) | 시트 |
 | `gateway.env` / `gateway.env.example` | Pi용 `FARMHUT_SECRET` 환경파일 (**비밀 · gitignore**) | Pi |
 | `farmhut-gateway.service` | systemd 유닛(부팅 자동시작) | Pi |
 
