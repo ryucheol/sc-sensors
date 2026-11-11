@@ -94,6 +94,8 @@ journalctl -u kma-sync -n 20 --no-pager
 ```
 휴대폰에서 즉시 갱신하려면 시트 `명령` 탭에 `기상` 입력(1분 안에 "기상 갱신 시작").
 기존 cron `kma_obs_fetch.py`(열모델용 `kma_obs.csv`)는 그대로 둔다.
+2단계(예보검증·중기예보·일자료)는 기본 꺼짐. 1단계가 며칠 정상 동작한 뒤 Code.gs v12를 배포하고
+`python3 weather/kma_sync.py --stage2 --dry-run`으로 확인 → `touch ~/smart-cabin/kma_stage2.on` ([§8](docs/KMA_SHEET_PUSH.ko.md)).
 
 ## 모니터(읽기전용) 모드
 `GW_MONITOR=1 python3 passive_gateway.py` (Windows는 `run_monitor.bat`):

@@ -193,7 +193,7 @@ class Run(unittest.TestCase):
         p = self.posted[0]
         self.assertEqual(p["mode"], "weather"); self.assertEqual(p["secret"], "S")
         self.assertIn("vilage", p); self.assertIn("obs_hourly", p)
-        st = json.load(open(ks.STATE))
+        with open(ks.STATE) as f: st = json.load(f)
         self.assertEqual(st["vilage_base"], "202611111100"); self.assertEqual(st["obs_last"], "2026-11-11 09:00")
 
     def test_second_run_skips_same_base(self):

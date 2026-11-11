@@ -60,3 +60,4 @@ kma_sync_state.json
 kma_sync_state.json.tmp
 .kma_sync.lock
 .sheet_cmd.lock
+kma_stage2.on

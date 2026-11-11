@@ -13,9 +13,10 @@
   2) 단기예보: 새 발표가 나왔을 때만 어제 23시 발표 + 최신 발표를 받아 '오늘 00시부터 81개 시각' 표 작성
   3) 부여(236) 관측: 시트 마지막 시각(웹앱 ?q=weather) 다음 시각부터 지금 정시까지(최대 31일, 7일씩)
   4) 웹앱 mode:"weather" 로 한 번에 업로드. 실패하면 상태 파일을 갱신하지 않아 다음 실행에서 재시도
-  2단계(중기예보·일자료)는 아직 없음.
+  2단계(kma_stage2.py: 예보검증·중기예보·일자료)는 스위치가 있을 때만 — kma_stage2.on 파일 또는 KMA_SYNC_STAGE2=1
+  또는 --stage2. 웹앱 Code.gs v12 필요. 현장 미검증 API라 먼저 --stage2 --dry-run 으로 확인.
 
-옵션: --force(발표 비교 없이 예보 재전송) · --dry-run(업로드 대신 페이로드 출력, 상태 저장 안 함)
+옵션: --force(발표 비교 없이 예보 재전송) · --dry-run(업로드 대신 페이로드 출력, 상태 저장 안 함) · --stage2
 비밀: 인증키(kma.env)·SECRET(gateway.env)은 로그·출력에 찍지 않는다.
 """
 import os, sys, json, time, datetime, subprocess, urllib.request, urllib.parse
@@ -40,6 +41,7 @@ STN = "236"                    # 부여 ASOS
 SKY_TXT = {1: "맑음", 3: "구름많음", 4: "흐림"}
 PTY_TXT = {1: "비", 2: "비/눈", 3: "눈", 4: "소나기", 5: "빗방울", 6: "빗방울눈날림", 7: "눈날림"}
 IDX_RN, IDX_CA = 15, 25        # kma_sfctm3: RN(1시간 강수) · CA_TOT(전운량)
+LAST_23 = None                 # 마지막 get_vilage의 어제 23시 발표 item(예보검증용)
 
 
 def log(msg):
@@ -129,7 +131,10 @@ def expected_base(now):
 
 
 def get_vilage(key, now, fetch=ff.fetch):
-    """→ (base_prev, base, rows). 어제 23시 발표로 오늘 앞 시간을 채우고 최신 발표로 덮는다."""
+    """→ (base_prev, base, rows). 어제 23시 발표로 오늘 앞 시간을 채우고 최신 발표로 덮는다.
+    어제 23시 발표 item은 모듈 변수 LAST_23 에 남긴다(2단계 예보검증용)."""
+    global LAST_23
+    LAST_23 = None
     latest, used = None, None
     for bd, bt in ff.base_candidates(now):
         got = fetch(key, bd, bt, FC_ROWS_PARAM)
@@ -141,6 +146,7 @@ def get_vilage(key, now, fetch=ff.fetch):
     if used != prev_base:
         try: prev = fetch(key, prev_base[:8], prev_base[8:], FC_ROWS_PARAM)
         except Exception as e: log("어제 23시 발표 수신 실패(최신 발표만 사용): %s" % e)
+    LAST_23 = prev if prev else (latest if used == prev_base else None)
     rows = vilage_rows(merge_items(prev, latest), now.date())
     return (prev_base if prev else ""), used, rows
 
@@ -215,7 +221,51 @@ def save_state(st):
     os.replace(tmp, STATE)
 
 
-def run(force=False, dry=False, now=None):
+STAGE2_FLAG = os.path.join(BASE, "kma_stage2.on")
+SENT_KEYS = ("vilage", "obs_hourly", "mid", "obs_daily", "verify")
+
+
+def stage2_enabled():
+    return os.environ.get("KMA_SYNC_STAGE2") == "1" or os.path.exists(STAGE2_FLAG)
+
+
+def add_stage2(payload, did, key, now, st, srv):
+    """2단계: 예보검증 · 중기예보 · 부여 일자료(확정 + 오늘 잠정). 항목별로 실패해도 나머지는 진행."""
+    import kma_stage2 as s2
+    today = now.date()
+    items_23 = LAST_23
+    if "vilage" in payload and items_23 and st.get("verify_day") != today.strftime("%Y-%m-%d"):
+        vr = s2.verify_rows(items_23, today)
+        if vr:
+            payload["verify"] = {"date": today.strftime("%Y-%m-%d"), "rows": vr}
+            did.append("예보검증 %s 24행" % today)
+    try:
+        cand = s2.mid_candidates(now)
+        if cand and st.get("mid_tmfc") != cand[0]:
+            tm, rows = s2.get_mid(key, now)
+            payload["mid"] = {"tmfc": tm, "rows": rows}
+            did.append("중기 %s %d행" % (tm, len(rows)))
+    except Exception as e:
+        log("중기예보 실패(2단계): %s" % e)
+    try:
+        hourly = list(payload.get("obs_hourly") or [])
+        t0 = datetime.datetime.combine(today, datetime.time(0))
+        if not any(r[0].startswith(today.strftime("%Y-%m-%d 00")) for r in hourly) and now >= t0 + datetime.timedelta(hours=1):
+            hourly = get_obs(key, t0, now.replace(minute=0, second=0, microsecond=0)) + hourly
+        hm_max = {}
+        for r in hourly:
+            if r[2] != "": hm_max[r[0][:10]] = max(hm_max.get(r[0][:10], r[2]), r[2])
+        rows = s2.get_daily(key, today, srv.get("daily_last") or st.get("daily_last"), hm_max)
+        prov = s2.provisional_row(today, hourly)
+        if prov: rows.append(prov)
+        if rows:
+            payload["obs_daily"] = rows
+            did.append("일자료 %s~%s %d행" % (rows[0][0], rows[-1][0], len(rows)))
+    except Exception as e:
+        log("일자료 실패(2단계): %s" % e)
+
+
+def run(force=False, dry=False, now=None, stage2=None):
     """한 번 동기화. 반환 코드: 0 정상/할 일 없음, 1 실패."""
     if not tz_is_kst():
         log("중단: 시간대가 KST가 아님(%s) — sudo timedatectl set-timezone Asia/Seoul" % time.strftime("%Z %z"))
@@ -256,7 +306,11 @@ def run(force=False, dry=False, now=None):
         except Exception as e:
             log("관측 실패: %s" % e)
 
-    if "vilage" not in payload and "obs_hourly" not in payload:
+    if stage2 if stage2 is not None else stage2_enabled():
+        if force: st = dict(st, mid_tmfc=None)
+        add_stage2(payload, did, key, now, st, srv)
+
+    if not any(k in payload for k in SENT_KEYS):
         log("할 일 없음"); return 0
     if dry:
         shown = dict(payload, secret="***")
@@ -268,16 +322,27 @@ def run(force=False, dry=False, now=None):
         log("업로드 실패: %s — 다음 실행에서 재시도" % e); return 1
     if not res.get("ok"):
         log("업로드 오류: %s — 웹앱이 v11인지, SECRET이 맞는지 확인" % res.get("error")); return 1
-    # v10b 이하 웹앱은 mode:weather 를 몰라 {"ok":true,"note":"empty"} 로 답한다 → 기록 안 됐는데 성공으로 착각 방지
-    if ("vilage" in payload and "vilage" not in res) or ("obs_hourly" in payload and "obs_hourly" not in res):
-        log("업로드 무시됨: 웹앱이 v11이 아님(응답 %s) — Code.gs v11 배포 후 자동 재시도" % res.get("version", res)); return 1
+    # 구버전 웹앱은 모르는 키를 조용히 무시하고 ok:true 로 답한다(v10b는 weather 전체, v11은 2단계 키).
+    # 보낸 키마다 응답에 결과가 없으면 기록 안 된 것 → 실패 처리해 상태를 저장하지 않는다.
+    missing = [k for k in SENT_KEYS if k in payload and k not in res]
+    if missing:
+        need = "v12" if set(missing) <= {"mid", "obs_daily", "verify"} else "v11"
+        log("업로드 무시됨: 웹앱이 %s 미만(응답에 %s 없음, version %s) — Code.gs %s 배포 후 자동 재시도"
+            % (need, missing, res.get("version", "?"), need)); return 1
     if "vilage" in payload:
         st["vilage_base"] = payload["vilage"]["base"]; st["vilage_day"] = now.strftime("%Y-%m-%d")
     if "obs_hourly" in payload:
         st["obs_last"] = (res.get("obs_hourly") or {}).get("last") or payload["obs_hourly"][-1][0]
+    if "verify" in payload:
+        st["verify_day"] = payload["verify"]["date"]
+    if "mid" in payload:
+        st["mid_tmfc"] = payload["mid"]["tmfc"]
+    if "obs_daily" in payload:
+        conf = [r[0] for r in payload["obs_daily"] if not r[12]]
+        if conf: st["daily_last"] = conf[-1]
     st["last_ok"] = now.strftime("%Y-%m-%d %H:%M")
     save_state(st)
-    log("완료: %s → %s" % (", ".join(did), {k: v for k, v in res.items() if k in ("vilage", "obs_hourly")}))
+    log("완료: %s → %s" % (", ".join(did), {k: v for k, v in res.items() if k in SENT_KEYS}))
     return 0
 
 
@@ -287,7 +352,7 @@ def main(argv):
     try: fcntl.flock(lk, fcntl.LOCK_EX | fcntl.LOCK_NB)   # 타이머·디스패처·명령 탭 동시 실행 방지
     except OSError:
         print("다른 kma_sync 실행 중 — 종료"); return 0
-    return run(force="--force" in argv, dry="--dry-run" in argv)
+    return run(force="--force" in argv, dry="--dry-run" in argv, stage2=True if "--stage2" in argv else None)
 
 
 if __name__ == "__main__":

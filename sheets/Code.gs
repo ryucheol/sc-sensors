@@ -1,14 +1,17 @@
 /*
  * Code.gs — 농막/선반 센서 데이터 수집 Apps Script 웹앱 (SITE 접두사로 여러 시트 공용).
  *
- * ★★ 버전: 2026-11-11 v11  ← 붙여넣기 전에 이 줄 확인! (아래 CODE_VERSION 과 같아야 함) ★★
+ * ★★ 버전: 2026-11-11 v12  ← 붙여넣기 전에 이 줄 확인! (아래 CODE_VERSION 과 같아야 함) ★★
  *   이 버전 요약: SITE 접두사 · mode current(+SSID/IP+배터리 예상일) · avg · hist(upsert) ·
- *                 batt · presence · cmd_pull/ack(+캘린더) · weather(기상청 → 예보·관측 탭) · 멱등 업로드.
- *   배포된 버전 확인법: 브라우저로 /exec 주소를 열면 {"version":"2026-11-11 v11", ...} 가 보임.
+ *                 batt · presence · cmd_pull/ack(+캘린더) · weather(기상청 → 예보·관측·중기·일자료·예보검증 탭) · 멱등 업로드.
+ *   배포된 버전 확인법: 브라우저로 /exec?q=weather 를 열면 {"version":"2026-11-11 v12", ...} 가 보임.
  *   (구버전이 배포돼 있으면 version 이 다르거나 없음 → 다시 붙여넣고 새 버전 배포)
  *   ⚠ 붙여넣은 뒤 SECRET 을 실제 값으로 다시 넣을 것. '새 배포'를 만들면 URL이 바뀌어 Pi 업로드가 모두 끊긴다.
  *
  * 변경 이력:
+ *   v12 (2026-11-11) mode:weather 2단계 키 — mid(→ 중기예보 A1·A3:H9), obs_daily(→ 부여_일별 날짜 키 upsert,
+ *       확정을 잠정으로 덮지 않음), verify(→ 예보검증 A~C 끝에 24행, 같은 날짜면 건너뜀). doGet ?q=weather 에 daily_last.
+ *       v11과 호환(2단계 키를 안 보내면 동작 동일). Pi는 kma_stage2.on 이 있을 때만 2단계 키를 보낸다.
  *   v11 (2026-11-11) mode:weather — Pi(weather/kma_sync.py)가 보낸 단기예보 81행 → '동지집_예보' A3:G83(+A1 설명),
  *       부여 관측 → '부여_시간별' 끝에 추가(마지막 시각 이후만), '안내'!A14 갱신. doGet ?q=weather 는
  *       큰 탭을 읽지 않고 weather_last(관측 마지막 시각·예보 설명)만 빠르게 반환. 설계: docs/KMA_SHEET_PUSH.ko.md
@@ -33,7 +36,7 @@
  * 특징: 중복 제거를 서버에서 처리(멱등). 중복 기준 (센서, 정시 버킷). 시각은 실제 날짜값으로 저장.
  */
 
-var CODE_VERSION = '2026-11-11 v11';   // ← /exec(doGet) 응답·붙여넣기 확인용. 고칠 때마다 갱신.
+var CODE_VERSION = '2026-11-11 v12';   // ← /exec(doGet) 응답·붙여넣기 확인용. 고칠 때마다 갱신.
 var SITE = '농막';                 // ← 장소 접두사. 두 번째 시트(예: 선반)는 '선반' 으로만 바꾸면 됨
 var SECRET = 'CHANGE-ME';          // ← 게이트웨이의 FARMHUT_SECRET 과 동일하게
 var SHEET_NAME = SITE + '_시간별';
@@ -46,6 +49,10 @@ var FC_SHEET = '동지집_예보';        // v11 mode:weather. A1 설명 · A2 �
 var FC_ROWS = 81;
 var OBS_SHEET = '부여_시간별';       // v11 A시각 B기온 C습도 D강수 E운량. 열린 범위 수식이 있어 끝에 추가만
 var GUIDE_SHEET = '안내';            // v11 A14 '마지막 조회 …'
+var MID_SHEET = '중기예보';          // v12 A1 설명 · A2 머리글 · A3:H9 7행(4~10일째) 덮어쓰기
+var DAILY_SHEET = '부여_일별';       // v12 A날짜 … M비고(빈=확정, '잠정…'). 날짜 키로 덮어쓰기/추가, 확정을 잠정으로 덮지 않음
+var VERIFY_SHEET = '예보검증';       // v12 A시각 B예보기온 C예보습도만 끝에 추가. D~F는 3행 배열수식
+var VERIFY_FORMULA_END = 1000;       //     그 수식이 A3:A1000 범위라 이 행을 넘으면 경고
 // 컬럼: A시각 B센서 C최고온도 D최저온도 E최고습도 F최저습도 G센서idx H업로드시각
 
 function _sheet() {
@@ -616,6 +623,13 @@ function _weatherLast() {
   if (ob) { var l = _obsLast(ob); if (l.date) out.obs_last = _fmt(l.date); }
   var fc = ss.getSheetByName(FC_SHEET);
   if (fc) out.vilage_desc = String(fc.getRange(1, 1).getValue());
+  var ds = ss.getSheetByName(DAILY_SHEET);           // v12: 비고(M) 빈 = 확정인 마지막 날짜
+  if (ds && ds.getLastRow() >= 2) {
+    var v = ds.getRange(2, 1, ds.getLastRow() - 1, 13).getValues();
+    for (var i = v.length - 1; i >= 0; i--) {
+      if (v[i][0] instanceof Date && String(v[i][12] || '') === '') { out.daily_last = _fmtDay(v[i][0]); break; }
+    }
+  }
   return out;
 }
 
@@ -664,10 +678,91 @@ function _postWeather(body) {
     out.obs_hourly = { added: add.length, skipped: obs.length - add.length, last: lastMs ? _fmt(new Date(lastMs)) : '' };
   }
 
+  // ── v12 2단계 ──
+  var mid = body.mid;
+  if (mid && mid.rows && mid.rows.length) {
+    var ms = ss.getSheetByName(MID_SHEET);
+    if (!ms) return _json({ ok: false, error: 'no sheet ' + MID_SHEET });
+    var mv = [];
+    for (var a = 0; a < 7; a++) {
+      var mr = mid.rows[a];
+      mv.push(mr ? [_kstDay(mr[0]) || mr[0], mr[1], mr[2], mr[3], mr[4], mr[5], mr[6], mr[7]] : ['', '', '', '', '', '', '', '']);
+    }
+    ms.getRange(3, 1, 7, 8).setValues(mv);
+    var t = String(mid.tmfc || '');
+    ms.getRange(1, 1).setValue('기상청 중기예보 · 날씨 대전·세종·충남(11C20000), 기온 지점 11C20501(부여) · ' +
+      (t.length >= 12 ? t.substr(0, 4) + '-' + t.substr(4, 2) + '-' + t.substr(6, 2) + ' ' + t.substr(8, 2) + ':' + t.substr(10, 2) : t) +
+      ' 발표 · 조회 ' + when + ' KST · Pi 자동(kma_sync)');
+    out.mid = { rows: Math.min(mid.rows.length, 7), tmfc: t };
+  }
+
+  var dly = body.obs_daily;
+  if (dly && dly.length) {
+    var ds = ss.getSheetByName(DAILY_SHEET);
+    if (!ds) return _json({ ok: false, error: 'no sheet ' + DAILY_SHEET });
+    var dn = Math.max(ds.getLastRow(), 1);
+    var col = dn >= 2 ? ds.getRange(2, 1, dn - 1, 13).getValues() : [];
+    var idx = {}, lastRow = 1;
+    for (var q = 0; q < col.length; q++) {
+      var dv = col[q][0];
+      if (dv instanceof Date && !isNaN(dv.getTime())) { idx[_fmtDay(dv)] = { row: q + 2, note: String(col[q][12] || '') }; lastRow = q + 2; }
+    }
+    var upd = 0, addn = 0, keep = 0;
+    for (var k = 0; k < dly.length; k++) {
+      var dr = dly[k], day = String(dr[0]).substr(0, 10), dd = _kstDay(day);
+      if (!dd) continue;
+      var vals13 = [[dd].concat(dr.slice(1, 13))];
+      while (vals13[0].length < 13) vals13[0].push('');
+      var ex = idx[day];
+      if (ex) {
+        if (ex.note === '' && String(dr[12] || '') !== '') { keep++; continue; }   // 확정 행을 잠정으로 덮지 않음
+        ds.getRange(ex.row, 1, 1, 13).setValues(vals13); upd++;
+      } else {
+        lastRow++;
+        if (lastRow > ds.getMaxRows()) ds.insertRowsAfter(ds.getMaxRows(), lastRow - ds.getMaxRows());
+        ds.getRange(lastRow, 1, 1, 13).setValues(vals13);
+        idx[day] = { row: lastRow, note: String(dr[12] || '') }; addn++;
+      }
+    }
+    out.obs_daily = { updated: upd, added: addn, kept_confirmed: keep };
+  }
+
+  var vf = body.verify;
+  if (vf && vf.rows && vf.rows.length) {
+    var vs = ss.getSheetByName(VERIFY_SHEET);
+    if (!vs) return _json({ ok: false, error: 'no sheet ' + VERIFY_SHEET });
+    var vn = Math.max(vs.getLastRow(), 2);
+    var va = vn >= 3 ? vs.getRange(3, 1, vn - 2, 1).getValues() : [];
+    var vlast = 2, have = false, first = _kst(vf.rows[0][0]);
+    for (var z = 0; z < va.length; z++) {
+      var x = va[z][0];
+      if (x instanceof Date && !isNaN(x.getTime())) { vlast = z + 3; if (first && x.getTime() === first.getTime()) have = true; }
+    }
+    if (have) {
+      out.verify = { added: 0, note: 'already' };
+    } else {
+      var vv = [];
+      for (var y = 0; y < vf.rows.length; y++) vv.push([_kst(vf.rows[y][0]) || vf.rows[y][0], vf.rows[y][1], vf.rows[y][2]]);
+      if (vlast + vv.length > vs.getMaxRows()) vs.insertRowsAfter(vs.getMaxRows(), vlast + vv.length - vs.getMaxRows());
+      vs.getRange(vlast + 1, 1, vv.length, 3).setValues(vv);   // A~C만. D~F는 3행 배열수식(A3:A1000 범위)
+      out.verify = { added: vv.length, last_row: vlast + vv.length };
+      if (vlast + vv.length > VERIFY_FORMULA_END) out.verify.warn = 'D~F 수식 범위(' + VERIFY_FORMULA_END + '행) 초과 — 수식 범위를 늘릴 것';
+    }
+  }
+
   var g = ss.getSheetByName(GUIDE_SHEET);
   if (g) g.getRange(14, 1).setValue('마지막 조회 ' + when + ' KST (Pi 자동)');
   out.weather_last = _weatherLast();
   return _json(out);
+}
+
+function _kstDay(s) {
+  var m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(s || ''));
+  return m ? new Date(+m[1], +m[2] - 1, +m[3]) : null;
+}
+
+function _fmtDay(d) {
+  return Utilities.formatDate(d, Session.getScriptTimeZone(), 'yyyy-MM-dd');
 }
 
 function doGet(e) {
