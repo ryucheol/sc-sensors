@@ -1,0 +1,11 @@
+#!/bin/sh
+# NetworkManager 디스패처: 인터넷이 붙으면 오프라인 동안 쌓인 텔레그램 메시지(큐)를 보낸다.
+# 설치(루트 소유·755 아니면 NetworkManager가 조용히 무시함):
+#   sudo install -o root -g root -m 755 systemd/91-telegram-flush /etc/NetworkManager/dispatcher.d/91-telegram-flush
+# 디스패처는 root로 돌므로 ryuch 사용자로 실행(~/smart-cabin 경로·파일 소유자 유지).
+# 인터넷과 무관한 이벤트(eth0 up 등)면 전송이 실패하고 큐는 그대로 남는다(다음 연결 때 재시도).
+case "$2" in
+  up|connectivity-change|dhcp4-change)
+    ( sleep 20; runuser -u ryuch -- /usr/bin/python3 /home/ryuch/smart-cabin/notify/telegram_notify.py flush ) >/dev/null 2>&1 & ;;
+esac
+exit 0

@@ -61,3 +61,10 @@ kma_sync_state.json.tmp
 .kma_sync.lock
 .sheet_cmd.lock
 kma_stage2.on
+
+# 텔레그램 알림 런타임(notify/telegram_notify.py) — telegram.env 는 위 *.env 규칙으로 제외
+telegram_queue.jsonl
+telegram_queue.jsonl.tmp
+telegram_state.json
+telegram_state.json.tmp
+.telegram.lock
