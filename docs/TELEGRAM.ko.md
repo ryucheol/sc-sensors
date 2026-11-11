@@ -44,13 +44,36 @@ tg.send("플러그 통신 끊김", key="plug_down", min_interval=1800)   # 30분
 tg.send("지금만 의미 있는 안내", queue=False)                     # 실패해도 보관 안 함
 ```
 
-## 4. 연결하면 좋은 곳 (아직 연결 안 함)
-| 프로그램 | 알릴 내용 | 권장 |
-|---|---|---|
-| `alert_sound.py` | 과열·급락·플러그 끊김·난방 정체 | 음성과 같은 시점에 `key`로 억제 |
-| `heater_control.py` | 히터 켜짐/꺼짐, 오류 | 상태가 바뀔 때만 |
-| `weather/kma_sync.py` | 업로드 실패가 계속될 때, 동파 위험(예보 최저 −5°C 이하) | 하루 한 번 `key` |
-| Pi 부팅 | "Pi 켜짐 (IP …)" | `systemd` oneshot |
+## 4. 자동 경보: `notify/cabin_watch.py` (서비스 `cabin-watch`)
+히터 제어기·음성 경보 코드는 건드리지 않고, 그들이 남기는 파일(`heater_status.json`·`heater_state.json`·`latest.json`·`forecast.json`)을 **1분마다 읽어** 판단한다. 이 서비스가 죽어도 히터 제어에는 영향이 없다. 음성 경보는 재실(난방) 모드에서만 울리지만 텔레그램은 **모든 모드**(특히 아무도 없는 동파 모드)에서 보낸다.
+
+| 분류 | 경보 | 켜지는 조건(기본값) | 다시 알림 |
+|---|---|---|---|
+| 과열 | 🔥 과열 | 1층 ≥ 28°C 또는 다락 ≥ 32°C (모든 모드) | 30분 |
+| 과열 | 🔥 동파 모드인데 히터 안 꺼짐 | 동파 모드, 제어온도 ≥ 동파 꺼짐 기준+4°C(=9°C)인데 히터가 100W 이상 사용 | 1시간 |
+| 히터 오류 | ⚠ 히터 가열 안 됨 | 제어기의 `heater_ok=false`(플러그 켜짐인데 전력 없음 5분) | 3시간 |
+| 히터 오류 | ⚠ 플러그 통신 끊김 | 상태조회 5회 연속 실패 | 3시간 |
+| 히터 오류 | 🛑 제어기 응답 없음 | `heater_status.json`이 10분 넘게 갱신 안 됨 | 3시간 |
+| 히터 오류 | 📡 실내 센서 수신 끊김 | 1층·다락 중 하나라도 45분(`stale_temp_min`) 넘게 새 값 없음 | 6시간 |
+| 동파 | 🥶 실내 저온 | 1층 ≤ 동파 켜짐 기준−1°C(=2°C) | 1시간 |
+| 동파 | ❄ 동파 주의/위험 예보 | 48시간 예보 최저 ≤ −5°C → 주의. 예보 최저+히터 현재 단 W÷UA(=실내 최저 추정)가 동파 켜짐+2°C 미만 → **위험**(단 올리기 안내) | 12시간 |
+
+- 처음 켜질 때 한 번, 계속되면 "(계속)"을 붙여 위 간격마다, 풀리면 "✅ … 복귀/해소"를 보낸다. 상태는 `cabin_watch_state.json`에 저장돼 재시작해도 중복되지 않는다.
+- 판단 자료가 없으면(예: 제어기가 멈춰 상태가 낡음) 그 경보는 상태를 유지한다(거짓 "복귀"를 보내지 않음).
+- 오프라인이면 텔레그램 큐에 쌓였다가 연결되면 `[지연 시각]`과 함께 간다.
+- 기준값 바꾸기: `heater_config.json`에 `"notify"` 키를 넣으면 즉시 반영(넣은 항목만 덮어씀). 예:
+  ```json
+  "notify": {"overheat_c": {"내부1층": 27}, "forecast_frost_c": -7, "remind_min": {"overheat": 15}}
+  ```
+  끄기: `"notify": {"enabled": false}`.
+- 확인(보내지 않고 판단만 출력): `python3 notify/cabin_watch.py --once`
+
+설치(텔레그램 설정 §2를 마친 뒤):
+```sh
+sudo cp systemd/cabin-watch.service /etc/systemd/system/ && sudo systemctl daemon-reload
+sudo systemctl enable --now cabin-watch
+journalctl -u cabin-watch -n 20        # "감시 시작" 확인. 로그: ~/smart-cabin/cabin_watch.log
+```
 
 ## 5. 문제 해결
 | 증상 | 원인·조치 |
@@ -62,4 +85,4 @@ tg.send("지금만 의미 있는 안내", queue=False)                     # 실
 | `API 오류 429 … retry_after` | 너무 자주 보냄. `key`·`min_interval`로 줄이기 |
 | 메시지가 늦게 옴 | 오프라인 큐. `telegram.log`에서 "큐 재전송" 확인 |
 
-테스트: `cd notify && python3 -m unittest test_telegram_notify` (인터넷·토큰 불필요)
+테스트: `cd notify && python3 -m unittest test_telegram_notify test_cabin_watch` (인터넷·토큰 불필요)

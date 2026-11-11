@@ -1,0 +1,16 @@
+[Unit]
+Description=Cabin watch -> Telegram (overheat, heater faults, frost risk)
+After=heater-control.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ryuch
+WorkingDirectory=/home/ryuch/smart-cabin
+ExecStart=/usr/bin/python3 /home/ryuch/smart-cabin/notify/cabin_watch.py
+Restart=always
+RestartSec=30
+Nice=10
+
+[Install]
+WantedBy=multi-user.target

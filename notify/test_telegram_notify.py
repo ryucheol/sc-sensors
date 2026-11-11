@@ -45,7 +45,8 @@ class Base(unittest.TestCase):
         for x in self.patches: x.stop()
 
     def logtext(self):
-        try: return open(tg.LOG, encoding="utf-8").read()
+        try:
+            with open(tg.LOG, encoding="utf-8") as f: return f.read()
         except Exception: return ""
 
 

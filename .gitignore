@@ -68,3 +68,5 @@ telegram_queue.jsonl.tmp
 telegram_state.json
 telegram_state.json.tmp
 .telegram.lock
+cabin_watch_state.json
+cabin_watch_state.json.tmp
