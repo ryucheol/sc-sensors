@@ -2,19 +2,19 @@
 # -*- coding: utf-8 -*-
 """kma_sync 2단계 수집기: 중기예보 · 부여 일자료(확정+오늘 잠정) · 예보검증. 설계: docs/KMA_SHEET_PUSH.ko.md §8
 
-⚠ 중기예보(getMidLandFcst·getMidTa)와 일자료(kma_sfcdd3)는 현장에서 아직 검증 전이다.
-   응답 형식이 예상과 다르면 예외로 그 항목만 빠지고(kma_sync가 로그), 1단계는 영향 없음.
+중기예보(getMidLandFcst·getMidTa)·일자료(kma_sfcdd3) 응답 형식은 2026-11-11 실제 응답으로 확인했다.
+   그래도 응답 형식이 바뀌면 예외로 그 항목만 빠지고(kma_sync가 로그), 1단계는 영향 없음.
    켜기: ~/smart-cabin/kma_stage2.on 파일을 만들거나(touch) KMA_SYNC_STAGE2=1, 또는 kma_sync.py --stage2.
    먼저 `python3 weather/kma_sync.py --stage2 --dry-run` 으로 행 내용을 확인할 것. 웹앱은 Code.gs v12 필요.
 """
-import datetime, json, urllib.request, urllib.parse
+import datetime, json, re, urllib.request, urllib.parse
 
 MID_API = "https://apihub.kma.go.kr/api/typ02/openApi/MidFcstInfoService"
 DAY_API = "https://apihub.kma.go.kr/api/typ01/url/kma_sfcdd3.php"
 REG_LAND = "11C20000"      # 대전·세종·충남 육상
-REG_TA = "11C20501"        # 부여 기온(추정, 미확인 — 시트 A1 문구와 같음)
+REG_TA = "11C20501"        # 부여 기온. 2026-11-11 getMidTa 정상 응답 확인(지점표로 부여인지는 미확인)
 STN = "236"
-MID_DAYS = range(4, 11)    # 4~10일째 → 중기예보 A3:H9 7행
+MID_DAYS = range(4, 11)    # 4~10일째 → 중기예보 A3:H9 최대 7행. 18시 발표는 5일째부터(6행, 웹앱이 빈 행으로 채움)
 DAILY_MAX_DAYS = 31
 
 
@@ -66,7 +66,9 @@ def _v(d, k):
 
 
 def mid_rows(land, ta, tmfc):
-    """→ [[날짜, 오전하늘, 오후하늘, 오전강수%, 오후강수%, 최저, 최고, 비고] × 7]. 필드가 없으면 RuntimeError."""
+    """→ [[날짜, 오전하늘, 오후하늘, 오전강수%, 오후강수%, 최저, 최고, 비고] × 6~7].
+    실제 응답(2026-11-11): 06시 발표는 4일째부터, 18시 발표는 5일째부터 온다 → 응답에 있는 날만 쓴다.
+    하늘 필드가 하루도 없으면 RuntimeError(필드 목록 포함)."""
     base = datetime.datetime.strptime(tmfc[:8], "%Y%m%d").date()
     rows = []
     for n in MID_DAYS:
@@ -79,9 +81,11 @@ def mid_rows(land, ta, tmfc):
             pam = ppm = _v(land, "rnSt%d" % n)
             note = "%d일째(하루 단위)" % n
         else:
-            raise RuntimeError("중기 육상 응답에 wf%d 필드 없음 — 필드: %s" % (n, sorted(land)[:12]))
+            continue
         rows.append([(base + datetime.timedelta(days=n)).strftime("%Y-%m-%d"), am, pm, pam, ppm,
                      _v(ta, "taMin%d" % n), _v(ta, "taMax%d" % n), note])
+    if not rows:
+        raise RuntimeError("중기 육상 응답에 wf4~wf10 필드 없음 — 필드: %s" % sorted(land)[:12])
     return rows
 
 
@@ -93,26 +97,41 @@ def get_mid(key, now, fetch=fetch_mid):
 
 
 # ── 일자료 ────────────────────────────────────────────────────────
-# kma_sfcdd3 열 이름(헤더 주석 줄에서 찾음). 이름이 다르면 RuntimeError로 그 항목만 건너뛴다.
+# kma_sfcdd3 열 이름. 실제 응답(2026-11-11, help=1)에는 한 줄짜리 열 이름 머리글이 없고
+# (머리글은 "TA / MAX / TM"처럼 세 줄로 쪼개짐) "#  12. TA_MAX        : 최고기온 (C)" 형식의 번호 목록에만 있다.
+# 번호 목록을 우선 쓰고, 없으면 TA_MAX·STN이 함께 든 한 줄 머리글을 찾는다.
 DAILY_NEED = ["TA_MIN", "TA_MIN_TM", "TA_MAX", "TA_MAX_TM", "TA_AVG", "TG_MIN", "HM_AVG", "HM_MIN", "RN_DAY", "CA_TOT"]
+_NUMBERED = re.compile(r"^#\s*(\d+)\.\s+([A-Z][A-Z0-9_]*)\s*:")
 
 
 def parse_sfcdd(txt):
-    """→ (header_names, {YYYYMMDD: {name: token}}). 헤더는 TA_MAX가 든 '#' 줄."""
-    names = None
+    """→ (header_names, {YYYYMMDD: {name: token}})."""
+    numbered = {}
+    line_hdr = None
     rows = {}
+    data = []
     for line in txt.splitlines():
-        if line.startswith("#"):
-            t = line.lstrip("#").split()
-            if "TA_MAX" in t and "STN" in t and names is None: names = t
+        if line.lstrip().startswith("#"):
+            m = _NUMBERED.match(line.strip())
+            if m:
+                numbered[int(m.group(1))] = m.group(2)
+            else:
+                t = line.strip().lstrip("#").split()
+                if "TA_MAX" in t and "STN" in t and line_hdr is None: line_hdr = t
             continue
         t = line.split()
-        if not t or not t[0][:8].isdigit() or names is None: continue
-        if len(t) < len(names): continue
-        rows[t[0][:8]] = dict(zip(names, t))
-    if names is None: raise RuntimeError("일자료 헤더(TA_MAX 포함 줄)를 찾지 못함 — 원문 앞부분: " + txt[:200])
+        if t and t[0][:8].isdigit(): data.append(t)
+    names = None
+    if numbered and sorted(numbered) == list(range(1, len(numbered) + 1)):
+        names = [numbered[i] for i in sorted(numbered)]
+    elif line_hdr:
+        names = line_hdr
+    if names is None: raise RuntimeError("일자료 열 이름(번호 목록 또는 머리글)을 찾지 못함 — 원문 앞부분: " + txt[:200])
     miss = [n for n in DAILY_NEED if n not in names]
     if miss: raise RuntimeError("일자료 열 이름 없음 %s — 헤더: %s" % (miss, " ".join(names)))
+    for t in data:
+        if len(t) < len(names): continue
+        rows[t[0][:8]] = dict(zip(names, t))
     return names, rows
 
 

@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """kma_stage2(중기예보·일자료·예보검증) + kma_sync 2단계 연결 테스트 (인터넷 불필요).
 실행: cd weather && python3 -m unittest -v test_kma_stage2
-⚠ 일자료(kma_sfcdd3) 헤더 형식은 추정이다. 현장 --stage2 --dry-run 에서 다르면 DAILY_NEED/파서를 고치고 이 픽스처도 맞출 것."""
+일자료·중기 픽스처는 2026-11-11 실제 기상청 응답에서 가져왔다(형식이 바뀌면 다시 맞출 것)."""
 import os, sys, json, datetime, tempfile, unittest
 from unittest import mock
 
@@ -23,10 +23,74 @@ TA = {"regId": "11C20501"}
 for n in range(4, 11):
     TA.update({"taMin%d" % n: n, "taMax%d" % n: n + 10})
 
+# 2026-11-11 실제 kma_sfcdd3 응답(help=1, 236 부여, 11/09~11/10). 열 이름은 번호 목록에만 있다.
 SFCDD = """#START7777
-# YYMMDD STN WS_AVG WR_DAY WD_MAX WS_MAX WS_MAX_TM TA_AVG TA_MAX TA_MAX_TM TA_MIN TA_MIN_TM TD_AVG TS_AVG TG_MIN HM_AVG HM_MIN HM_MIN_TM CA_TOT RN_DAY
-20261109 236 1.1 95 270 3.0 1412 5.9 14.9 1413 -1.2 0720 0.1 4.0 -4.5 78.4 31 1350 2.0 -9.0
-20261110 236 1.0 90 270 2.8 1400 6.2 14.4 1430 -0.9 0705 0.3 4.2 -3.0 80.1 35 1400 1.0 0.5
+#--------------------------------------------------------------------------------------------------
+#  기상청 지상관측 일자료 [입력인수형태][예] ?tm=20100715&stn=0&help=1
+#--------------------------------------------------------------------------------------------------
+#  1. TM            : 관측일 (KST)
+#  2. STN           : 국내 지점번호
+#  3. WS_AVG        : 일 평균 풍속 (m/s)
+#  4. WR_DAY        : 일 풍정 (m)
+#  5. WD_MAX        : 최대풍향
+#  6. WS_MAX        : 최대풍속 (m/s)
+#  7. WS_MAX_TM     : 최대풍속 시각 (시분)
+#  8. WD_INS        : 최대순간풍향
+#  9. WS_INS        : 최대순간풍속 (m/s)
+# 10. WS_INS_TM     : 최대순간풍속 시각 (시분)
+# 11. TA_AVG        : 일 평균기온 (C)
+# 12. TA_MAX        : 최고기온 (C)
+# 13. TA_MAX_TM     : 최고기온 시가 (시분)
+# 14. TA_MIN        : 최저기온 (C)
+# 15. TA_MIN_TM     : 최저기온 시각 (시분)
+# 16. TD_AVG        : 일 평균 이슬점온도 (C)
+# 17. TS_AVG        : 일 평균 지면온도 (C)
+# 18. TG_MIN        : 일 최저 초상온도 (C)
+# 19. HM_AVG        : 일 평균 상대습도 (%)
+# 20. HM_MIN        : 최저습도 (%)
+# 21. HM_MIN_TM     : 최저습도 시각 (시분)
+# 22. PV_AVG        : 일 평균 수증기압 (hPa)
+# 23. EV_S          : 소형 증발량 (mm)
+# 24. EV_L          : 대형 증발량 (mm)
+# 25. FG_DUR        : 안개계속시간 (hr)
+# 26. PA_AVG        : 일 평균 현지기압 (hPa)
+# 27. PS_AVG        : 일 평균 해면기압 (hPa)
+# 28. PS_MAX        : 최고 해면기압 (hPa)
+# 29. PS_MAX_TM     : 최고 해면기압 시각 (시분)
+# 30. PS_MIN        : 최저 해면기압 (hPa)
+# 31. PS_MIN_TM     : 최저 해면기압 시각 (시분)
+# 32. CA_TOT        : 일 평균 전운량 (1/10)
+# 33. SS_DAY        : 일조합 (hr)
+# 34. SS_DUR        : 가조시간 (hr)
+# 35. SS_CMB        : 캄벨 일조 (hr)
+# 36. SI_DAY        : 일사합 (MJ/m2)
+# 37. SI_60M_MAX    : 최대 1시간일사 (MJ/m2)
+# 38. SI_60M_MAX_TM : 최대 1시간일사 시각 (시분)
+# 39. RN_DAY        : 일 강수량 (mm)
+# 40. RN_D99        : 9-9 강수량 (mm)
+# 41. RN_DUR        : 강수계속시간 (hr)
+# 42. RN_60M_MAX    : 1시간 최다강수량 (mm)
+# 43. RN_60M_MAX_TM : 1시간 최다강수량 시각 (시분)
+# 44. RN_10M_MAX    : 10분간 최다강수량 (mm)
+# 45. RN_10M_MAX_TM : 10분간 최다강수량 시각 (시분)
+# 46. RN_POW_MAX    : 최대 강우강도 (mm/h)
+# 47. RN_POW_MAX_TM : 최대 강우강도 시각 (시분)
+# 48. SD_NEW        : 최심 신적설 (cm)
+# 49. SD_NEW_TM     : 최심 신적설 시각 (시분)
+# 50. SD_MAX        : 최심 적설 (cm)
+# 51. SD_MAX_TM     : 최심 적설 시각 (시분)
+# 52. TE_05         : 0.5m 지중온도 (C)
+# 53. TE_10         : 1.0m 지중온도 (C)
+# 54. TE_15         : 1.5m 지중온도 (C)
+# 55. TE_30         : 3.0m 지중온도 (C)
+# 56. TE_50         : 5.0m 지중온도 (C)
+#--------------------------------------------------------------------------------------------------
+  #2345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123
+# YYMMDD STN   WS    WR  WD   WS   WS  WD   WS   WS    TA    TA   TA    TA   TA    TD    TS    TG    HM    HM   HM    PV  EV_S  EV_L    FG     PA     PS     PS   PS     PS   PS   CA   SS   SS   SS    SI    SI   SI     RN     RN    RN     RN   RN     RN   RN     RN   RN     SD   SD     SD   SD    TE    TE    TE    TE    TE
+#    KST  ID  AVG   DAY MAX  MAX  MAX INS  INS  INS   AVG   MAX  MAX   MIN  MIN   AVG   AVG   MIN   AVG   MIN  MIN   AVG               DUR    AVG    AVG    MAX  MAX    MIN  MIN  TOT  DAY  DUR  CMB   DAY   60M  60M    DAY    D99   DUR    60M  60M    10M  10M    POW  POW    NEW  NEW    MAX  MAX     5    10    15    30    50
+#             m/s     m  16  m/s   TM  16  m/s   TM     C     C   TM     C   TM     C     C     C     %     %   TM   hPa    mm    mm    hr    hPa    hPa    hPa   TM    hPa   TM    %   hr   hr   hr         MAX   TM     mm     mm    hr     mm   TM     mm   TM     mm   TM     cm   TM     cm   TM     C     C     C     C     C
+20261109 236  0.8   657  36  2.9   45  36  6.2   47   8.6  12.2 1534   2.8 2354   4.0   9.6  -1.4  73.3  55.0    1   8.2   0.4   0.3 -9.00 1027.4 1029.0 1031.7    6 1026.4 1418  6.1  0.7 10.4 -9.0 -9.00 -9.00   -9    0.4   -9.0 -9.00   -9.0   -9   -9.0   -9   -9.0   -9   -9.0   -9   -9.0   -9 -99.0 -99.0 -99.0 -99.0 -99.0
+20261110 236  0.5   438  32  2.8 1437  32  5.2 1252   5.9  14.9 1413  -1.2  720   1.5   8.4  -4.5  78.4  31.0 1313   6.9  -9.0  -9.0 -9.00 1026.4 1028.1 1030.2  947 1026.4 1502  1.1  9.2 10.4 -9.0 -9.00 -9.00   -9   -9.0   -9.0 -9.00   -9.0   -9   -9.0   -9   -9.0   -9   -9.0   -9   -9.0   -9 -99.0 -99.0 -99.0 -99.0 -99.0
 #7777END
 """
 
@@ -45,6 +109,15 @@ class Mid(unittest.TestCase):
         self.assertEqual(rows[4][1], rows[4][2])
         self.assertEqual(rows[-1][0], "2026-11-21")
 
+    def test_18h_issue_starts_day5(self):
+        # 실제 18시 발표 형식: 4일째 필드가 없다(2026-11-11 확인) → 6행, 5일째부터
+        land = {k: v for k, v in LAND.items() if "4" not in k or k.endswith("10")}
+        ta = {k: v for k, v in TA.items() if not k.endswith("4")}
+        rows = s2.mid_rows(land, ta, "202611111800")
+        self.assertEqual(len(rows), 6)
+        self.assertEqual(rows[0][0], "2026-11-16"); self.assertEqual(rows[0][7], "5일째")
+        self.assertEqual(rows[-1], ["2026-11-21", "맑음", "맑음", 10, 10, 10, 20, "10일째(하루 단위)"])
+
     def test_missing_field_raises(self):
         with self.assertRaises(RuntimeError):
             s2.mid_rows({"wf4Am": "x"}, TA, "202611110600")
@@ -61,12 +134,22 @@ class Daily(unittest.TestCase):
     def test_parse_and_row(self):
         names, recs = s2.parse_sfcdd(SFCDD)
         self.assertIn("TA_MIN_TM", names)
-        r = s2.daily_row("20261109", recs["20261109"], 99)
-        self.assertEqual(r, ["2026-11-09", -1.2, "07:20", 14.9, "14:13", 5.9, -4.5, 78.4, 31, 0, 2, 99, ""])
+        self.assertEqual(len(names), 56)
+        r = s2.daily_row("20261110", recs["20261110"], 99)   # RN_DAY -9(무강수) → 0
+        self.assertEqual(r, ["2026-11-10", -1.2, "07:20", 14.9, "14:13", 5.9, -4.5, 78.4, 31, 0, 1.1, 99, ""])
+        r = s2.daily_row("20261109", recs["20261109"])       # 최저시각 2354, 강수 0.4
+        self.assertEqual(r[1:5], [2.8, "23:54", 12.2, "15:34"]); self.assertEqual(r[9], 0.4)
+
+    def test_single_line_header_still_works(self):
+        txt = "# YYMMDD STN TA_AVG TA_MAX TA_MAX_TM TA_MIN TA_MIN_TM TG_MIN HM_AVG HM_MIN CA_TOT RN_DAY\n" \
+              "20261110 236 5.9 14.9 1413 -1.2 720 -4.5 78.4 31.0 1.1 -9.0\n"
+        _, recs = s2.parse_sfcdd(txt)
+        self.assertEqual(s2.daily_row("20261110", recs["20261110"])[1:5], [-1.2, "07:20", 14.9, "14:13"])
 
     def test_missing_header_raises(self):
         with self.assertRaises(RuntimeError): s2.parse_sfcdd("20261109 236 1 2 3\n")
         with self.assertRaises(RuntimeError): s2.parse_sfcdd("# YYMMDD STN TA_MAX\n20261109 236 3\n")
+        with self.assertRaises(RuntimeError): s2.parse_sfcdd("#  1. TM : x\n#  2. STN : y\n#  3. TA_MAX : z\n")
 
     def test_window(self):
         today = datetime.date(2026, 11, 11)
@@ -79,7 +162,7 @@ class Daily(unittest.TestCase):
         rows = s2.get_daily("K", datetime.date(2026, 11, 11), "2026-11-08", {"2026-11-10": 97},
                             fetch=lambda k, a, b: SFCDD)
         self.assertEqual([r[0] for r in rows], ["2026-11-09", "2026-11-10"])
-        self.assertEqual(rows[1][11], 97); self.assertEqual(rows[1][9], 0.5)
+        self.assertEqual(rows[1][11], 97); self.assertEqual(rows[1][9], 0); self.assertEqual(rows[0][9], 0.4)
 
     def test_provisional(self):
         hourly = [["2026-11-11 %02d:00" % h, t, hm, 0, 3] for h, t, hm in ((0, 5.4, 92), (6, 1.7, 98), (11, 12, 66))]
