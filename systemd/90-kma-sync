@@ -1,0 +1,11 @@
+#!/bin/sh
+# NetworkManager 디스패처: 인터넷이 붙을 때 kma-sync.service 를 바로 시작(밀린 기상 자료 채우기).
+# 설치(루트 소유·755 아니면 NetworkManager가 조용히 무시함):
+#   sudo install -o root -g root -m 755 systemd/90-kma-sync /etc/NetworkManager/dispatcher.d/90-kma-sync
+# 인터페이스 이름으로 거르지 않는다(핫스팟 wlan0 → 나중에 LTE 동글은 다른 이름). 인터넷 여부는 스크립트가 확인.
+# eth0(버팔로 공유) up 처럼 인터넷과 무관한 이벤트도 오지만, 그때는 kma_sync가 '오프라인'으로 바로 끝난다.
+case "$2" in
+  up|connectivity-change|dhcp4-change)
+    systemctl start --no-block kma-sync.service ;;
+esac
+exit 0

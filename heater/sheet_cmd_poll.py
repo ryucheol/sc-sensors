@@ -4,7 +4,8 @@
 
 시트(Apps Script v9) '명령' 탭: A 명령(사람이 입력) · B 상태 · C 처리시각 · D 결과 · E 입력시각(onEdit 자동).
 이 스크립트는 mode:cmd_pull 로 B가 빈 행을 받아 heater_cmd.py 로 실행하고 mode:cmd_ack 로 B~D를 채운다.
-허용 명령(첫 토큰): 난방 동파 취침 도착 상태 점검 (영문 heat/frost/sleep/arrive/status/check).
+허용 명령(첫 토큰): 난방 동파 취침 도착 상태 점검 기상 (영문 heat/frost/sleep/arrive/status/check/weather).
+'기상'은 weather/kma_sync.py --force 를 백그라운드로 띄운다(기상청 → 시트 즉시 갱신).
 입력 후 CMD_TTL_H 시간이 지난 행은 실행하지 않고 '만료'로 표시(Pi가 오래 오프라인이었던 경우 보호).
 설정: gateway.env 의 GW_WEBAPP_URL(없으면 게이트웨이 기본 URL)·FARMHUT_SECRET.
 """
@@ -24,6 +25,7 @@ ALIASES = {
     "도착": "도착", "arrive": "도착", "arrival": "도착",
     "상태": "상태", "status": "상태",
     "점검": "점검", "check": "점검", "히터점검": "점검",
+    "기상": "기상", "weather": "기상", "날씨": "기상",
 }
 
 
@@ -99,9 +101,16 @@ def run(cmd_text):
     for i, t in enumerate(toks):
         if t.lower() in ALIASES: verb = ALIASES[t.lower()]; toks.pop(i); break
     if not verb:
-        return "오류", "알 수 없는 명령 — 난방 / 동파 / 취침 / 도착 HH:MM [내일|날짜] [목표°C] / 도착 취소 / 상태 / 점검"
+        return "오류", "알 수 없는 명령 — 난방 / 동파 / 취침 / 도착 HH:MM [내일|날짜] [목표°C] / 도착 취소 / 상태 / 점검 / 기상"
     if verb == "상태":
         return "완료", status_text()
+    if verb == "기상":   # 기상청 → 시트 즉시 갱신. 최대 몇 분 걸리므로 백그라운드로 띄우고 바로 응답
+        sync = os.path.join(BASE, "weather", "kma_sync.py")
+        if not os.path.exists(sync): return "오류", "weather/kma_sync.py 없음(git pull 필요)"
+        subprocess.Popen([PY, sync, "--force"], cwd=BASE, start_new_session=True,
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                         env=dict(os.environ, PYTHONIOENCODING="utf-8"))
+        return "완료", "기상 갱신 시작 — 1~3분 뒤 안내!A14·대시보드 확인 (기록: kma_sync.log)"
     if verb == "점검":
         if not os.path.exists(VENV_PY): return "오류", "tuya-venv 없음"
         r = subprocess.run([VENV_PY, os.path.join(HERE, "heater_selftest.py")], capture_output=True, text=True,

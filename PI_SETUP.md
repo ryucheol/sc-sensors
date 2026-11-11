@@ -64,6 +64,37 @@ journalctl -u farmhut-gateway -f
 ```
 이제 Pi를 켜두기만 하면 24시간 자동 수집·업로드. 죽어도 10초 뒤 자동 재시작.
 
+## 6. 기상청 → 시트 자동 갱신 (kma-sync, 1단계)
+설계·실패 처리: [docs/KMA_SHEET_PUSH.ko.md](docs/KMA_SHEET_PUSH.ko.md). 인터넷이 붙으면(핫스팟 켜짐) 단기예보 81행과 부여 관측을 시트에 채운다.
+
+**먼저(방문 전 가능)**: `sheets/Code.gs` v11을 Apps Script에 붙여넣고 `SECRET`을 실제 값으로 다시 넣은 뒤,
+**배포 관리 → 기존 웹앱 → 새 버전**으로 배포('새 배포'는 URL이 바뀌어 Pi 업로드가 끊김). 브라우저로 `/exec?q=weather` → `"version":"2026-11-11 v11"` 확인.
+프로젝트 설정의 시간대가 `Asia/Seoul`인지도 확인.
+
+```bash
+cd ~/smart-cabin && git status          # Pi에서 고친 파일이 없는지 먼저 확인
+git pull
+timedatectl                             # Time zone: Asia/Seoul, System clock synchronized: yes
+#   시간대가 다르면: sudo timedatectl set-timezone Asia/Seoul
+python3 weather/kma_sync.py --dry-run   # 업로드 없이 보낼 내용 출력(SECRET은 ***)
+python3 weather/kma_sync.py --force     # 실제 업로드 → 시트 안내!A14·대시보드 확인
+tail -5 kma_sync.log
+
+# 자동 실행: 서비스가 아니라 '타이머'를 enable
+sudo cp systemd/kma-sync.service systemd/kma-sync.timer /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now kma-sync.timer
+systemctl list-timers kma-sync.timer
+
+# 연결될 때 바로 실행: 루트 소유·755가 아니면 NetworkManager가 조용히 무시함
+sudo install -o root -g root -m 755 systemd/90-kma-sync /etc/NetworkManager/dispatcher.d/90-kma-sync
+
+# 시험: 핫스팟 끔 → 켬 → 1~3분 뒤
+journalctl -u kma-sync -n 20 --no-pager
+```
+휴대폰에서 즉시 갱신하려면 시트 `명령` 탭에 `기상` 입력(1분 안에 "기상 갱신 시작").
+기존 cron `kma_obs_fetch.py`(열모델용 `kma_obs.csv`)는 그대로 둔다.
+
 ## 모니터(읽기전용) 모드
 `GW_MONITOR=1 python3 passive_gateway.py` (Windows는 `run_monitor.bat`):
 - 비콘 **수신 로그만** 출력, **서버 업로드 안 함 · 센서 연결 안 함**, SECRET 불필요.

@@ -57,8 +57,20 @@ def base_candidates(now):
     return out[:4]
 
 
-def fetch(key, bd, bt):
-    q = urllib.parse.urlencode({"authKey": key, "numOfRows": "1000", "pageNo": "1",
+def online():
+    """인터넷 연결 확인(기상청 또는 1.1.1.1에 TCP 443). kma_sync.py도 이 함수를 쓴다."""
+    import socket
+    for h in ("apihub.kma.go.kr", "1.1.1.1"):
+        try:
+            c = socket.create_connection((h, 443), 2.5); c.close(); return True
+        except Exception:
+            pass
+    return False
+
+
+def fetch(key, bd, bt, rows="1000"):
+    """한 발표분(bd YYYYMMDD, bt HHMM)의 item 목록. NODATA면 []. rows: numOfRows(5일치 전체는 2000)."""
+    q = urllib.parse.urlencode({"authKey": key, "numOfRows": str(rows), "pageNo": "1",
                                 "dataType": "JSON", "base_date": bd, "base_time": bt,
                                 "nx": NX, "ny": NY})
     with urllib.request.urlopen(API + "?" + q, timeout=30) as r:
@@ -83,15 +95,7 @@ def main():
         sys.exit(2)
 
     # 인터넷 미연결이면 가져오기 시도 자체를 안 함(즉시 종료, 대기·재시도 없음)
-    import socket
-    def _online():
-        for h in ("apihub.kma.go.kr", "1.1.1.1"):
-            try:
-                c = socket.create_connection((h, 443), 2.5); c.close(); return True
-            except Exception:
-                pass
-        return False
-    if not _online():
+    if not online():
         print("오프라인 — 예보 갱신 건너뜀", file=sys.stderr); sys.exit(0)
 
     now = datetime.datetime.now()

@@ -54,3 +54,9 @@ thermal_backfill.csv
 fan_on
 presence_state.json
 .sheet_cmd.lock
+
+# 기상청 → 시트 동기화 런타임(kma_sync)
+kma_sync_state.json
+kma_sync_state.json.tmp
+.kma_sync.lock
+.sheet_cmd.lock

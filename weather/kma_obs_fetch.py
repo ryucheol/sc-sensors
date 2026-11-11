@@ -56,6 +56,9 @@ def main():
     key = auth_key()
     if not key:
         print("KMA_AUTH_KEY 없음(kma.env)", file=sys.stderr); sys.exit(2)
+    from forecast_fetch import online      # 같은 weather/ 폴더
+    if not online():
+        print("오프라인 — 관측 수집 건너뜀", file=sys.stderr); sys.exit(0)
     now = datetime.datetime.now()
     tm2 = now.strftime("%Y%m%d%H00"); tm1 = (now - datetime.timedelta(hours=6)).strftime("%Y%m%d%H00")
     if len(sys.argv) >= 2: tm1 = sys.argv[1]          # 백필: python3 kma_obs_fetch.py 202611010000 [202611080900]

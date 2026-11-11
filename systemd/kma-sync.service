@@ -1,0 +1,16 @@
+# 기상청 단기예보·부여 관측 → 구글 시트 (weather/kma_sync.py, 1단계). 설계: docs/KMA_SHEET_PUSH.ko.md
+# 타이머(kma-sync.timer)와 NetworkManager 디스패처(90-kma-sync)가 시작한다. 직접 시험: sudo systemctl start kma-sync
+# 비밀은 스크립트가 직접 읽는다: ~/smart-cabin/kma.env(KMA_AUTH_KEY), ~/smart-cabin/gateway.env(FARMHUT_SECRET·GW_WEBAPP_URL)
+[Unit]
+Description=KMA forecast/observation -> Google Sheet (kma_sync)
+Wants=network-online.target
+After=network-online.target time-sync.target
+
+[Service]
+Type=oneshot
+User=ryuch
+WorkingDirectory=/home/ryuch/smart-cabin
+Environment=PYTHONIOENCODING=utf-8
+ExecStart=/usr/bin/python3 /home/ryuch/smart-cabin/weather/kma_sync.py
+TimeoutStartSec=300
+Nice=10

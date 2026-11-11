@@ -1,0 +1,13 @@
+# 매시 12·42분에 kma-sync.service 실행. 오프라인이면 스크립트가 즉시 끝나므로 비용 없음.
+# 단기예보 발표(02·05·…·23시, 발표 15분 뒤부터 받음)와 정시 관측(+10분 공개)을 놓치지 않는 간격.
+# 설치: sudo cp systemd/kma-sync.* /etc/systemd/system/ && sudo systemctl daemon-reload && sudo systemctl enable --now kma-sync.timer
+[Unit]
+Description=Run kma_sync at :12 and :42
+
+[Timer]
+OnCalendar=*-*-* *:12,42:00
+Persistent=true
+RandomizedDelaySec=60
+
+[Install]
+WantedBy=timers.target

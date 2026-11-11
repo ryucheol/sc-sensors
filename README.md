@@ -92,9 +92,9 @@ smart-cabin/
 ├─ gateway/   passive_gateway.py(게이트웨이) · passive_current.py · farmhut_sync.py · current_sync.py · verify_attic.py · verify_shelf.py · backfill_thermal.py
 ├─ heater/    heater_control.py(제어기) · heater_cmd.py · heater_selftest.py · heater_probe.py · heater_sim.py · sim_*.py · test_heater_logic.py · heater_aliases.sh
 ├─ alert/     alert_sound.py(음성 알림)
-├─ weather/   forecast_fetch.py(단기예보) · kma_obs_fetch.py(ASOS 관측)
-├─ sheets/    Code.gs(Apps Script v8)
-├─ systemd/   farmhut-gateway · heater-control · alert-sound · shelf-gateway .service
+├─ weather/   forecast_fetch.py(단기예보) · kma_obs_fetch.py(ASOS 관측) · kma_sync.py(→ 시트) · test_kma_sync.py
+├─ sheets/    Code.gs(Apps Script v11)
+├─ systemd/   farmhut-gateway · heater-control · alert-sound · shelf-gateway .service · kma-sync .service/.timer · 90-kma-sync(NM 디스패처)
 ├─ scripts/   run_*.bat / run_*.sh (PC·수동 실행 런처)
 ├─ docs/      특강 PDF · 분석 문서 · 시뮬레이터
 ├─ piper/     TTS 모델(예비)
@@ -110,10 +110,11 @@ smart-cabin/
 | `heater/heater_control.py` | 모드·히스테리시스·예열·안전·단수 인식·조언·계측(`thermal_log.csv`) | `heater-control.service` (tuya-venv) |
 | `alert/alert_sound.py` | 음성 알림(문 여닫기·고장·정체·단수 조언) | `alert-sound.service` |
 | `heater/heater_cmd.py` / `heater/heater_selftest.py` | 모드 명령(`난방`·`취침`·`동파`·`도착 HH:MM`) / 떠나기 전 자가점검(`히터점검`) | 별칭 `heater/heater_aliases.sh` |
-| `heater/sheet_cmd_poll.py` | 시트 `명령` 탭 폴링 → 같은 명령을 원격 실행, 결과 기록 | cron 매분 |
+| `heater/sheet_cmd_poll.py` | 시트 `명령` 탭 폴링 → 같은 명령을 원격 실행, 결과 기록(`기상` = 기상청 → 시트 즉시 갱신) | cron 매분 |
 | `weather/forecast_fetch.py` / `weather/kma_obs_fetch.py` | 기상청 단기예보(매시 10분) / ASOS 관측(매시 15분) | cron |
+| `weather/kma_sync.py` | 기상청 단기예보 81행·부여 관측 → 시트 `동지집_예보`·`부여_시간별`(1단계). 테스트 `cd weather && python3 -m unittest test_kma_sync` — [설계](docs/KMA_SHEET_PUSH.ko.md) | timer 매시 12·42분 + 연결 시 |
 | `heater/test_heater_logic.py` | 순수 로직 단위테스트 61개 — `cd heater && python3 -m unittest test_heater_logic` | 어디서나 |
-| `sheets/Code.gs` | Apps Script 웹앱 v10: current/avg/hist/batt/presence/cmd_pull/cmd_ack, 배터리 예상일, `명령` 탭 onEdit, 캘린더 `동지집 도착` 일정 → 도착 명령 | 시트에 붙여넣기 |
+| `sheets/Code.gs` | Apps Script 웹앱 v11: current/avg/hist/batt/presence/cmd_pull/cmd_ack/weather, 배터리 예상일, `명령` 탭 onEdit, 캘린더 `동지집 도착` 일정 → 도착 명령 | 시트에 붙여넣기 |
 | `index.html` · `gateway/farmhut_sync.py` · `gateway/current_sync.py` | 폰 웹앱(Web Bluetooth) · PC 동기화 — 초기 경로, 지금은 보조 | GitHub Pages · PC |
 | `heater_config.json` | 임계값·예열·단수·이중화·데드맨 설정(즉시 반영) | 루트 |
 

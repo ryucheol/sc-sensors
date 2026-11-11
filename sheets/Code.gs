@@ -1,13 +1,17 @@
 /*
  * Code.gs — 농막/선반 센서 데이터 수집 Apps Script 웹앱 (SITE 접두사로 여러 시트 공용).
  *
- * ★★ 버전: 2026-11-08 v8  ← 붙여넣기 전에 이 줄 확인! ★★
+ * ★★ 버전: 2026-11-11 v11  ← 붙여넣기 전에 이 줄 확인! (아래 CODE_VERSION 과 같아야 함) ★★
  *   이 버전 요약: SITE 접두사 · mode current(+SSID/IP+배터리 예상일) · avg · hist(upsert) ·
- *                 batt(배터리 이력 → _배터리 탭) · 멱등 업로드.
- *   배포된 버전 확인법: 브라우저로 /exec 주소를 열면 {"version":"2026-10-27 v6", ...} 가 보임.
+ *                 batt · presence · cmd_pull/ack(+캘린더) · weather(기상청 → 예보·관측 탭) · 멱등 업로드.
+ *   배포된 버전 확인법: 브라우저로 /exec 주소를 열면 {"version":"2026-11-11 v11", ...} 가 보임.
  *   (구버전이 배포돼 있으면 version 이 다르거나 없음 → 다시 붙여넣고 새 버전 배포)
+ *   ⚠ 붙여넣은 뒤 SECRET 을 실제 값으로 다시 넣을 것. '새 배포'를 만들면 URL이 바뀌어 Pi 업로드가 모두 끊긴다.
  *
  * 변경 이력:
+ *   v11 (2026-11-11) mode:weather — Pi(weather/kma_sync.py)가 보낸 단기예보 81행 → '동지집_예보' A3:G83(+A1 설명),
+ *       부여 관측 → '부여_시간별' 끝에 추가(마지막 시각 이후만), '안내'!A14 갱신. doGet ?q=weather 는
+ *       큰 탭을 읽지 않고 weather_last(관측 마지막 시각·예보 설명)만 빠르게 반환. 설계: docs/KMA_SHEET_PUSH.ko.md
  *   v10 (2026-11-08) 캘린더 연동 — 기본 캘린더에 '동지집 도착[, 희망온도 24도]' 일정이 있으면 cmd_pull 때(10분마다 검사)
  *       '도착 YYYY-MM-DD HH:MM T' 명령을 '명령' 탭에 자동 기입(F 출처=캘린더). 일정 변경→교체, 삭제→'도착 취소'. 종일 일정은 19:00, 기본 23.5°C
  *   v9 (2026-11-08) '명령' 탭 원격 명령 — Pi가 매분 mode:cmd_pull 로 B(상태) 빈 행을 받아 실행하고 mode:cmd_ack 로 결과 기록. onEdit 가 입력시각 스탬프
@@ -29,7 +33,7 @@
  * 특징: 중복 제거를 서버에서 처리(멱등). 중복 기준 (센서, 정시 버킷). 시각은 실제 날짜값으로 저장.
  */
 
-var CODE_VERSION = '2026-11-08 v10b';   // ← /exec(doGet) 응답·붙여넣기 확인용. 고칠 때마다 갱신.
+var CODE_VERSION = '2026-11-11 v11';   // ← /exec(doGet) 응답·붙여넣기 확인용. 고칠 때마다 갱신.
 var SITE = '농막';                 // ← 장소 접두사. 두 번째 시트(예: 선반)는 '선반' 으로만 바꾸면 됨
 var SECRET = 'CHANGE-ME';          // ← 게이트웨이의 FARMHUT_SECRET 과 동일하게
 var SHEET_NAME = SITE + '_시간별';
@@ -38,6 +42,10 @@ var AVG_SHEET = SITE + '_평균';       // 게이트웨이가 passive로 계산�
 var BATT_SHEET = SITE + '_배터리';    // 배터리 전압·% 이력(수명 추세 → 현재 탭 예상 소진일)
 var CMD_SHEET = '명령';           // A 명령(사람 입력) B 상태 C 처리시각 D 결과 E 입력시각. Pi(heater/sheet_cmd_poll.py)가 매분 폴링
 var PRESENCE_SHEET = '재실기록';      // A도착 B출발(빈칸=체류 중) C메모. 게이트웨이 mode:presence 가 자동 기록
+var FC_SHEET = '동지집_예보';        // v11 mode:weather. A1 설명 · A2 머리글 · A3:G83 81행(덮어쓰기). W~Z 수식은 건드리지 않음
+var FC_ROWS = 81;
+var OBS_SHEET = '부여_시간별';       // v11 A시각 B기온 C습도 D강수 E운량. 열린 범위 수식이 있어 끝에 추가만
+var GUIDE_SHEET = '안내';            // v11 A14 '마지막 조회 …'
 // 컬럼: A시각 B센서 C최고온도 D최저온도 E최고습도 F최저습도 G센서idx H업로드시각
 
 function _sheet() {
@@ -534,6 +542,7 @@ function doPost(e) {
     if (body.mode === 'presence') return _postPresence(body);
     if (body.mode === 'cmd_pull') return _cmdPull(body);
     if (body.mode === 'cmd_ack') return _cmdAck(body);
+    if (body.mode === 'weather') return _postWeather(body);
     var sensor = String(body.sensor || '').trim();
     var records = body.records || [];
     if (!sensor || !records.length) return _json({ ok: true, added: 0, skipped: 0, note: 'empty' });
@@ -576,8 +585,94 @@ function doPost(e) {
 
 // 센서별 행수/마지막 시각 요약. 브라우저에서 /exec 열면 JSON, callback 파라미터가 있으면 JSONP(JS)로 반환.
 // (브라우저 fetch는 CORS에 막히므로, 앱은 <script>로 JSONP를 써서 시트의 마지막 시각을 읽는다.)
+// ── v11 mode:weather ──────────────────────────────────────────────
+// 'YYYY-MM-DD HH:MM' (KST) → Date. 스크립트 시간대가 Asia/Seoul 이어야 한다(프로젝트 설정).
+function _kst(s) {
+  var m = /^(\d{4})-(\d{2})-(\d{2})[ T](\d{1,2}):(\d{2})/.exec(String(s || ''));
+  if (!m) return null;
+  return new Date(+m[1], +m[2] - 1, +m[3], +m[4], +m[5]);
+}
+
+function _fmt(d) {
+  return Utilities.formatDate(d, Session.getScriptTimeZone(), 'yyyy-MM-dd HH:mm');
+}
+
+// 부여_시간별 A열에서 마지막 날짜값의 (행번호, Date). 다른 열 수식 때문에 getLastRow()는 믿지 않는다.
+function _obsLast(sh) {
+  var n = sh.getLastRow();
+  if (n < 2) return { row: 1, date: null };
+  var a = sh.getRange(2, 1, n - 1, 1).getValues();
+  for (var i = a.length - 1; i >= 0; i--) {
+    var v = a[i][0];
+    if (v instanceof Date && !isNaN(v.getTime())) return { row: i + 2, date: v };
+  }
+  return { row: 1, date: null };
+}
+
+function _weatherLast() {
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var out = {};
+  var ob = ss.getSheetByName(OBS_SHEET);
+  if (ob) { var l = _obsLast(ob); if (l.date) out.obs_last = _fmt(l.date); }
+  var fc = ss.getSheetByName(FC_SHEET);
+  if (fc) out.vilage_desc = String(fc.getRange(1, 1).getValue());
+  return out;
+}
+
+function _postWeather(body) {
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var out = { ok: true };
+  var when = String(body.fetched_at || _fmt(new Date()));
+
+  var vg = body.vilage;
+  if (vg && vg.rows && vg.rows.length) {
+    var fc = ss.getSheetByName(FC_SHEET);
+    if (!fc) return _json({ ok: false, error: 'no sheet ' + FC_SHEET });
+    var vals = [];
+    for (var i = 0; i < FC_ROWS; i++) {
+      var r = vg.rows[i];
+      if (!r) { vals.push(['', '', '', '', '', '', '']); continue; }
+      var d = _kst(r[0]);
+      vals.push([d || r[0], r[1], r[2], r[3], r[4], r[5], r[6]]);
+    }
+    fc.getRange(3, 1, FC_ROWS, 7).setValues(vals);
+    var b = String(vg.base || ''), bp = String(vg.base_prev || '');
+    var nice = function (x) { return x.length >= 12 ? x.substr(0, 4) + '-' + x.substr(4, 2) + '-' + x.substr(6, 2) + ' ' + x.substr(8, 2) + ':' + x.substr(10, 2) : x; };
+    fc.getRange(1, 1).setValue('기상청 단기예보 동지집 격자(57,99) · 발표 ' + nice(b) +
+      (bp ? ' (앞 시간은 ' + nice(bp) + ' 발표)' : '') + ' · 조회 ' + when + ' KST · Pi 자동(kma_sync)');
+    out.vilage = { rows: Math.min(vg.rows.length, FC_ROWS), base: b };
+  }
+
+  var obs = body.obs_hourly;
+  if (obs && obs.length) {
+    var sh = ss.getSheetByName(OBS_SHEET);
+    if (!sh) return _json({ ok: false, error: 'no sheet ' + OBS_SHEET });
+    var last = _obsLast(sh);
+    var lastMs = last.date ? last.date.getTime() : 0;
+    var add = [];
+    for (var j = 0; j < obs.length; j++) {
+      var o = obs[j], dt = _kst(o[0]);
+      if (!dt || dt.getTime() <= lastMs) continue;   // 마지막 시각 이후만(정렬된 입력 전제)
+      lastMs = dt.getTime();
+      add.push([dt, o[1], o[2], o[3], o[4]]);
+    }
+    if (add.length) {
+      var need = last.row + add.length;
+      if (need > sh.getMaxRows()) sh.insertRowsAfter(sh.getMaxRows(), need - sh.getMaxRows());
+      sh.getRange(last.row + 1, 1, add.length, 5).setValues(add);
+    }
+    out.obs_hourly = { added: add.length, skipped: obs.length - add.length, last: lastMs ? _fmt(new Date(lastMs)) : '' };
+  }
+
+  var g = ss.getSheetByName(GUIDE_SHEET);
+  if (g) g.getRange(14, 1).setValue('마지막 조회 ' + when + ' KST (Pi 자동)');
+  out.weather_last = _weatherLast();
+  return _json(out);
+}
+
 function doGet(e) {
   var p = (e && e.parameter) || {};
+  if (p.q === 'weather') return _json({ ok: true, version: CODE_VERSION, weather_last: _weatherLast() });
   var sh = _sheet();
   var last = sh.getLastRow();
   var summary = {};
