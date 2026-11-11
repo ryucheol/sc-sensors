@@ -8,7 +8,8 @@
  - 급락(15분 2°C↑, 문 상태 아닐 때): "N도 떨어졌습니다, 문 닫으세요" — 5분 반복(총 하락량), 최저점 대비 상승하면 중지
  - 난방진단: 플러그 통신끊김 / 난방정체(설정 아래 30분 안 오름=다이얼 과소)
  - 급상승은 생략(26°C 알림이 대체). 급락만 음성. 모두 comfort·센서 신선할 때만.
- CLI: alert_sound.py say "문장"  /  demo
+ - 시보: 재실(comfort)·07~22시에 20분마다 "오후 세 시 이십 분입니다. 실내 N도." (블루투스 스피커 30분 자동꺼짐 방지 겸)
+ CLI: alert_sound.py say "문장"  /  chime(시보 즉시 시험)  /  demo
  유닛은 /usr/bin/python3로 실행돼도 아래 re-exec 심이 piper-venv 파이썬으로 재진입."""
 import os, sys
 
@@ -36,6 +37,10 @@ DROP_T = 2.0; DROP_WIN = 900
 STALL_WIN = 1800; STALL_RISE = 0.2; STALL_MARGIN = 0.3; STALL_REPEAT = 900
 # 신선도 가드
 FRESH_SENSOR = 180; FRESH_STATUS = 150; FAULT_REPEAT = 900
+# 시보(재실 comfort 모드에서만): CHIME_EVERY분 간격(정각 기준) "오후 세 시 이십 분입니다. 실내 N도."
+#   블루투스 스피커가 30분 무음이면 꺼지므로 간격 < 30분(20분 → 여유 10분). 0이면 끔.
+#   CHIME_START~CHIME_END시(끝 포함 시간대)만. 취침(sleep)·동파(frost) 모드에선 말하지 않음.
+CHIME_EVERY = 20; CHIME_START = 7; CHIME_END = 22
 FORECAST = os.path.join(BASE, "forecast.json"); LATEST = os.path.join(BASE, "latest.json")
 STATE = os.path.join(BASE, "heater_state.json"); STATUS = os.path.join(BASE, "heater_status.json")
 CACHE = os.path.join(BASE, "tts_cache")  # gTTS 영구 캐시(문구당 1회 다운로드 → 오프라인 재사용)
@@ -103,6 +108,39 @@ def dec1(x):
         i += 1; f = 0
     s = num2kr(i) if f == 0 else "%s 점 %s" % (num2kr(i), _U[f])
     return ("영하 " + s) if neg else s
+
+
+_HOUR = ["열두", "한", "두", "세", "네", "다섯", "여섯", "일곱", "여덟", "아홉", "열", "열한"]
+
+
+def time_kr(dt):
+    """시각 한글(시는 고유어, 분은 한자어): 15:20→'오후 세 시 이십 분', 7:00→'오전 일곱 시', 12:40→'낮 열두 시 사십 분'."""
+    h, m = dt.hour, dt.minute
+    ampm = "오전" if h < 12 else ("낮" if h == 12 else "오후")
+    if h == 0:
+        ampm = "밤"
+    s = "%s %s 시" % (ampm, _HOUR[h % 12])
+    return s + (" %s 분" % num2kr(m) if m else "")
+
+
+def chime_slot(dt, mode, every=None, start=None, end=None):
+    """시보 슬롯 키(같은 슬롯은 한 번만 말함) 또는 None(말하지 않음). 순수 함수."""
+    every = CHIME_EVERY if every is None else every
+    start = CHIME_START if start is None else start
+    end = CHIME_END if end is None else end
+    if not every or mode != "comfort" or not (start <= dt.hour <= end):
+        return None
+    return dt.strftime("%Y%m%d%H") + "%02d" % (dt.minute // every * every)
+
+
+def chime_texts(dt, t_in, every=None):
+    """시보 문장(시각은 슬롯 시작 시각으로 반올림해 캐시 재사용). 시각·온도 두 문장으로 나눠 캐시 적중률↑."""
+    every = CHIME_EVERY if every is None else every
+    m = dt.minute // every * every if every else dt.minute
+    out = [time_kr(dt.replace(minute=m)) + "입니다."]
+    if t_in is not None:
+        out.append("실내 %s도." % dec1(t_in))
+    return out
 
 
 def online():
@@ -277,6 +315,8 @@ def loop():
     stall_last = 0.0; fault_last = 0.0; hb_last = 0.0; gate_warned = False; prev_comfort = False
     adv_last = None; adv_t = 0.0   # 단수 조언(heater_status.advice) 발화 추적
     heat_since = None; heat_tctl0 = None   # 난방 '시작' 시점·그때 온도(정체 판정 기준점)
+    # 시보: 시작 직후의 현재 슬롯은 건너뜀(재시작마다 말하지 않도록) — 모드와 무관하게 슬롯 키만 기억
+    chime_last = chime_slot(datetime.datetime.now(), "comfort")
     logline("서비스 시작")
     while True:
         try:
@@ -292,6 +332,12 @@ def loop():
                 logline("단수조언 발화: " + adv)
             elif not adv:
                 adv_last = None
+            # (D) 시보: 재실 모드·낮 시간대에 CHIME_EVERY분마다 1회(블루투스 스피커 자동 꺼짐 방지 겸)
+            slot = chime_slot(datetime.datetime.now(), st.get("mode"))
+            if slot and slot != chime_last:
+                for s in chime_texts(datetime.datetime.now(), t if fresh else None):
+                    say(s)
+                chime_last = slot; logline("시보 %s 실내%.1f fresh=%s" % (slot, t, fresh))
             # 이력 적재(신선할 때만)
             if fresh:
                 fhist.append((now, t)); fhist[:] = [x for x in fhist if now - x[0] <= 1200]
@@ -399,6 +445,15 @@ def loop():
 if __name__ == "__main__":
     if len(sys.argv) >= 2 and sys.argv[1] == "say":
         setvol(); say(" ".join(sys.argv[2:]) or "테스트입니다."); sys.exit(0)
+    if len(sys.argv) >= 2 and sys.argv[1] == "chime":   # 시보 즉시 시험(모드·시간대 무시)
+        setvol()
+        try:
+            t_in = tempf(json.load(open(LATEST)), "내부1층")
+        except Exception:
+            t_in = None
+        for s in chime_texts(datetime.datetime.now(), t_in):
+            print(s); say(s)
+        sys.exit(0)
     if len(sys.argv) >= 2 and sys.argv[1] == "demo":
         setvol(); d = json.load(open(LATEST)); t = tempf(d, "내부1층") or 26.2
         print("PIPER:", PIPER, "| online:", online())
