@@ -72,3 +72,6 @@ cabin_watch_state.json
 cabin_watch_state.json.tmp
 telegram_bot_offset.json
 telegram_bot_offset.json.tmp
+# Qingping 개발자 플랫폼 App Key/Secret (비밀)
+qingping_key.json
+qingping_*.csv

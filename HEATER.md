@@ -309,3 +309,17 @@ ssh -N -L 8080:192.168.11.100:80 ryuch@<pi>   # → 브라우저 http://localhos
 - **전환**: `tuya_keys.json`(gitignore)의 "Main heater" 항목을 `{"name":"Main heater","type":"shelly","ip":"<IP>","password":""}`로 바꾸고 `sudo systemctl restart heater-control`을 실행한다. 되돌리려면 투야 항목을 복원한다.
   `heater.log` 시작 줄에 `Shelly`가 보이고, 꺼짐 동안 `countdown_s`가 1500~1800 사이를 오가면 정상이다.
 - `heater_selftest.py`, `heater_probe.py`, `plug_countdown_test.py`는 아직 투야 전용이다(Shelly 점검은 `shelly_check.py`).
+
+### 플러그 내장 동파 가드 (2026-11-13, `heater/shelly_frost_guard.js`, 시험 모드)
+
+Pi와 독립된 마지막 안전망을 플러그 안의 스크립트로 둔다. 사용자 설계: "Pi가 카운터를 늘리지 않으면 죽었다고 보고, Qingping 온도로 동파 방지".
+
+- **동작**: 30초마다 판단한다.
+  1. Pi 하트비트가 10분 안에 있으면 아무것도 안 한다(Pi가 제어).
+  2. 하트비트가 없고 Qingping 온도가 30분 안에 있으면 3 °C 미만 켬, 5 °C 초과 끔.
+  3. 둘 다 없으면 켠다(히터 기계식 서모스탯이 과열을 막음).
+- **입력**: Qingping CGP22C BLE 광고(서비스데이터 0xFDCD, TLV 0x01 온습도, 0x13 CO₂, 암호화 없음). 광고는 업로드 주기(10분)마다라 동파 판단에 충분하다. pvvx 센서는 Mi 암호화라 플러그 스크립트가 못 읽는다.
+- **하트비트**: Pi가 매분 `GET http://<플러그>/script/1/hb`. 메모리에만 기록해 플래시 마모가 없다. 상태는 `GET /script/1/status`.
+- **설치**: `BLE.SetConfig{enable:true}` → `Script.Create` → `Script.PutCode`(주석 없는 ASCII, 900바이트씩 append) → `Script.SetConfig{enable:true}`(부팅 자동 시작) → `Script.Start`. 한글이 섞이면 PutCode가 "bad argument 'code'"로 거절한다.
+- **시험(11-13, 집)**: Plug M Gen3 fw 1.8.99(Matter 켜진 채로도 동작), 스크립트 메모리 약 2 KB/여유 23 KB. Qingping 22.7 °C·CO₂ 1,161 ppm 수신(RSSI −59), 하트비트 1회 뒤 10분이 지나자 `frost` 모드로 넘어가 `DRY OFF t=22.7` 판단. `ACT:false`라 실제 스위치는 그대로.
+- **남은 일(농막)**: 히터에 연결, 농막 Wi-Fi 재등록, `heater_control`이 매분 hb 호출, `ACT:true`, Pi를 일부러 멈춰 10분 뒤 인계되는지 현장 시험. 하트비트 가드가 확인되면 `toggle_after` 데드맨(무조건 켬)은 예비로 남기거나 끈다. 둘을 함께 둬도 충돌하지 않는다(타이머가 켜면 가드가 온도로 다시 판단).
