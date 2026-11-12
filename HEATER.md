@@ -312,6 +312,8 @@ ssh -N -L 8080:192.168.11.100:80 ryuch@<pi>   # → 브라우저 http://localhos
 
 ### 플러그 내장 동파 가드 (2026-11-13, `heater/shelly_frost_guard.js`, 시험 모드)
 
+> 기능 조사·실측·설치·교훈을 한곳에 모은 독립 문서: [docs/SHELLY_PLUG.ko.md](docs/SHELLY_PLUG.ko.md). 아래는 요약.
+
 Pi와 독립된 마지막 안전망을 플러그 안의 스크립트로 둔다. 사용자 설계: "Pi가 카운터를 늘리지 않으면 죽었다고 보고, Qingping 온도로 동파 방지".
 
 - **동작**: 30초마다 판단한다.
@@ -323,3 +325,20 @@ Pi와 독립된 마지막 안전망을 플러그 안의 스크립트로 둔다. 
 - **설치**: `BLE.SetConfig{enable:true}` → `Script.Create` → `Script.PutCode`(주석 없는 ASCII, 900바이트씩 append) → `Script.SetConfig{enable:true}`(부팅 자동 시작) → `Script.Start`. 한글이 섞이면 PutCode가 "bad argument 'code'"로 거절한다.
 - **시험(11-13, 집)**: Plug M Gen3 fw 1.8.99(Matter 켜진 채로도 동작), 스크립트 메모리 약 2 KB/여유 23 KB. Qingping 22.7 °C·CO₂ 1,161 ppm 수신(RSSI −59), 하트비트 1회 뒤 10분이 지나자 `frost` 모드로 넘어가 `DRY OFF t=22.7` 판단. `ACT:false`라 실제 스위치는 그대로.
 - **남은 일(농막)**: 히터에 연결, 농막 Wi-Fi 재등록, `heater_control`이 매분 hb 호출, `ACT:true`, Pi를 일부러 멈춰 10분 뒤 인계되는지 현장 시험. 하트비트 가드가 확인되면 `toggle_after` 데드맨(무조건 켬)은 예비로 남기거나 끈다. 둘을 함께 둬도 충돌하지 않는다(타이머가 켜면 가드가 온도로 다시 판단).
+
+#### 가드 v2: 1층·바닥외부 pvvx + 외기 예측 (2026-11-13)
+
+- **센서**: Qingping(평문) + pvvx 1층·바닥외부(Mi 암호화, 아래 해독기를 가드에 내장). 실내 온도는 살아 있는 실내 센서(1층, Qingping) 중 **낮은 값**.
+- **외기 예측**: 외기가 있으면 1시간 뒤 실내를 뉴턴 냉각으로 예측한다. `T_pred = T_out + (T_in − T_out)·exp(−60/550)`(τ 550분 ≈ 9.2시간, 열모델 학습 전 잠정값). `T_in < 3` 또는 `T_pred < 3`이면 켬, `T_in > 5`이고 `T_pred ≥ 3`이면 끔. 예) 1층 4 °C·외기 −10 °C → 예측 2.6 °C라 **3 °C가 되기 전에 미리 켬**. 1층 6 °C·외기 −10 °C → 예측 4.3 °C라 끔.
+- **센서 빠짐**: 실내 없음·외기만 → 외기 < 5 °C면 켬, 아니면 끔. 전부 없음 → 켬.
+- **기상청 예보(플러그가 직접)**: 1시간마다 초단기예보를 부른다(`pageNo=5&numOfRows=6` → 기온 T1H 6시간만, 약 1 KB, 0.8초). 인증키는 플러그 KVS `kma_key`에만(사용자가 브라우저로 `KVS.Set`), 응답·상태에 키를 싣지 않는다. 외기 = min(바닥외부 센서, 6시간 예보 최저), 센서가 없으면 예보만. 3시간 넘은 예보는 버린다. 해외 서버(구글 등)에서는 기상청 허브가 잘 응답하지 않아 국내에 있는 플러그가 부르는 구조다. 11-13 집에서 예보 8→15 °C 수신, 센서 없이 `out-only` 판단 확인. 시나리오 시험 13개 OK.
+- **키**: bindkey는 플러그 KVS(`mbkey_floor1`, `mbkey_out`)에만. `python3 heater/shelly_guard_setup.py <IP>`가 Pi의 `sensor_keys.json`에서 읽어 넣고(출력 안 함) 스크립트를 올린다. `--act` 실제 동작, `--status` 상태.
+- **검증**: `python3 heater/test_shelly_frost_guard.py <IP>` — 임시 스크립트에 시험 키 프레임을 주입해 10개 시나리오(예측 켬/끔, 띠 안 유지, Qingping 낮은 값, 외기만, 센서 없음, 변조 프레임 무시) 확인. 11-13 전부 OK.
+
+#### pvvx(Mi 암호화) 직접 해독 (2026-11-13, `heater/shelly_mibeacon.js`)
+
+- Gen3 펌웨어 1.6.0+의 `AES.encrypt(buf, key, {mode:"ECB"})`가 FIPS-197 시험값과 일치한다. 펌웨어에 CCM 모드는 없어서, ECB로 AES-CCM(태그 4, 논스 12, L=3, AAD 0x11)을 조립했다. 논스 배치는 `gateway/passive_gateway.py`의 `decrypt_mibeacon`과 같다.
+- 메시지가 16바이트 이하라 블록 3~4번 계산이면 끝난다. 태그를 검증하므로 변조·틀린 키는 `null`.
+- 검증: `python3 heater/test_shelly_mibeacon.py <플러그IP>` — 무작위 시험 키로 만든 프레임 4종(온도 −12.3, 습도, 배터리, 온습도 0x100D)과 변조 프레임을 플러그에서 해독해 비교하고, 임시 스크립트를 지운다(11-13 전부 OK).
+- 쓸모: pvvx 센서를 지금 설정(Mi 암호화) 그대로 두고 플러그 가드가 직접 읽는다. bindkey는 저장소에 넣지 말고 플러그 KVS에만 둔다(`KVS.Set`). 가드 통합은 농막에서.
+- ⚠ **운영 중인 스크립트에서 `Script.Eval`로 실험하지 말 것.** 잡히지 않은 예외 한 번에 스크립트가 멈추고 저절로 다시 켜지지 않는다(11-13 가드가 이렇게 멈춤). 운영 시에는 Pi가 `Script.GetStatus`의 `running`을 감시해 멈추면 `Script.Start` 하고 경보를 보낸다.

@@ -145,6 +145,8 @@ smart-cabin/
 | [docs/THERMAL_MODEL.ko.md](docs/THERMAL_MODEL.ko.md) | 열모델 학습 계획·데이터·성층·습도·우선순위 |
 | [docs/ENERGY_SAVINGS.ko.md](docs/ENERGY_SAVINGS.ko.md) | 정밀 제어와 전력 절약 정량화 |
 | [docs/WORKLOG_2026-11-08.ko.md](docs/WORKLOG_2026-11-08.ko.md) | 11-08 작업 일지 |
+| [docs/WORKLOG_2026-11-13.ko.md](docs/WORKLOG_2026-11-13.ko.md) | 11-09~13 작업 일지(Qingping, Shelly, 다음 할 일) |
+| [docs/SHELLY_PLUG.ko.md](docs/SHELLY_PLUG.ko.md) | Shelly Plug M Gen3 기능 조사와 플러그 내장 동파 가드(Pi 독립) |
 | [docs/SENSOR_GUIDE.ko.md](docs/SENSOR_GUIDE.ko.md) · [EN](docs/SENSOR_GUIDE.md) | 센서 프로토콜(비콘·GATT)과 설계 이유 |
 | [HEATER.md](HEATER.md) · [OPERATIONS.md](OPERATIONS.md) · [PI_SETUP.md](PI_SETUP.md) · [NETWORK_MIGRATION.md](NETWORK_MIGRATION.md) | 제어기 내부 · 운영 · 설치 · 네트워크 전환 |
 
