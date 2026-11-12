@@ -70,3 +70,5 @@ telegram_state.json.tmp
 .telegram.lock
 cabin_watch_state.json
 cabin_watch_state.json.tmp
+telegram_bot_offset.json
+telegram_bot_offset.json.tmp

@@ -77,13 +77,13 @@ def log(msg):
 
 # ── API 호출 ─────────────────────────────────────────────────────
 
-def _call(tok, method, params, urlopen=None):
+def _call(tok, method, params, urlopen=None, timeout=TIMEOUT):
     """텔레그램 API 호출 → result. 실패면 RuntimeError(토큰 가림). 429면 retry_after를 메시지에 담음."""
     urlopen = urlopen or urllib.request.urlopen
     data = urllib.parse.urlencode(params).encode("utf-8")
     req = urllib.request.Request(API % (tok, method), data=data)
     try:
-        with urlopen(req, timeout=TIMEOUT) as r:
+        with urlopen(req, timeout=timeout) as r:
             body = json.loads(r.read().decode("utf-8", "replace"))
     except urllib.error.HTTPError as e:
         try: body = json.loads(e.read().decode("utf-8", "replace"))
@@ -234,7 +234,8 @@ def get_chat_ids(urlopen=None):
         c = m.get("chat") or {}
         if "id" in c:
             name = c.get("title") or " ".join(x for x in (c.get("first_name"), c.get("last_name")) if x) or c.get("username", "")
-            seen[c["id"]] = (c["id"], name, c.get("type", ""))
+            if c.get("username"): name += " @%s" % c["username"]
+            seen[c["id"]] = (c["id"], name.strip(), c.get("type", ""))
     return list(seen.values())
 
 

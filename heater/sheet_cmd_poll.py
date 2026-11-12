@@ -88,7 +88,7 @@ def status_text():
         except Exception: pass
     if s.get("updated"):
         try:
-            age = (time.time() - float(s["updated"])) / 60.0
+            age = (time.time() - datetime.datetime.strptime(s["updated"], "%Y-%m-%d %H:%M:%S").timestamp()) / 60.0
             if age > 5: parts.append("⚠ 제어기 상태 %.0f분 전" % age)
         except Exception: pass
     return " · ".join(parts)
