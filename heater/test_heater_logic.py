@@ -102,6 +102,36 @@ class Schedule(unittest.TestCase):
     def test_frost_default_never_backstopped(self):
         s = st("frost", "default"); self.assertFalse(hc.schedule_step(CFG, s, 4, 0, datetime.datetime(2026, 11, 3, 12), 9e9)[0])
 
+
+class ManualOverride(unittest.TestCase):
+    """수동 우선 시간: 버튼·앱으로 바꾼 상태를 hold_min 동안 존중, 동파 위험·상한 온도는 예외."""
+    C = {"frost": {"on": 3, "off": 5}, "manual_override": {"enabled": True, "hold_min": 120, "max_temp": 27}}
+    def m(self, state, left=3600): return {"state": state, "ts": 0, "until": 1000 + left}
+    def test_none(self):
+        self.assertEqual(hc.manual_decide(None, 1000, "comfort", 22, False, self.C), (None, False, ""))
+    def test_hold_on_in_comfort(self):   # 23.5 넘어도(띠 밖) 수동 켬 유지
+        w, a, _ = hc.manual_decide(self.m(True), 1000, "comfort", 24.5, False, self.C); self.assertEqual((w, a), (None, True))
+    def test_hold_off_in_comfort(self):  # 23 밑이어도 수동 끔 유지
+        w, a, _ = hc.manual_decide(self.m(False), 1000, "comfort", 21.0, False, self.C); self.assertEqual((w, a), (None, True))
+    def test_frost_danger_overrides_off(self):
+        w, a, _ = hc.manual_decide(self.m(False), 1000, "comfort", 2.9, False, self.C); self.assertEqual((w, a), (True, False))
+    def test_frost_danger_keeps_on(self):   # 수동 켬이면 추워도 그대로(이미 켬)
+        w, a, _ = hc.manual_decide(self.m(True), 1000, "frost", 2.0, False, self.C); self.assertEqual((w, a), (None, True))
+    def test_max_temp_turns_off(self):
+        w, a, _ = hc.manual_decide(self.m(True), 1000, "comfort", 27.0, False, self.C); self.assertEqual((w, a), (False, False))
+    def test_expired(self):
+        self.assertEqual(hc.manual_decide(self.m(True, left=-1), 1000, "comfort", 24.5, False, self.C)[:2], (None, False))
+    def test_stale_frost_manual_off_forces_on(self):
+        w, a, _ = hc.manual_decide(self.m(False), 1000, "frost", None, True, self.C); self.assertEqual((w, a), (True, False))
+    def test_stale_comfort_holds(self):
+        w, a, _ = hc.manual_decide(self.m(False), 1000, "comfort", None, True, self.C); self.assertEqual((w, a), (None, True))
+    def test_disabled(self):
+        c = dict(self.C, manual_override={"enabled": False})
+        self.assertEqual(hc.manual_decide(self.m(True), 1000, "comfort", 24.5, False, c)[:2], (None, False))
+    def test_config_has_block(self):
+        self.assertIn("manual_override", CFG); self.assertGreater(CFG["manual_override"]["hold_min"], 0)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
 

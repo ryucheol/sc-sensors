@@ -261,6 +261,24 @@ def deadman_action(relay, cd_reported, armed_age, dm):
         return ("arm", int(dm["sec"]))
     return None
 
+def manual_decide(manual, tnow, mode, t_ctl, ctl_stale, cfg):
+    """수동 우선 시간(순수). 사람이 버튼·앱으로 바꾼 상태를 hold_min 동안 존중한다.
+    반환 (want, active, why): want=None이면 손대지 않음(수동 상태 유지), True/False면 그 상태로 강제.
+    안전 우선: 동파 위험(t ≤ frost.on)이거나 온도 미상인 동파 모드면 켬, 수동 켬이 max_temp에 닿으면 끔(그리고 수동 해제)."""
+    mo = cfg.get("manual_override") or {}
+    if not manual or not mo.get("enabled", True) or tnow >= manual.get("until", 0):
+        return None, False, ""
+    frost_on = cfg["frost"]["on"]
+    if ctl_stale or t_ctl is None:
+        if mode == "frost" and not manual.get("state"):
+            return True, False, "온도 미상(동파 모드) — 수동 끔 무시"
+        return None, True, "수동 유지(온도 미상)"
+    if t_ctl <= frost_on and not manual.get("state"):
+        return True, False, "동파 위험 %.1f°C — 수동 끔 무시" % t_ctl
+    if manual.get("state") and t_ctl >= mo.get("max_temp", 27):
+        return False, False, "수동 켬 상한 %.1f°C 도달 — 끔" % t_ctl
+    return None, True, "수동 유지 %d분 남음" % max(0, int((manual["until"] - tnow) / 60))
+
 def decide_relay(mode, on_th, off_th, t_ctl, ctl_stale, cur_relay):
     """히스테리시스 판단(순수): 원하는 릴레이 상태. 온도미상이면 동파=ON, 그 외=현상유지."""
     if ctl_stale:
@@ -294,6 +312,7 @@ def main():
     acct_last = None
     hr = {"key": None, "wdt": 0.0, "tin_dt": 0.0, "tout_dt": 0.0, "dt": 0.0, "on_dt": 0.0, "tin0": None, "tin1": None}
     fault_dt = 0.0; fault_active = False; fail_streak = 0
+    seen_status = False   # 시작 후 첫 상태 읽기에서는 수동 감지 안 함(Pi가 꺼진 동안 가드·데드맨이 바꾼 것을 오인 방지)
     # ── 센서 이중화 상태: delta(=다락−1층) 학습값은 재시작해도 이어가도록 status에서 복원 ──
     delta = _ss.get("delta_attic_floor", red_cfg(load(CFG, {}) or {})["delta_init"])
     red_last = None; last_src = None; last_sensor_warn = {}
@@ -366,7 +385,15 @@ def main():
                 cur_relay = bool(s.get("1")); cur_watt = s.get("19", 0) / 10.0; cur_volt = s.get("20", 0) / 10.0
                 _e17 = s.get("17"); cur_kwh_hw = (_e17 / 100.0) if _e17 is not None else None   # DP17: 플러그 하드웨어 누적(0.01kWh 단위)
                 status_ok = True; fail_streak = 0
-                if cur_relay != st.get("relay"): st["relay"] = cur_relay; save_atomic(STATE, st)
+                if cur_relay != st.get("relay"):
+                    # Pi가 보낸 명령은 즉시 st["relay"]에 반영되므로, 여기서 어긋나면 바깥(버튼·앱·정전복구)이 바꾼 것
+                    mo = cfg.get("manual_override") or {}
+                    if seen_status and st.get("relay") is not None and mo.get("enabled", True):
+                        st["manual"] = {"state": cur_relay, "ts": now(), "until": now() + mo.get("hold_min", 120) * 60}
+                        log("수동 조작 감지: 플러그 %s → %d분 동안 존중(동파 위험·상한 %s°C는 예외)"
+                            % ("ON" if cur_relay else "OFF", mo.get("hold_min", 120), mo.get("max_temp", 27)))
+                    st["relay"] = cur_relay; save_atomic(STATE, st)
+                seen_status = True
             except Exception as e:
                 fail_streak += 1
                 log("상태조회 오류(%d연속): %s" % (fail_streak, e))
@@ -383,6 +410,16 @@ def main():
                         % (prev_mode, st["mode"], on_th, off_th, ctl_sensor, t_ctl, st.get("source")))
                 prev_mode = st["mode"]
             want = decide_relay(st["mode"], on_th, off_th, t_ctl, ctl_stale, cur_relay)
+            man = st.get("manual")
+            if man and st.get("last_cmd_ts", 0) > man.get("ts", 0):   # 그 뒤 모드 명령이 있었으면 수동 해제
+                st.pop("manual", None); man = None; save_atomic(STATE, st)
+            m_want, m_active, m_why = manual_decide(man, now(), st["mode"], t_ctl, ctl_stale, cfg)
+            if man and not m_active:
+                if m_want is not None: log("수동 우선 종료: " + m_why)
+                elif now() >= man.get("until", 0): log("수동 우선 시간 끝 — 자동 제어 복귀")
+                st.pop("manual", None); save_atomic(STATE, st)
+            if m_active: want = None
+            elif m_want is not None: want = m_want
             if ctl_stale and now() - last_stale_log > 1800:
                 log("⚠ 온도 데이터 오래됨(%s) → %s" % (ctl_sensor, "안전가동(ON)" if st["mode"]=="frost" else "현상유지"))
                 last_stale_log = now()
@@ -501,7 +538,9 @@ def main():
                     "deadman_armed": bool(dm_armed_ts), "countdown_s": cur_cd,
                     "stage": stage, "stage_w": stage_w, "on_minutes": on_min,
                     "advice": advice, "advice_say": advice_speech(advice) if advice else None,
-                    "arrival": st.get("arrival"), "arrival_start_est": arr_start, "arrival_lead_h": arr_lead})
+                    "arrival": st.get("arrival"), "arrival_start_est": arr_start, "arrival_lead_h": arr_lead,
+                    "manual": ({"state": st["manual"]["state"], "left_min": max(0, int((st["manual"]["until"] - now()) / 60))}
+                               if st.get("manual") else None)})
                 thermal_log(st.get("mode"), cur_relay, cur_watt, cur_volt, t_ctl, delta,
                             floor_s, attic_s, cfg["preheat"].get("outdoor_sensor", ""))
             except Exception as e:

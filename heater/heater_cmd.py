@@ -105,6 +105,7 @@ def main():
     except Exception: st = {}
     st.update(mode=mode, on=on, off=off, source="cmd", since=time.time(), last_cmd_ts=time.time())
     st.pop("arrival", None)   # 사람이 직접 모드를 정하면 도착 예약은 역할을 다한 것
+    st.pop("manual", None)    # 수동 우선 시간도 해제(명령이 버튼보다 나중의 뜻)
     tmp = STATE + ".tmp"
     json.dump(st, open(tmp, "w"), ensure_ascii=False); os.replace(tmp, STATE)
 
