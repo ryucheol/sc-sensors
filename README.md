@@ -108,6 +108,7 @@ smart-cabin/
 |---|---|---|
 | `gateway/passive_gateway.py` | BLE 수신·복호화, `latest.json`, 시간 평균·이력·배터리·재실 큐 → 시트(store-and-forward) | `farmhut-gateway.service` |
 | `heater/heater_control.py` | 모드·히스테리시스·예열·안전·단수 인식·조언·계측(`thermal_log.csv`) | `heater-control.service` (tuya-venv) |
+| `heater/shelly_plug.py` | Shelly 플러그 드라이버(tinytuya 호환, 데드맨 포함) + `shelly_check.py` 점검 | `heater-control.service` |
 | `alert/alert_sound.py` | 음성 알림(문 여닫기·고장·정체·단수 조언·시보: 재실 07~22시 20분마다) | `alert-sound.service` |
 | `heater/heater_cmd.py` / `heater/heater_selftest.py` | 모드 명령(`난방`·`취침`·`동파`·`도착 HH:MM`) / 떠나기 전 자가점검(`히터점검`) | 별칭 `heater/heater_aliases.sh` |
 | `heater/sheet_cmd_poll.py` | 시트 `명령` 탭 폴링 → 같은 명령을 원격 실행, 결과 기록(`기상` = 기상청 → 시트 즉시 갱신) | cron 매분 |

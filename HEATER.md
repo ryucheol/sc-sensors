@@ -296,3 +296,16 @@ ssh -N -L 8080:192.168.11.100:80 ryuch@<pi>   # → 브라우저 http://localhos
 ## 열설계 근거
 
 농막 **UA≈47 W/K** → 5°C 유지에 외기 −10°C서 ~700W, −15°C서 ~940W. 실측 강난방 ~1740W면 유지 여유 + 빠른 회복. 약난방(~900W)은 외기 −14°C 밑에서 동파(5°C) 유지 실패·외기 4°C 밑에서 23°C 도달 불가 → **강 유지 권장**.
+
+## Shelly 플러그로 교체 (2026-11-12, `heater/shelly_plug.py`)
+
+투야 대신 Shelly Gen2/Gen3 플러그(Plug M Gen3 등)를 쓸 수 있다. 제어 로직은 그대로이고 장치만 바뀐다.
+
+- **드라이버**: `shelly_plug.py`는 tinytuya.OutletDevice 흉내다. 켜기·끄기, 상태(dps 1/17/19/20/9, 투야와 같은 단위), `set_value(9, 초)` 데드맨을 지원한다.
+  통신은 LAN HTTP JSON-RPC(`/rpc`)라 클라우드나 로컬 키가 필요 없다. 비밀번호를 걸었으면 SHA-256 Digest로 자동 처리된다.
+- **데드맨**: 꺼짐이면 `Switch.Set{on:false, toggle_after:1800}`을 5분마다 다시 보내 미룬다. 켜짐이면 `toggle_after` 없이 Set을 보내 해제한다. 남은 초는 `timer_started_at + timer_duration − sys.unixtime`로 계산하고, 플러그가 시각을 모르면(NTP 없음) "보고 없음"으로 처리해 Pi 쪽 경과시간으로 연장한다.
+- **⚠ 교체 전 확인(문서에 없는 동작)**: 빈 플러그나 전등으로 `python3 heater/shelly_check.py --ip <IP> --timer-test`를 실행한다. A 타이머 생김, B 재전송 시 연장, C 해제, D 시간이 다 되면 스스로 켜짐이 모두 ✅여야 한다.
+- **Shelly 앱 설정**: Matter 끔(스크립트를 쓰려면), 정전 뒤 상태 `initial_state=on`(fail-on), `power_limit` 약 2000W, 고정 IP.
+- **전환**: `tuya_keys.json`(gitignore)의 "Main heater" 항목을 `{"name":"Main heater","type":"shelly","ip":"<IP>","password":""}`로 바꾸고 `sudo systemctl restart heater-control`을 실행한다. 되돌리려면 투야 항목을 복원한다.
+  `heater.log` 시작 줄에 `Shelly`가 보이고, 꺼짐 동안 `countdown_s`가 1500~1800 사이를 오가면 정상이다.
+- `heater_selftest.py`, `heater_probe.py`, `plug_countdown_test.py`는 아직 투야 전용이다(Shelly 점검은 `shelly_check.py`).

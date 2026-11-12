@@ -276,13 +276,14 @@ def apply_relay(d, want):
     return bool(s.get("1")), s.get("19",0)/10.0, s.get("20",0)/10.0   # relay, W, V
 
 def main():
-    import tinytuya    # 지연 임포트: 테스트가 tinytuya 없이 순수 로직을 임포트할 수 있게
+    import sys; sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))   # 루트 심볼릭 링크로 실행돼도 heater/ 모듈 찾기
+    from shelly_plug import make_device   # type=shelly → Shelly HTTP RPC, 그 외 → tinytuya(지연 임포트)
     dev = get_device()
     if not dev:
         log("tuya_keys.json에 기기 없음 — 종료"); return
-    d = tinytuya.OutletDevice(dev["id"], dev["ip"], dev["key"])
-    d.set_version(float(dev["version"])); d.set_socketTimeout(5)
-    log("히터 제어 시작: %s @ %s v%s" % (dev["name"], dev["ip"], dev["version"]))
+    d = make_device(dev)
+    log("히터 제어 시작: %s @ %s %s" % (dev.get("name"), dev["ip"],
+        "Shelly" if (dev.get("type") or "").lower() == "shelly" else "Tuya v%s" % dev.get("version")))
 
     last_hb = 0; last_stale_log = 0
     dm_armed_ts = None; dm_err_log = 0; dm_logged = False
