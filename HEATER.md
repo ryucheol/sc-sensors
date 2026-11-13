@@ -354,3 +354,21 @@ Pi와 독립된 마지막 안전망을 플러그 안의 스크립트로 둔다. 
 - 검증: `python3 heater/test_shelly_mibeacon.py <플러그IP>` — 무작위 시험 키로 만든 프레임 4종(온도 −12.3, 습도, 배터리, 온습도 0x100D)과 변조 프레임을 플러그에서 해독해 비교하고, 임시 스크립트를 지운다(11-13 전부 OK).
 - 쓸모: pvvx 센서를 지금 설정(Mi 암호화) 그대로 두고 플러그 가드가 직접 읽는다. bindkey는 저장소에 넣지 말고 플러그 KVS에만 둔다(`KVS.Set`). 가드 통합은 농막에서.
 - ⚠ **운영 중인 스크립트에서 `Script.Eval`로 실험하지 말 것.** 잡히지 않은 예외 한 번에 스크립트가 멈추고 저절로 다시 켜지지 않는다(11-13 가드가 이렇게 멈춤). 운영 시에는 Pi가 `Script.GetStatus`의 `running`을 감시해 멈추면 `Script.Start` 하고 경보를 보낸다.
+
+### Shelly를 Google Home에 연결하기 (2026-11-13 집에서 시도)
+
+**클라우드 연동 방식 (권장, 허브 불필요)**
+1. Shelly 웹 화면에서 **Cloud가 켜져 있는지** 확인한다. 위쪽 구름 아이콘에 화살표가 보여야 한다.
+2. **Shelly Smart Control 앱 → 해당 플러그 → 설정 → Voice assistants(Alexa & Google Home) → 켜기.**
+   ⚠ 이 단계를 빠뜨리면 Google Home에서 Shelly를 연결해도 "등록할 기기가 없음"이 나온다. 메뉴 이름은 앱 버전마다 다를 수 있다. 계정 설정의 Integrations에 있을 수도 있다.
+3. Google Home 앱 → ➕ → 기기 → **Works with Google Home** → 검색창에 `Shelly` 입력 → 지금 쓰는 앱과 같은 이름(Shelly Smart Control)을 골라 로그인한다.
+4. 이미 연결했는데 기기가 안 보이면 **연결 해제 후 다시 연결**하거나, 스피커에 "기기 동기화해 줘"라고 말한다.
+
+**Matter 방식 (보류)**
+- Google Home에서 "Matter-enabled device"를 고르면 Home Mini(H0A)가 허브 목록에 있는데도 "허브가 필요하다"고 나왔다(원인 미확인).
+  후보 원인: 스피커가 다른 집(Home)이나 다른 계정 소유, 스피커 펌웨어가 오래됨, 지역 제한.
+- **Shelly에서 Matter를 켜면 스크립트를 못 쓴다**(`shelly_frost_guard.js` 정지). 그래서 Matter는 쓰지 않는다.
+
+**주의**
+- **히터용 Shelly는 Google Home에 연결하지 않는다.** 음성으로 켜고 끄면 Pi 제어가 되돌리고, 데드맨 타이머(toggle_after)와 꼬일 수 있다. 전등 같은 다른 용도에만 연결한다.
+- 구글 연동은 Shelly 클라우드를 거친다. Pi의 로컬 HTTP 제어와는 무관하다.
