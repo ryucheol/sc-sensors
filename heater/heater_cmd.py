@@ -21,6 +21,14 @@ BASE  = os.path.expanduser("~/smart-cabin")
 CFG   = os.path.join(BASE, "heater_config.json")
 STATE = os.path.join(BASE, "heater_state.json")
 
+import re
+_TEMP_RX = re.compile(r"^([+-]?\d+(?:\.\d+)?)\s*(?:도|℃|°[cC]|°|[cC])?$")
+
+def parse_temp(a):
+    """'18' / '18도' / '18.5℃' / '18°C' → float, 숫자가 아니면 None. 음성·자연어 입력('난방 18도') 대응."""
+    m = _TEMP_RX.match(a.strip())
+    return float(m.group(1)) if m else None
+
 def parse_when(args):
     """['16:00'] / ['내일','07:00'] / ['모레','07:00'] / ['2026-11-14','20:00'] → datetime. 시각이 오늘 이미 지났으면 내일."""
     now = datetime.datetime.now(); day = now.date(); hhmm = None
@@ -46,10 +54,8 @@ def arrival_cmd(args):
         print("사용: 도착 HH:MM [내일|모레|YYYY-MM-DD] [목표°C] / 도착 취소  (%s)" % e); sys.exit(1)
     target = cfg["comfort"]["on"]
     for a in args:
-        try:
-            v = float(a)
-            if 10 <= v <= 30 and ":" not in a and "-" not in a: target = v
-        except ValueError: pass
+        v = parse_temp(a) if ":" not in a and "-" not in a else None
+        if v is not None and 10 <= v <= 30: target = v
     st["arrival"] = {"ts": dt.timestamp(), "target": target, "set_ts": time.time()}
     st["last_cmd_ts"] = time.time()
     save(st)
@@ -83,8 +89,10 @@ def main():
         return arrival_cmd(sys.argv[2:])
     nums = []
     for a in sys.argv[2:]:
-        try: nums.append(float(a))
-        except ValueError: pass
+        v = parse_temp(a)
+        if v is not None: nums.append(v)
+        elif any(ch.isdigit() for ch in a):   # 숫자처럼 보이는데 못 읽으면 기본값으로 조용히 넘어가지 말고 멈춘다
+            print("온도를 읽지 못했습니다: '%s' (예: 난방 18 / 난방 18도)" % a); sys.exit(1)
 
     cfg = json.load(open(CFG))
     if mode_arg in ("난방", "comfort", "heat"):
