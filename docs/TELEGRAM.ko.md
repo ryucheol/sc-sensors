@@ -123,3 +123,12 @@ journalctl -u cabin-watch -n 20        # "감시 시작" 확인. 로그: ~/smart
 | 메시지가 늦게 옴 | 오프라인 큐. `telegram.log`에서 "큐 재전송" 확인 |
 
 테스트: `cd notify && python3 -m unittest test_telegram_notify test_telegram_bot test_cabin_watch` (인터넷·토큰 불필요)
+
+## 데이터 사용량 감시 (2026-11-13, `notify/data_watch.py`)
+- 농막 회선은 tplus 6GB다. 동영상 한 번이면 끝나므로 10분마다 사용량을 읽어 **50/70/85/95%**에서 한 번씩, **최근 1시간 200MB 이상**이면 즉시 텔레그램으로 알린다.
+- 읽는 곳: E3372 HiLink 관리 API(`192.168.8.1`, 이번 달 다운+업로드). 동글을 못 읽으면 Pi 기본 경로 인터페이스의 rx+tx를 직접 누적한다(재부팅에도 이어 셈).
+- 결과는 `data_usage.json`(사용량·%·최근 1시간)에 남는다. 설정은 `heater_config.json`의 `"data_watch"`: `limit_gb`, `cycle_day`(과금 시작일), `levels`, `burst_mb_per_h`.
+- ⚠ **개통 첫 달(11-11 개통)은 데이터가 일할 지급**일 수 있다. tplus 앱에서 11월 제공량을 확인하고 그달만 `limit_gb`를 낮춘다.
+- 동글 관리 화면에도 월 한도(DataLimit) 설정이 있다. 같은 값으로 맞춰 두면 동글 화면과 텔레그램 숫자가 일치한다.
+- 다음 단계(보류): 95% 이상이면 Pi(공유기)가 Home Mini 등 LAN 기기의 인터넷 전달을 막고 시트·텔레그램만 남기기(iptables, sudo 설정 필요).
+- 데이터 절약: 휴대폰은 Ryufarm에 붙이지 않는다(사진 백업·업데이트). Pi 자동 업데이트(unattended-upgrades)는 끈다. Home Mini 펌웨어 업데이트는 집에서 미리 한다.

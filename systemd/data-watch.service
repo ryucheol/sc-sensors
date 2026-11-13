@@ -1,0 +1,14 @@
+# 농막 LTE 데이터 사용량 감시 → 텔레그램 (notify/data_watch.py). 동글(E3372 HiLink) 월 사용량, 못 읽으면 Pi WAN 인터페이스로 누적.
+# 설치: sudo cp systemd/data-watch.* /etc/systemd/system/ && sudo systemctl daemon-reload && sudo systemctl enable --now data-watch.timer
+# 시험: python3 notify/data_watch.py --dry-run
+[Unit]
+Description=LTE data usage watch (tplus 6GB) -> Telegram
+
+[Service]
+Type=oneshot
+User=ryuch
+WorkingDirectory=/home/ryuch/smart-cabin
+Environment=PYTHONIOENCODING=utf-8
+ExecStart=/usr/bin/python3 /home/ryuch/smart-cabin/notify/data_watch.py
+TimeoutStartSec=60
+Nice=10

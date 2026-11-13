@@ -1,0 +1,11 @@
+# 10분마다 data-watch.service. 폭주(1시간 200MB↑) 감지가 늦어도 10분.
+[Unit]
+Description=Run data_watch every 10 minutes
+
+[Timer]
+OnBootSec=3min
+OnUnitActiveSec=10min
+Persistent=true
+
+[Install]
+WantedBy=timers.target
