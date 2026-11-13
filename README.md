@@ -148,6 +148,7 @@ smart-cabin/
 | [docs/WORKLOG_2026-11-13.ko.md](docs/WORKLOG_2026-11-13.ko.md) | 11-09~13 작업 일지(Qingping, Shelly, 다음 할 일) |
 | [docs/SHELLY_PLUG.ko.md](docs/SHELLY_PLUG.ko.md) | Shelly Plug M Gen3 기능 조사와 플러그 내장 동파 가드(Pi 독립) |
 | [docs/GOOGLE_HOME.ko.md](docs/GOOGLE_HOME.ko.md) | Google Home Mini 음성 알림(캐스트)·음성 제어 설계와 집 시험 |
+| [docs/LTE_DONGLE.ko.md](docs/LTE_DONGLE.ko.md) | LTE 동글 E3372h-607 개통·시험(등록 재시작·APN·신호·속도)과 현장 절차 |
 | [docs/SENSOR_GUIDE.ko.md](docs/SENSOR_GUIDE.ko.md) · [EN](docs/SENSOR_GUIDE.md) | 센서 프로토콜(비콘·GATT)과 설계 이유 |
 | [HEATER.md](HEATER.md) · [OPERATIONS.md](OPERATIONS.md) · [PI_SETUP.md](PI_SETUP.md) · [NETWORK_MIGRATION.md](NETWORK_MIGRATION.md) | 제어기 내부 · 운영 · 설치 · 네트워크 전환 |
 
