@@ -189,6 +189,11 @@ python3 scripts/lte_signal_check.py 60 무안테나    # 안테나 빼고 1분
 - **시험(Ryuspot을 primary로)**: Pi·Ryufarm 기기 모두 wlan0으로(노트북도 제한 없이 인터넷, Tailscale 직접 연결) → 핫스팟 끔 → 즉시 LTE·차단 적용, 텔레그램·히터 정상 → 다시 켬 → 1분 안에 스스로 다시 붙어 1순위 복귀. 끝나고 Ryuspot은 backup(600)으로 되돌림.
 - **주의**: Ryufarm에 붙은 '차단 대상' 기기(노트북)는 동글이 꺼지는 순간 인터넷이 끊긴다. 이 노트북에서 Claude로 작업할 때 두 번 끊김 → 작업용 노트북은 동글/핫스팟에 직접, 또는 '공유'를 먼저 연다.
 
+**11-16 결정: Ryuspot(휴대폰 핫스팟)도 1순위로 상시 설정**(, NM 연결 설정에 저장 → 재부팅해도 유지).
+핫스팟이 켜져 있으면(=사람이 있으면) Ryufarm 기기 전부가 휴대폰 데이터로 제한 없이 나가고(노트북을 Ryufarm에 붙인 채 Claude 작업 확인),
+핫스팟을 끄거나 들고 떠나면 자동으로 LTE+차단. 휴대폰 요금제 데이터를 쓰므로 소진 시 1 Mbps.
+동글이 오면 동글과 Ryuspot이 둘 다 보일 때 동글을 먼저 고르도록 autoconnect-priority를 동글 쪽을 높게(예: 동글 40, 핫스팟 30) 조정할 것.
+
 **동글 도착 시 절차**
 1. `ssh -t pi nmcli --ask device wifi connect "<SSID>"` (비밀번호 직접)
 2. `ssh pi '~/smart-cabin/scripts/wifi_uplink.sh "<SSID>" primary'`
