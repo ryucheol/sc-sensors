@@ -79,3 +79,8 @@ qingping_*.csv
 # Matter 커미셔닝 키(패브릭 인증서) — 비밀, 커밋 금지
 .matter/
 matter/node_modules/
+sheet_summary_state.json
+sheet_summary.log
+# data_watch 실행 상태(런타임)
+data_usage.json
+data_watch_state.json

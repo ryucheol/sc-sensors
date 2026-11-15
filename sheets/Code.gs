@@ -9,6 +9,7 @@
  *   ⚠ 붙여넣은 뒤 SECRET 을 실제 값으로 다시 넣을 것. '새 배포'를 만들면 URL이 바뀌어 Pi 업로드가 모두 끊긴다.
  *
  * 변경 이력:
+ *   v13 (2026-11-15) mode:summary — Pi 1분 기록의 시간별 요약(히터 kWh·가동분·평균 온습도)을 '농막_시간요약' 탭에 시각 키로 저장. mode:rawfile — 하루 1회 1분 원자료(gzip CSV)를 드라이브 '농막_원자료' 폴더에. driveTest()로 드라이브 권한 승인
  *   v12 (2026-11-11) mode:weather 2단계 키 — mid(→ 중기예보 A1·A3:H9), obs_daily(→ 부여_일별 날짜 키 upsert,
  *       확정을 잠정으로 덮지 않음), verify(→ 예보검증 A~C 끝에 24행, 같은 날짜면 건너뜀). doGet ?q=weather 에 daily_last.
  *       v11과 호환(2단계 키를 안 보내면 동작 동일). Pi는 kma_stage2.on 이 있을 때만 2단계 키를 보낸다.
@@ -36,7 +37,7 @@
  * 특징: 중복 제거를 서버에서 처리(멱등). 중복 기준 (센서, 정시 버킷). 시각은 실제 날짜값으로 저장.
  */
 
-var CODE_VERSION = '2026-11-11 v12';   // ← /exec(doGet) 응답·붙여넣기 확인용. 고칠 때마다 갱신.
+var CODE_VERSION = '2026-11-15 v13';   // ← /exec(doGet) 응답·붙여넣기 확인용. 고칠 때마다 갱신.
 var SITE = '농막';                 // ← 장소 접두사. 두 번째 시트(예: 선반)는 '선반' 으로만 바꾸면 됨
 var SECRET = 'CHANGE-ME';          // ← 게이트웨이의 FARMHUT_SECRET 과 동일하게
 var SHEET_NAME = SITE + '_시간별';
@@ -53,6 +54,9 @@ var MID_SHEET = '중기예보';          // v12 A1 설명 · A2 머리글 · A3:
 var DAILY_SHEET = '부여_일별';       // v12 A날짜 … M비고(빈=확정, '잠정…'). 날짜 키로 덮어쓰기/추가, 확정을 잠정으로 덮지 않음
 var VERIFY_SHEET = '예보검증';       // v12 A시각 B예보기온 C예보습도만 끝에 추가. D~F는 3행 배열수식
 var VERIFY_FORMULA_END = 1000;       //     그 수식이 A3:A1000 범위라 이 행을 넘으면 경고
+var SUMMARY_SHEET = SITE + '_시간요약';  // v13 mode:summary. Pi thermal_log 1분 기록의 시간별 요약(히터 kWh·가동분·평균온습도). 시각 키로 덮어쓰기/추가
+var SUMMARY_HEADER = ['시각', '모드', '히터 kWh', '가동 분', '가동 중 평균 W', '1층 °C', '다락 °C', '외기 °C', '1층 습도', '다락 습도', '외기 습도', '다락−1층', '선풍기 분', '기록 분'];
+var RAW_FOLDER = SITE + '_원자료';       // v13 mode:rawfile. Pi가 하루 1회 보내는 1분 원자료(gzip CSV)를 드라이브 폴더에 저장
 // 컬럼: A시각 B센서 C최고온도 D최저온도 E최고습도 F최저습도 G센서idx H업로드시각
 
 function _sheet() {
@@ -534,6 +538,67 @@ function onEdit(e) {
 
 function calTest() { Logger.log(JSON.stringify(_calDesired())); }
 
+// ── v13: 시간 요약 · 원자료 파일 ─────────────────────────────
+function _summarySheet() {
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var sh = ss.getSheetByName(SUMMARY_SHEET);
+  if (!sh) {
+    sh = ss.insertSheet(SUMMARY_SHEET);
+    sh.getRange(1, 1, 1, SUMMARY_HEADER.length).setValues([SUMMARY_HEADER]).setFontWeight('bold');
+    sh.setFrozenRows(1);
+    sh.getRange('A:A').setNumberFormat('yyyy-MM-dd HH:mm');
+  }
+  return sh;
+}
+// rows=[[ 'YYYY-MM-DD HH:00', mode, kwh, on_min, avg_w_on, t1, t2, to, h1, h2, ho, delta, fan_min, n ], ...]
+function _postSummary(body) {
+  var rows = body.rows || [];
+  var sh = _summarySheet();
+  var last = sh.getLastRow();
+  var idx = {};
+  if (last >= 2) {
+    var keys = sh.getRange(2, 1, last - 1, 1).getValues();
+    for (var i = 0; i < keys.length; i++) {
+      var k = keys[i][0];
+      if (k instanceof Date) idx[_fmt(k)] = i + 2;
+    }
+  }
+  var added = 0, updated = 0, add = [];
+  for (var j = 0; j < rows.length; j++) {
+    var r = rows[j], d = _kst(r[0]);
+    if (!d) continue;
+    var line = [d].concat(r.slice(1, SUMMARY_HEADER.length));
+    while (line.length < SUMMARY_HEADER.length) line.push('');
+    var row = idx[_fmt(d)];
+    if (row) { sh.getRange(row, 1, 1, line.length).setValues([line]); updated++; }
+    else { add.push(line); idx[_fmt(d)] = -1; }
+  }
+  if (add.length) {
+    var start = sh.getLastRow() + 1, need = start + add.length;
+    if (need > sh.getMaxRows()) sh.insertRowsAfter(sh.getMaxRows(), need - sh.getMaxRows());
+    sh.getRange(start, 1, add.length, SUMMARY_HEADER.length).setValues(add);
+    added = add.length;
+  }
+  return _json({ ok: true, mode: 'summary', added: added, updated: updated });
+}
+function _rawFolder() {
+  var it = DriveApp.getFoldersByName(RAW_FOLDER);
+  return it.hasNext() ? it.next() : DriveApp.createFolder(RAW_FOLDER);
+}
+// {name:'thermal_log_2026-11-14.csv.gz', b64:'...', mime:'application/gzip'} — 같은 이름이 있으면 휴지통으로 보내고 새로 만듦
+function _postRawFile(body) {
+  var name = String(body.name || '');
+  if (!/^[\w.\-]+$/.test(name)) return _json({ ok: false, error: 'bad name' });
+  var bytes = Utilities.base64Decode(String(body.b64 || ''));
+  var folder = _rawFolder();
+  var old = folder.getFilesByName(name);
+  while (old.hasNext()) old.next().setTrashed(true);
+  var f = folder.createFile(Utilities.newBlob(bytes, String(body.mime || 'application/gzip'), name));
+  return _json({ ok: true, mode: 'rawfile', name: name, bytes: bytes.length, id: f.getId() });
+}
+// 드라이브 권한 승인용: 편집기에서 한 번 실행
+function driveTest() { Logger.log(_rawFolder().getName() + ' ' + _rawFolder().getId()); }
+
 function doPost(e) {
   var lock = LockService.getScriptLock();
   lock.waitLock(30000);
@@ -550,6 +615,8 @@ function doPost(e) {
     if (body.mode === 'cmd_pull') return _cmdPull(body);
     if (body.mode === 'cmd_ack') return _cmdAck(body);
     if (body.mode === 'weather') return _postWeather(body);
+    if (body.mode === 'summary') return _postSummary(body);
+    if (body.mode === 'rawfile') return _postRawFile(body);
     var sensor = String(body.sensor || '').trim();
     var records = body.records || [];
     if (!sensor || !records.length) return _json({ ok: true, added: 0, skipped: 0, note: 'empty' });

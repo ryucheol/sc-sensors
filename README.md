@@ -114,6 +114,7 @@ smart-cabin/
 | `heater/sheet_cmd_poll.py` | 시트 `명령` 탭 폴링 → 같은 명령을 원격 실행, 결과 기록(`기상` = 기상청 → 시트 즉시 갱신) | cron 매분 |
 | `weather/forecast_fetch.py` / `weather/kma_obs_fetch.py` | 기상청 단기예보(매시 10분) / ASOS 관측(매시 15분) | cron |
 | `weather/kma_sync.py` | 기상청 단기예보 81행·부여 관측 → 시트 `동지집_예보`·`부여_시간별`(1단계). 테스트 `cd weather && python3 -m unittest test_kma_sync` — [설계](docs/KMA_SHEET_PUSH.ko.md) | timer 매시 12·42분 + 연결 시 |
+| `gateway/sheet_summary.py` | Pi 1분 기록(`thermal_log.csv`)의 시간 요약(히터 kWh·가동 분·평균 온습도) → 시트 `농막_시간요약`, 끝난 날의 1분 원자료(gzip) → 드라이브 `농막_원자료`. 밀리면 이어서 보냄. 테스트 `cd gateway && python3 -m unittest test_sheet_summary` | cron 매시 5분 |
 | `heater/test_heater_logic.py` | 순수 로직 단위테스트 61개 — `cd heater && python3 -m unittest test_heater_logic` | 어디서나 |
 | `sheets/Code.gs` | Apps Script 웹앱 v12: current/avg/hist/batt/presence/cmd_pull/cmd_ack/weather, 배터리 예상일, `명령` 탭 onEdit, 캘린더 `동지집 도착` 일정 → 도착 명령 | 시트에 붙여넣기 |
 | `index.html` · `gateway/farmhut_sync.py` · `gateway/current_sync.py` | 폰 웹앱(Web Bluetooth) · PC 동기화 — 초기 경로, 지금은 보조 | GitHub Pages · PC |
@@ -121,7 +122,7 @@ smart-cabin/
 
 ## 8. 구글시트 탭
 
-`농막_현재`(센서별 1행 + 배터리 예상일) · `농막_시간별`(권위 min/max) · `농막_평균`(passive 시간가중) · `농막_배터리` · `재실기록`(자동) · `명령`(A열에 `도착 내일 16:00`·`난방`·`동파`·`상태` 등을 적으면 Pi가 1분 내 실행, B~D에 결과; 캘린더 `동지집 도착` 일정은 자동 기입 — [HEATER.md §명령](HEATER.md#명령--별칭-pi-ssh-셸)) · `농막_그래프` · `최근5일_시간별`(부여 기상 비교). 업로드는 `/exec`(Apps Script) 한 곳, 중복제거는 서버가 `(센서, 정시)`로.
+`농막_현재`(센서별 1행 + 배터리 예상일) · `농막_시간별`(권위 min/max) · `농막_평균`(passive 시간가중) · `농막_배터리` · `재실기록`(자동) · `명령`(A열에 `도착 내일 16:00`·`난방`·`동파`·`상태` 등을 적으면 Pi가 1분 내 실행, B~D에 결과; 캘린더 `동지집 도착` 일정은 자동 기입 — [HEATER.md §명령](HEATER.md#명령--별칭-pi-ssh-셸)) · `농막_그래프` · `최근5일_시간별`(부여 기상 비교) · `농막_시간요약`(Code.gs v13, Pi가 매시 보내는 히터 kWh·가동 분·평균 온습도 — 열모델·전력 분석용). 드라이브 `농막_원자료` 폴더에 하루 1개씩 1분 원자료. 업로드는 `/exec`(Apps Script) 한 곳, 중복제거는 서버가 `(센서, 정시)`로.
 
 ## 9. 보안
 
@@ -145,6 +146,7 @@ smart-cabin/
 | [docs/THERMAL_MODEL.ko.md](docs/THERMAL_MODEL.ko.md) | 열모델 학습 계획·데이터·성층·습도·우선순위 |
 | [docs/ENERGY_SAVINGS.ko.md](docs/ENERGY_SAVINGS.ko.md) | 정밀 제어와 전력 절약 정량화 |
 | [docs/WORKLOG_2026-11-08.ko.md](docs/WORKLOG_2026-11-08.ko.md) | 11-08 작업 일지 |
+| [docs/WORKLOG_2026-11-15.ko.md](docs/WORKLOG_2026-11-15.ko.md) | 11-15 농막 작업(시간 요약·원자료·텔레그램) |
 | [docs/WORKLOG_2026-11-13.ko.md](docs/WORKLOG_2026-11-13.ko.md) | 11-09~13 작업 일지(Qingping, Shelly, 다음 할 일) |
 | [docs/SHELLY_PLUG.ko.md](docs/SHELLY_PLUG.ko.md) | Shelly Plug M Gen3 기능 조사와 플러그 내장 동파 가드(Pi 독립) |
 | [docs/GOOGLE_HOME.ko.md](docs/GOOGLE_HOME.ko.md) | Google Home Mini 음성 알림(캐스트)·음성 제어 설계와 집 시험 |
