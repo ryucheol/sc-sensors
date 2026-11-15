@@ -36,7 +36,7 @@ def main(ip):
     code = code.replace('QP_MAC: "58:2d:34:87:2f:64"', 'QP_MAC: "00:00:00:00:00:00"')   # 실제 Qingping 차단
     k1, k2 = os.urandom(16), os.urandom(16)
     # 시험 중 실제 기상청 호출 막기(FC.try_ts를 미래로) — 예보는 시나리오에서 직접 넣는다
-    code += ('\nKEY.floor1=mb_hexkey("%s"); KEY.out=mb_hexkey("%s"); FC.try_ts=now()+999999;\n' % (k1.hex(), k2.hex()) +
+    code += ('\nKEY.floor1=mb_hexkey("%s"); KEY.out=mb_hexkey("%s"); FC.try_ts=now()+999999; st.hb_ts=0;\n' % (k1.hex(), k2.hex()) +
              'function hs(h){let s="";for(let i=0;i<h.length;i+=2)s+=String.fromCharCode(parseInt(h.substr(i,2),16));return s;}\n'
              'function inj(mac,h){handleAdv(mac,{"fe95":hs(h)},-50);}\n'
              'function run(){st.want=null;tick();return JSON.stringify({mode:st.mode,want:st.want,t_in:st.t_in,t_pred:st.t_pred,'
@@ -55,6 +55,8 @@ def main(ip):
         for k in range(0, len(code), 900):
             rpc(ip, "Script.PutCode", {"id": sid, "code": code[k:k + 900], "append": k > 0})
         rpc(ip, "Script.Start", {"id": sid})
+        import time; time.sleep(2)   # loadKeys()가 KVS의 실제 키로 덮어쓴 뒤 시험 키를 다시 넣는다
+        ev('KEY.floor1=mb_hexkey("%s"); KEY.out=mb_hexkey("%s");' % (k1.hex(), k2.hex()))
         decay = math.exp(-60 / 550)
         cases = []   # (설명, 준비 코드 또는 주입, 기대 mode, 기대 want)
 

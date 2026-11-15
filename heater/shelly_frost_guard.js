@@ -225,6 +225,7 @@ HTTPServer.registerEndpoint("reload", function (req, res) {
 });
 
 st.boot = now();
+st.hb_ts = st.boot;   // boot grace: Pi owns the first HB_TIMEOUT (avoid OFF right after power restore being taken as manual OFF)
 loadKeys();
 BLE.Scanner.Subscribe(onScan);
 if (!BLE.Scanner.isRunning()) BLE.Scanner.Start({ duration_ms: BLE.Scanner.INFINITE_SCAN, active: false });
