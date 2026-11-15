@@ -33,10 +33,11 @@ let S = {
   out: { t: null, h: null, batt: null, ts: 0, n: 0, rssi: null, bad: 0 }
 };
 let KEY = { floor1: null, out: null };
-let FC = { min6: null, vals: null, base: null, ts: 0, ok: 0, err: 0, last_err: "", try_ts: 0 };
+let FC = { min6: null, vals: null, base: null, ts: 0, ok: 0, err: 0, last_err: "", try_ts: -100000 };   // fetch on first tick (now() is uptime)
 let st = { hb_ts: 0, hb_n: 0, mode: "boot", want: null, t_in: null, t_pred: null, t_out: null, t_out_src: "none", last_act: "", boot: 0 };
 
-function now() { return Shelly.getComponentStatus("sys").unixtime; }
+function now() { return Shelly.getComponentStatus("sys").uptime; }   // monotonic: valid at boot before SNTP
+function wall() { return Shelly.getComponentStatus("sys").unixtime; }   // null until SNTP sync
 function u16(s, i) { return s.at(i) | (s.at(i + 1) << 8); }
 function s16(s, i) { let v = u16(s, i); return v > 32767 ? v - 65536 : v; }
 
@@ -132,9 +133,10 @@ function ymd(days) { let z = days + 719468, era = Math.floor(z / 146097), doe = 
   return JSON.stringify(y) + p2(m) + p2(d); }
 function fcFetch() {
   FC.try_ts = now();
+  if (!wall()) { FC.last_err = "no time"; FC.try_ts = now() - CFG.FC_EVERY_S + 60; return; }
   Shelly.call("KVS.Get", { key: "kma_key" }, function (r) {
     if (!r || !r.value) { FC.last_err = "no key"; return; }
-    let k = now() + 32400 - 45 * 60, days = Math.floor(k / 86400), hh = Math.floor((k % 86400) / 3600);
+    let k = wall() + 32400 - 45 * 60, days = Math.floor(k / 86400), hh = Math.floor((k % 86400) / 3600);
     let bd = ymd(days), bt = p2(hh) + "30";
     let url = "https://apihub.kma.go.kr/api/typ02/openApi/VilageFcstInfoService_2.0/getUltraSrtFcst?pageNo=5&numOfRows=6&dataType=JSON"
       + "&base_date=" + bd + "&base_time=" + bt + "&nx=" + JSON.stringify(CFG.NX) + "&ny=" + JSON.stringify(CFG.NY) + "&authKey=" + r.value;
@@ -159,7 +161,7 @@ function setSwitch(on, why) {
   st.want = on;
   let out = Shelly.getComponentStatus("switch:0").output;
   if (out === on) return;
-  st.last_act = (CFG.ACT ? "" : "DRY ") + (on ? "ON " : "OFF ") + why + " @" + JSON.stringify(now());
+  st.last_act = (CFG.ACT ? "" : "DRY ") + (on ? "ON " : "OFF ") + why + " @" + JSON.stringify(wall());
   print(st.last_act);
   if (CFG.ACT) Shelly.call("Switch.Set", { id: 0, on: on });
 }
