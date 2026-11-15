@@ -84,3 +84,14 @@ sheet_summary.log
 # data_watch 실행 상태(런타임)
 data_usage.json
 data_watch_state.json
+# lte_watch 실행 상태(런타임)
+lte_watch_state.json
+lte_watch.log
+# 선풍기 제어 런타임
+fan_cmd.json
+fan_state.json
+fan_status.json
+fan.log
+selftest.lock
+shelly_hb.log
+.guard_alert_ts

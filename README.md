@@ -115,6 +115,10 @@ smart-cabin/
 | `weather/forecast_fetch.py` / `weather/kma_obs_fetch.py` | 기상청 단기예보(매시 10분) / ASOS 관측(매시 15분) | cron |
 | `weather/kma_sync.py` | 기상청 단기예보 81행·부여 관측 → 시트 `동지집_예보`·`부여_시간별`(1단계). 테스트 `cd weather && python3 -m unittest test_kma_sync` — [설계](docs/KMA_SHEET_PUSH.ko.md) | timer 매시 12·42분 + 연결 시 |
 | `gateway/sheet_summary.py` | Pi 1분 기록(`thermal_log.csv`)의 시간 요약(히터 kWh·가동 분·평균 온습도) → 시트 `농막_시간요약`, 끝난 날의 1분 원자료(gzip) → 드라이브 `농막_원자료`. 밀리면 이어서 보냄. 테스트 `cd gateway && python3 -m unittest test_sheet_summary` | cron 매시 5분 |
+| `heater/fan_control.py` | 선풍기(Tuya 'Fan') 자동: 성층 해소(난방·여름 재실)·더위(재실 28 °C)·수동 `선풍기 켜|꺼|자동`. 테스트 `cd heater && python3 -m unittest test_fan_control` | cron 매분(tuya-venv) |
+| `notify/lte_watch.py` | LTE 자가 복구: eth1로 인터넷 확인, 15분 실패면 동글 재시작(30분 간격·하루 8회)·텔레그램. 테스트 `cd notify && python3 -m unittest test_lte_watch` | cron 5분 |
+| `scripts/farmhut-wan-guard` | Ryufarm 기기 → LTE 차단(nftables): Shelly 상시, Home Mini·Tuya 하루/한 달 한도, `공유` 명령으로 잠깐 열기. 설치 `sudo bash scripts/install_wan_guard.sh`, 매분 `notify/wan_tick.sh` | 부팅 서비스 + cron 매분 |
+| `heater/shelly_hb.sh` | Shelly 동파 가드 하트비트(제어기 살아 있을 때만) + 가드가 멈췄으면 다시 켜고 텔레그램 | cron 매분 |
 | `heater/test_heater_logic.py` | 순수 로직 단위테스트 61개 — `cd heater && python3 -m unittest test_heater_logic` | 어디서나 |
 | `sheets/Code.gs` | Apps Script 웹앱 v12: current/avg/hist/batt/presence/cmd_pull/cmd_ack/weather, 배터리 예상일, `명령` 탭 onEdit, 캘린더 `동지집 도착` 일정 → 도착 명령 | 시트에 붙여넣기 |
 | `index.html` · `gateway/farmhut_sync.py` · `gateway/current_sync.py` | 폰 웹앱(Web Bluetooth) · PC 동기화 — 초기 경로, 지금은 보조 | GitHub Pages · PC |

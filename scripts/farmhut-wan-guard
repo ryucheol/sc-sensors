@@ -1,0 +1,167 @@
+#!/bin/bash
+# 농막 LTE(6GB) 보호: Ryufarm(eth0) 기기가 LTE(eth1)로 나가는 것을 막는다.
+#   - 허용 목록(/etc/farmhut/wan_allow, MAC)          → 항상 통과 (Shelly 히터 플러그: 기상청 예보·시각)
+#   - 한도 목록(/etc/farmhut/wan_quota, MAC 하루MB 한달MB) → 하루·한 달 한도까지 통과(올리기+내려받기 합계).
+#       하루 한도는 자정, 한 달 한도는 1일에 초기화. (Home Mini 50/500: 음성·알림은 늘 되고 음악은 한도에서 끊김)
+#   - 그 밖의 기기                                    → 차단 (노트북·휴대폰·Tuya 등)
+# Pi 자신의 통신·Ryufarm 안 기기끼리·휴대폰 핫스팟(wlan0) 경로는 건드리지 않는다.
+# 설치: sudo bash scripts/install_wan_guard.sh  (→ /usr/local/sbin/farmhut-wan-guard, root 소유)
+# 사용(sudo -n 허용됨):
+#   apply        규칙 적용(오늘·이번 달 사용량을 이어서)
+#   open SEC     SEC초(60~86400) 동안 모두 허용(이 동안은 한도에 안 셈), 끝나면 tick이 다시 막음
+#   tick         매분(cron): 사용량 저장, 열림 종료·규칙 사라짐·날짜 바뀜이면 다시 적용.
+#                한도를 처음 넘은 순간 "EXCEEDED 이름 하루|한달 MB" 한 줄 출력(알림용)
+#   status       상태 한 줄 / print  적용할 규칙 출력(점검용)
+set -u
+PATH=/usr/sbin:/usr/bin:/sbin:/bin
+ALLOW=/etc/farmhut/wan_allow
+QUOTA=/etc/farmhut/wan_quota
+VAR=/var/lib/farmhut; USED=$VAR/wan_quota_used
+OPEN=/run/farmhut-wan-open-until
+LAN=eth0; WAN=eth1; T=farmhut_wan
+MARK0=0x4e480000          # 한도 기기 연결 표시(ct mark) = MARK0 + 번호
+mkdir -p "$VAR"
+
+macs() {
+  [ -f "$ALLOW" ] || return 0
+  grep -v '^\s*#' "$ALLOW" | tr 'A-F' 'a-f' | grep -oE '^([0-9a-f]{2}:){5}[0-9a-f]{2}' | paste -sd, -
+}
+
+# 한도 목록 → "번호 MAC 하루MB 한달MB 이름" 줄들
+qlist() {
+  [ -f "$QUOTA" ] || return 0
+  # 이름 = '#' 뒤 첫 단어(공백 없는 한 단어로 적을 것)
+  grep -v '^\s*#' "$QUOTA" | awk '{ mac=tolower($1) } NF>=3 && mac ~ /^([0-9a-f][0-9a-f]:){5}[0-9a-f][0-9a-f]$/ && $2 ~ /^[0-9]+$/ && $3 ~ /^[0-9]+$/ {
+      name=mac; for (i=4;i<=NF;i++) if ($i=="#" && i<NF) { name=$(i+1); break } else if ($i ~ /^#./) { name=substr($i,2); break }
+      print n++, mac, $2, $3, name }'
+}
+
+period() { [ "$1" = d ] && date +%F || date +%Y-%m; }   # d=하루, m=한 달
+label() { [ "$1" = d ] && echo 하루 || echo 한달; }
+
+# 저장된 사용량(바이트): $1 번호, $2 d|m
+used_saved() {
+  [ -f "$USED" ] || { echo 0; return; }
+  awk -v p="$(period "$2")" -v i="$1" -v k="$2" '$1==p && $2==i && $3==k {u=$4} END {print u+0}' "$USED"
+}
+
+# 지금 규칙의 사용량(바이트): $1 번호, $2 d|m (규칙 없으면 빈 값)
+used_live() {
+  nft -j list quota inet $T "q$2$1" 2>/dev/null | python3 -c '
+import sys, json
+try:
+    for o in json.load(sys.stdin)["nftables"]:
+        if "quota" in o: print(o["quota"].get("used", 0)); break
+except Exception: pass'
+}
+
+save_used() {
+  nft list table inet $T >/dev/null 2>&1 || return 0
+  local tmp; tmp=$(mktemp)
+  [ -f "$USED" ] && awk -v d="$(period d)" -v m="$(period m)" '$1==d || $1==m' "$USED" > "$tmp"
+  while read -r i mac dmb mmb name; do
+    for k in d m; do
+      local u; u=$(used_live "$i" "$k"); [ -n "$u" ] || continue
+      awk -v i="$i" -v k="$k" '!($2==i && $3==k)' "$tmp" > "$tmp.2"; mv "$tmp.2" "$tmp"
+      echo "$(period "$k") $i $k $u $name" >> "$tmp"
+    done
+  done < <(qlist)
+  mv "$tmp" "$USED"
+}
+
+ruleset() {
+  local m el=""; m=$(macs)
+  [ -n "$m" ] && el=" elements = { $m };"     # ${m:+...{...}} 는 안쪽 } 에서 끝나 버리므로 따로 만든다
+  echo "table inet $T {"
+  echo "  set allow { type ether_addr;$el }"
+  while read -r i mac dmb mmb name; do
+    echo "  quota qd$i { over $dmb mbytes used $(used_saved "$i" d) bytes }"
+    echo "  quota qm$i { over $mmb mbytes used $(used_saved "$i" m) bytes }"
+  done < <(qlist)
+  echo "  chain lan_wan {"
+  echo "    type filter hook forward priority -10; policy accept;"
+  while read -r i mac dmb mmb name; do
+    local mk; mk=$(printf '0x%08x' $(( MARK0 + i )))
+    echo "    iifname \"$LAN\" oifname \"$WAN\" ether saddr $mac ct mark set $mk"
+    echo "    ct mark $mk quota name \"qd$i\" drop"     # 하루 먼저(한 달은 통과한 것만 셈)
+    echo "    ct mark $mk quota name \"qm$i\" drop"
+    echo "    ct mark $mk accept"
+  done < <(qlist)
+  echo "    iifname \"$LAN\" oifname \"$WAN\" ether saddr @allow accept"
+  echo "    iifname \"$LAN\" oifname \"$WAN\" counter drop"
+  echo "  }"
+  echo "}"
+}
+
+apply() {
+  save_used
+  nft delete table inet $T 2>/dev/null
+  ruleset | nft -f - || { echo "nft 적용 실패"; return 1; }
+  rm -f "$OPEN"
+  period d > "$VAR/wan_day"
+  echo "차단 적용: 항상 허용 $(macs | tr ',' '\n' | grep -c .)대, 한도 $(qlist | grep -c .)대"
+}
+
+open_for() {
+  local s="$1"
+  [[ "$s" =~ ^[0-9]+$ ]] && [ "$s" -ge 60 ] && [ "$s" -le 86400 ] || { echo "open SEC: 60~86400"; return 2; }
+  save_used
+  nft delete table inet $T 2>/dev/null
+  echo $(( $(date +%s) + s )) > "$OPEN"
+  echo "모두 허용: $(( s / 60 ))분 동안 ($(date -d @"$(cat "$OPEN")" +%H:%M)까지)"
+}
+
+quota_line() {
+  local out=""
+  while read -r i mac dmb mmb name; do
+    local ud um; ud=$(used_live "$i" d); [ -n "$ud" ] || ud=$(used_saved "$i" d)
+    um=$(used_live "$i" m); [ -n "$um" ] || um=$(used_saved "$i" m)
+    out="$out · $name 오늘 $(( ud / 1048576 ))/${dmb}MB, 이번 달 $(( um / 1048576 ))/${mmb}MB"
+    [ "$ud" -ge $(( dmb * 1048576 )) ] && out="$out(오늘 한도 도달)"
+    [ "$um" -ge $(( mmb * 1048576 )) ] && out="$out(이달 한도 도달)"
+  done < <(qlist)
+  echo "$out"
+}
+
+status() {
+  if [ -f "$OPEN" ]; then
+    echo "열림(모두 허용) ~$(date -d @"$(cat "$OPEN")" +%m-%d\ %H:%M)$(quota_line)"
+  elif nft list table inet $T >/dev/null 2>&1; then
+    local n; n=$(nft list chain inet $T lan_wan 2>/dev/null | grep -oE 'packets [0-9]+' | tail -1 | awk '{print $2}')
+    echo "차단 중 · 막은 패킷 ${n:-0}$(quota_line)"
+  else
+    echo "규칙 없음(모두 허용)$(quota_line)"
+  fi
+}
+
+tick() {
+  if [ -f "$OPEN" ]; then
+    [ "$(date +%s)" -ge "$(cat "$OPEN" 2>/dev/null || echo 0)" ] && apply >/dev/null
+  elif ! nft list table inet $T >/dev/null 2>&1; then
+    apply >/dev/null
+  elif [ "$(cat "$VAR/wan_day" 2>/dev/null)" != "$(period d)" ]; then
+    apply >/dev/null                      # 날짜가 바뀜 → 하루 한도 0부터(달이 바뀌면 한 달도)
+  fi
+  save_used
+  while read -r i mac dmb mmb name; do     # 한도를 처음 넘은 순간 한 줄(기간마다 한 번)
+    for k in d m; do
+      local u lim; u=$(used_live "$i" "$k"); [ -n "$u" ] || continue
+      [ "$k" = d ] && lim=$dmb || lim=$mmb
+      local flag="$VAR/wan_exceeded_$(period "$k")_${i}_$k"
+      if [ "$u" -ge $(( lim * 1048576 )) ] && [ ! -f "$flag" ]; then
+        touch "$flag"; echo "EXCEEDED $name $(label "$k") ${lim}MB"
+      fi
+    done
+  done < <(qlist)
+  find "$VAR" -maxdepth 1 -name 'wan_exceeded_*' -mtime +40 -delete 2>/dev/null
+  return 0
+}
+
+case "${1:-}" in
+  apply) apply ;;
+  open) open_for "${2:-}" ;;
+  tick) tick ;;
+  status) status ;;
+  print) ruleset ;;
+  *) echo "사용: $0 apply|open SEC|tick|status|print"; exit 2 ;;
+esac

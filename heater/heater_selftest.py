@@ -5,7 +5,7 @@
    사용: 히터점검 [최대초]   (기본 25초, 예: 히터점검 30)
    ※ 이 플러그는 켠 뒤 ~12초쯤 지나야 전력을 보고함 → 전력 잡히면 즉시 PASS,
      안 잡히면 최대초까지 기다렸다 판정. 전압은 있는데 전류만 0이면 플러그 정상·히터쪽 문제."""
-import os, sys, json, time, tinytuya
+import os, sys, json, time
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import heater_control as hc   # 순수 함수만 사용(detect_stage·stage_advice·forecast_min_temp)
 
@@ -19,9 +19,12 @@ def main():
         try: maxs = max(5, int(float(sys.argv[1])))
         except ValueError: pass
 
-    k = json.load(open(os.path.join(BASE, "tuya_keys.json")))[0]
-    d = tinytuya.OutletDevice(k["id"], k["ip"], k["key"])
-    d.set_version(float(k["version"])); d.set_socketTimeout(5)
+    from shelly_plug import make_device   # type=shelly → Shelly, 그 외 → tinytuya
+    devs = json.load(open(os.path.join(BASE, "tuya_keys.json")))
+    k = next((x for x in devs if x.get("name") == "Main heater"), devs[0])
+    d = make_device(k)
+    d.set_version(float(k.get("version", 3.3))); d.set_socketTimeout(5)
+    open(os.path.join(BASE, "selftest.lock"), "w").close()   # 제어기가 점검 중 변화를 수동 조작으로 보지 않게
 
     try:
         pre = bool(d.status().get("dps", {}).get("1"))
@@ -48,6 +51,9 @@ def main():
             hit = el; break
     if not pre:
         d.turn_off()
+    time.sleep(2)
+    try: os.utime(os.path.join(BASE, "selftest.lock"))   # 끝난 뒤 180초까지 잠금 유지(제어기 한 바퀴)
+    except OSError: pass
 
     # 단수·예보·조언(떠나기 전 확인용): 지금 실측 W로 단을 판정하고, 동파모드 기준으로 48h 예보 최저와 금요일 예열 가능 여부를 본다
     try:

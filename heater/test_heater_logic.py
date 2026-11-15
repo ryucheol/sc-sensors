@@ -132,6 +132,17 @@ class ManualOverride(unittest.TestCase):
         self.assertIn("manual_override", CFG); self.assertGreater(CFG["manual_override"]["hold_min"], 0)
 
 
+class GuardActDetect(unittest.TestCase):
+    def test_recent_real_act(self):
+        self.assertTrue(hc.guard_recent_act("OFF in=25 pred=23 @1000", 1100))
+
+    def test_old_dry_or_empty(self):
+        self.assertFalse(hc.guard_recent_act("OFF in=25 @1000", 1500))
+        self.assertFalse(hc.guard_recent_act("DRY OFF in=25 @1000", 1050))
+        self.assertFalse(hc.guard_recent_act("", 1000))
+        self.assertFalse(hc.guard_recent_act("ON x @null", 1000))
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
 

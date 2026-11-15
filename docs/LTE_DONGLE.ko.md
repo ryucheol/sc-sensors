@@ -164,3 +164,16 @@ python3 scripts/lte_signal_check.py 60 무안테나    # 안테나 빼고 1분
 - 농막 망: 동글(eth1) → Pi(NM shared, eth0 10.42.0.1) → 버팔로 AP "Ryufarm" → 기기들. Pi의 Wi-Fi는 AP를 하지 않아 BLE 수신 저하 없음.
 - `data_watch` 한도 100 GB·주기 시작 13일(개통일 가정)로 설정. 6 GB 유심으로 바꿀 때 `heater_config.json`의 `data_watch.limit_gb`를 6으로.
 - 휴대폰 핫스팟을 끈 상태(=떠난 뒤 조건)에서 Pi 인터넷·Tailscale(smartcabin)·텔레그램·시트 업로드·서비스 6개 정상 확인.
+
+## 9. 6 GB 유심 교체·장애 대비·기기 인터넷 차단 (2026-11-15~16 밤)
+
+- **유심 교체**(100 GB 9244 → 6 GB 7506): 유심 인식(257, PIN 없음)됐지만 등록 안 됨(902, 신호 0) → HiLink API로 **동글 재시작 40초 뒤 등록**(KT LTE, RSRP −80, SINR 23). 유심을 바꾸면 첫 등록에 재시작이 필요하다는 패턴 재확인.
+- 동글의 '이번 달 사용량'은 유심과 무관하게 누적 → `/api/monitoring/clear-traffic`로 지움. `heater_config.json` `data_watch` = 6 GB·매월 1일·폭주 200 MB/h.
+- **노트북을 Ryufarm에 붙이면 시간당 160~210 MB**(윈도·Home Mini 업데이트). 같은 날 휴대폰 요금제 7 GB도 소진(핫스팟으로 노트북 사용) → 1 Mbps.
+- **넘어감 시험**(동글 데이터만 끔, USB는 살아 있음, 휴대폰 핫스팟 켬): 3분 동안 기본 경로는 계속 LTE(metric 102), NM 연결 검사도 eth1 'full' 유지. Pi 전체 인터넷이 되는 듯 보였지만 **핫스팟의 IPv6로 나간 우연**(구글·텔레그램·Tailscale) — IPv4는 죽은 LTE로 감. 즉 등록만 풀린 경우엔 자동 전환 안 됨(떠난 뒤엔 핫스팟이 없어 무관).
+- **자가 복구 `notify/lte_watch.py`**(cron 5분): eth1로 generate_204 두 곳 확인 → 연속 3회 실패면 데이터 켜기 + **동글 재시작**(30분 간격, 하루 8회), 넘으면 '현장 확인' 알림 한 번. eth1이 없으면(동글 빠짐) 알림만. 알림은 텔레그램 대기열(끊긴 동안 쓴 것도 복구 후 전송). 실전 시험: 데이터 끔 → 3회째 재시작 → 30초 뒤 복구, 알림 2건.
+- **기기 인터넷 차단 `scripts/farmhut-wan-guard`**(nftables, root, 설치 `sudo bash scripts/install_wan_guard.sh`): Ryufarm(eth0) → LTE(eth1) 전달을 MAC으로 거름. Pi 자신·Ryufarm 안 기기끼리·핫스팟 경로는 그대로.
+  - 항상 허용 `/etc/farmhut/wan_allow`: Shelly 히터 플러그(가드의 기상청 예보·SNTP).
+  - 한도 `/etc/farmhut/wan_quota`(MAC 하루MB 한달MB # 이름): Home Mini 50/500(음성·알림은 늘 되고 유튜브 음악은 한도에서 끊김), Tuya 선풍기·보조 히터 각 5/30(클라우드 유지 → 앱이 Pi 고장 때 예비 리모컨). 연결 단위 표시(ct mark)로 **올리기+내려받기** 합계, 사용량은 매분 `/var/lib/farmhut`에 저장해 재부팅·재적용 뒤에도 이어 셈, 하루=자정·한 달=1일 초기화.
+  - 나머지(노트북·휴대폰 등) 차단. 텔레그램·시트·Pi 터미널 `공유 [N시간|N분|끔|상태]`로 잠깐 열기(최대 24시간, 끝나면 자동 차단, 연 동안은 한도에 안 셈). 한도 첫 도달 시 텔레그램(`notify/wan_tick.sh`, cron 매분).
+  - nft 함정 두 가지: 체인 이름 `fwd`는 예약어라 문법 오류, bash `${m:+...{ ... }}`는 안쪽 `}`에서 끝나 버림 → 따로 만들기. 설치 전 `nft -c -f`(일반 사용자도 문법 검사 가능)로 확인.

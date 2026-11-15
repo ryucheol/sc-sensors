@@ -26,6 +26,8 @@ ALIASES = {
     "상태": "상태", "status": "상태", "현황": "상태",
     "점검": "점검", "check": "점검", "히터점검": "점검",
     "기상": "기상", "weather": "기상", "날씨": "기상",
+    "선풍기": "선풍기", "fan": "선풍기", "팬": "선풍기",
+    "공유": "공유", "share": "공유", "인터넷": "공유",
 }
 
 
@@ -79,6 +81,10 @@ def status_text():
     if s.get("stage"): rel += "(%d단 %sW)" % (s["stage"], s.get("stage_w"))
     parts.append(rel)
     if s.get("today_kwh") is not None: parts.append("오늘 %.1fkWh" % s["today_kwh"])
+    try:
+        fs = json.load(open(os.path.join(BASE, "fan_status.json")))
+        parts.append("선풍기 %s" % ("ON" if fs.get("on") else "OFF"))
+    except Exception: pass
     if s.get("arrival"):
         try:
             a = s["arrival"]; ts = a.get("ts") if isinstance(a, dict) else None
@@ -94,6 +100,53 @@ def status_text():
     return " · ".join(parts)
 
 
+FAN_WORDS = {"켜": "on", "켜기": "on", "켬": "on", "on": "on", "꺼": "off", "끄기": "off", "끔": "off", "off": "off",
+             "자동": "auto", "auto": "auto"}
+
+
+def fan_cmd(toks):
+    """선풍기 켜|꺼|자동 → fan_cmd.json (fan_control.py가 매분 반영). 켜/꺼는 일정 시간 뒤 자동으로 돌아감."""
+    m = next((FAN_WORDS[t.lower()] for t in toks if t.lower() in FAN_WORDS), None)
+    if not m:
+        try: fs = json.load(open(os.path.join(BASE, "fan_status.json")))
+        except Exception: fs = {}
+        return "완료", "선풍기 %s — %s (명령: 선풍기 켜|꺼|자동)" % ("ON" if fs.get("on") else "OFF", fs.get("why", "?"))
+    json.dump({"mode": m, "ts": time.time()}, open(os.path.join(BASE, "fan_cmd.json"), "w"))
+    hold = ((json.load(open(os.path.join(BASE, "heater_config.json"))).get("fan") or {}).get("manual_hold_h", 4)
+            if os.path.exists(os.path.join(BASE, "heater_config.json")) else 4)
+    msg = {"on": "선풍기 켜기", "off": "선풍기 끄기", "auto": "선풍기 자동"}[m]
+    if m != "auto": msg += "(%s시간 뒤 자동으로 돌아감)" % hold
+    return "완료", msg + " — 반영 최대 1분"
+
+
+WAN_GUARD = "/usr/local/sbin/farmhut-wan-guard"
+
+
+def share_parse(toks):
+    """공유 인자 → ("open", 초) | ("apply", None) | ("status", None) (순수). 기본 1시간, 최대 24시간."""
+    import re
+    txt = "".join(toks)
+    if not txt: return ("open", 3600)
+    if txt in ("끔", "꺼", "끄기", "차단", "off", "닫기", "막기"): return ("apply", None)
+    if txt in ("상태", "status", "?"): return ("status", None)
+    sec = 0
+    for n, u in re.findall(r"(\d+(?:\.\d+)?)\s*(시간|h|분|m)", txt):
+        sec += float(n) * (3600 if u in ("시간", "h") else 60)
+    if not sec and re.fullmatch(r"\d+(?:\.\d+)?", txt): sec = float(txt) * 3600
+    if not sec: return ("status", None)
+    return ("open", int(min(max(sec, 60), 86400)))
+
+
+def share_cmd(toks):
+    if not os.path.exists(WAN_GUARD): return "오류", "farmhut-wan-guard 미설치(sudo bash scripts/install_wan_guard.sh)"
+    act, sec = share_parse(toks)
+    args = ["sudo", "-n", WAN_GUARD, act] + ([str(sec)] if sec else [])
+    r = subprocess.run(args, capture_output=True, text=True, timeout=20)
+    out = (r.stdout + r.stderr).strip()
+    if act == "open" and r.returncode == 0: out += " — Ryufarm 모든 기기 인터넷(LTE 6GB 주의). 끝나면 자동 차단, 먼저 막으려면 '공유 끔'"
+    return ("완료" if r.returncode == 0 else "오류"), out[-500:]
+
+
 def run(cmd_text):
     """시트 한 행의 명령 문자열 실행 → (status, result)."""
     toks = [t.rstrip("에,.") for t in cmd_text.replace("　", " ").split() if t.strip()]
@@ -101,9 +154,13 @@ def run(cmd_text):
     for i, t in enumerate(toks):
         if t.lower() in ALIASES: verb = ALIASES[t.lower()]; toks.pop(i); break
     if not verb:
-        return "오류", "알 수 없는 명령 — 난방 / 동파 / 취침 / 도착 HH:MM [내일|날짜] [목표°C] / 도착 취소 / 상태 / 점검 / 기상"
+        return "오류", "알 수 없는 명령 — 난방 / 동파 / 취침 / 도착 HH:MM [내일|날짜] [목표°C] / 도착 취소 / 상태 / 점검 / 기상 / 선풍기 켜|꺼|자동 / 공유 [N시간|N분|끔]"
     if verb == "상태":
         return "완료", status_text()
+    if verb == "선풍기":
+        return fan_cmd(toks)
+    if verb == "공유":
+        return share_cmd(toks)
     if verb == "기상":   # 기상청 → 시트 즉시 갱신. 최대 몇 분 걸리므로 백그라운드로 띄우고 바로 응답
         sync = os.path.join(BASE, "weather", "kma_sync.py")
         if not os.path.exists(sync): return "오류", "weather/kma_sync.py 없음(git pull 필요)"

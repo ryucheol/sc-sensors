@@ -293,6 +293,38 @@ def apply_relay(d, want):
     s = d.status().get("dps", {})
     return bool(s.get("1")), s.get("19",0)/10.0, s.get("20",0)/10.0   # relay, W, V
 
+SELFTEST_LOCK = os.path.join(BASE, "selftest.lock")
+
+
+def guard_recent_act(last_act, now_ts, window=180):
+    """플러그 가드 last_act("[DRY ]ON|OFF 이유 @유닉스시각") → 최근 window초 안의 실제 조작이면 True(순수)."""
+    if not last_act or last_act.startswith("DRY") or "@" not in last_act:
+        return False
+    try:
+        ts = float(last_act.rsplit("@", 1)[1])
+    except ValueError:
+        return False
+    return 0 <= now_ts - ts <= window
+
+
+def external_actor(dev, now_ts):
+    """플러그 상태가 Pi 명령과 어긋났을 때, 사람이 아닌 원인이면 그 이름(자가점검·동파 가드), 아니면 None."""
+    try:
+        if now_ts - os.path.getmtime(SELFTEST_LOCK) <= 180:
+            return "자가점검"
+    except OSError:
+        pass
+    if (dev.get("type") or "").lower() == "shelly":
+        try:
+            import urllib.request
+            g = json.loads(urllib.request.urlopen("http://%s/script/1/status" % dev["ip"], timeout=3).read().decode())
+            if guard_recent_act(g.get("last_act", ""), now_ts):
+                return "동파 가드(%s)" % g.get("last_act")
+        except Exception:
+            pass
+    return None
+
+
 def main():
     import sys; sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))   # 루트 심볼릭 링크로 실행돼도 heater/ 모듈 찾기
     from shelly_plug import make_device   # type=shelly → Shelly HTTP RPC, 그 외 → tinytuya(지연 임포트)
@@ -388,7 +420,10 @@ def main():
                 if cur_relay != st.get("relay"):
                     # Pi가 보낸 명령은 즉시 st["relay"]에 반영되므로, 여기서 어긋나면 바깥(버튼·앱·정전복구)이 바꾼 것
                     mo = cfg.get("manual_override") or {}
-                    if seen_status and st.get("relay") is not None and mo.get("enabled", True):
+                    who = external_actor(dev, time.time()) if (seen_status and st.get("relay") is not None) else None
+                    if who:
+                        log("플러그 %s — %s가 바꿈(수동으로 보지 않고 계속 자동 제어)" % ("ON" if cur_relay else "OFF", who))
+                    elif seen_status and st.get("relay") is not None and mo.get("enabled", True):
                         st["manual"] = {"state": cur_relay, "ts": now(), "until": now() + mo.get("hold_min", 120) * 60}
                         log("수동 조작 감지: 플러그 %s → %d분 동안 존중(동파 위험·상한 %s°C는 예외)"
                             % ("ON" if cur_relay else "OFF", mo.get("hold_min", 120), mo.get("max_temp", 27)))
