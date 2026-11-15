@@ -10,6 +10,7 @@
  *
  * 변경 이력:
  *   v13 (2026-11-15) mode:summary — Pi 1분 기록의 시간별 요약(히터 kWh·가동분·평균 온습도)을 '농막_시간요약' 탭에 시각 키로 저장. mode:rawfile — 하루 1회 1분 원자료(gzip CSV)를 드라이브 '농막_원자료' 폴더에. driveTest()로 드라이브 권한 승인
+ *   v14 (2026-11-16) Pi 무응답 감시 watchdog(): '농막_현재' 갱신이 75분 넘게 없으면 메일(6시간마다 재알림, 복구 메일). setupWatchdog() 한 번 실행.
  *   v12 (2026-11-11) mode:weather 2단계 키 — mid(→ 중기예보 A1·A3:H9), obs_daily(→ 부여_일별 날짜 키 upsert,
  *       확정을 잠정으로 덮지 않음), verify(→ 예보검증 A~C 끝에 24행, 같은 날짜면 건너뜀). doGet ?q=weather 에 daily_last.
  *       v11과 호환(2단계 키를 안 보내면 동작 동일). Pi는 kma_stage2.on 이 있을 때만 2단계 키를 보낸다.
@@ -37,7 +38,7 @@
  * 특징: 중복 제거를 서버에서 처리(멱등). 중복 기준 (센서, 정시 버킷). 시각은 실제 날짜값으로 저장.
  */
 
-var CODE_VERSION = '2026-11-15 v13';   // ← /exec(doGet) 응답·붙여넣기 확인용. 고칠 때마다 갱신.
+var CODE_VERSION = '2026-11-16 v14';   // ← /exec(doGet) 응답·붙여넣기 확인용. 고칠 때마다 갱신.
 var SITE = '농막';                 // ← 장소 접두사. 두 번째 시트(예: 선반)는 '선반' 으로만 바꾸면 됨
 var SECRET = 'CHANGE-ME';          // ← 게이트웨이의 FARMHUT_SECRET 과 동일하게
 var SHEET_NAME = SITE + '_시간별';
@@ -596,6 +597,55 @@ function _postRawFile(body) {
   var f = folder.createFile(Utilities.newBlob(bytes, String(body.mime || 'application/gzip'), name));
   return _json({ ok: true, mode: 'rawfile', name: name, bytes: bytes.length, id: f.getId() });
 }
+// ── v14 Pi 무응답 감시 ─────────────────────────────────────────
+// Pi는 사람이 없을 때도 '농막_현재'를 최소 10분마다 갱신(하트비트)한다. E열(갱신시각) 최신값이 WATCH_STALE_MIN 넘게
+// 오래되면 Pi·LTE·전원 중 하나가 죽은 것 → 스크립트 소유자에게 메일(6시간마다 다시), 복구되면 '복구' 메일.
+// Pi가 죽어도 동파는 Shelly 플러그 가드가 막지만(하트비트 10분 끊기면 인계), 사람은 이 메일로 안다.
+// 설치: 편집기에서 setupWatchdog() 한 번 실행(메일·트리거 권한 승인). 해제: removeWatchdog().
+var WATCH_STALE_MIN = 75;
+var WATCH_REMIND_H = 6;
+function watchdog() {
+  var sh = _currentSheet();
+  var last = sh.getLastRow();
+  if (last < 2) return;
+  var vals = sh.getRange(2, 5, last - 1, 1).getValues();
+  var newest = 0;
+  for (var i = 0; i < vals.length; i++) {
+    var v = vals[i][0];
+    if (v instanceof Date && v.getTime() > newest) newest = v.getTime();
+  }
+  if (!newest) return;
+  var now = Date.now(), ageMin = (now - newest) / 60000;
+  var props = PropertiesService.getScriptProperties();
+  var alertedAt = Number(props.getProperty('WATCH_ALERTED_AT') || 0);
+  var to = Session.getEffectiveUser().getEmail();
+  var when = Utilities.formatDate(new Date(newest), 'Asia/Seoul', 'MM-dd HH:mm');
+  var url = SpreadsheetApp.getActiveSpreadsheet().getUrl();
+  if (ageMin > WATCH_STALE_MIN) {
+    if (!alertedAt || now - alertedAt > WATCH_REMIND_H * 3600 * 1000) {
+      MailApp.sendEmail(to, '[동지집] Pi 응답 없음 — 마지막 갱신 ' + when,
+        '농막 Pi가 ' + Math.round(ageMin) + '분째 시트를 갱신하지 않습니다(마지막 ' + when + ').\n\n' +
+        '가능한 원인: 정전, Pi 멈춤, LTE 동글 끊김·데이터 소진, 유심.\n' +
+        '동파는 Shelly 플러그 가드가 Pi 없이 막습니다(실내 3°C 이하·예보로 켬).\n' +
+        '확인: 텔레그램 \'상태\'(응답 없으면 Pi/LTE 문제), Tailscale ssh pi, 현장 방문 시 Pi·동글 전원.\n\n' + url);
+      props.setProperty('WATCH_ALERTED_AT', String(now));
+    }
+  } else if (alertedAt) {
+    MailApp.sendEmail(to, '[동지집] Pi 복구 — 마지막 갱신 ' + when,
+      '농막 Pi가 다시 시트를 갱신합니다(' + when + ').\n' + url);
+    props.deleteProperty('WATCH_ALERTED_AT');
+  }
+}
+function setupWatchdog() {
+  removeWatchdog();
+  ScriptApp.newTrigger('watchdog').timeBased().everyMinutes(30).create();
+  watchdog();
+  Logger.log('watchdog 설치: 30분마다, ' + WATCH_STALE_MIN + '분 넘게 갱신 없으면 메일 → ' + Session.getEffectiveUser().getEmail());
+}
+function removeWatchdog() {
+  ScriptApp.getProjectTriggers().forEach(function (t) { if (t.getHandlerFunction() === 'watchdog') ScriptApp.deleteTrigger(t); });
+}
+
 // 드라이브 권한 승인용: 편집기에서 한 번 실행
 function driveTest() { Logger.log(_rawFolder().getName() + ' ' + _rawFolder().getId()); }
 
