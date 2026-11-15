@@ -9,8 +9,8 @@
     "off": 23.5
   },
   "sleep": {
-    "on": 20,
-    "off": 21,
+    "on": 22,
+    "off": 23,
     "sensor": "다락"
   },
   "stages": [

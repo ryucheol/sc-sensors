@@ -7,7 +7,7 @@
      heater_cmd.py 난방 25 27    # 임시: ON 25, OFF 27
      heater_cmd.py 동파          # 기본 동파(예: 3/5)
      heater_cmd.py 동파 7        # 임시: ON 7, OFF 7+밴드
-     heater_cmd.py 취침          # 취침: 다락 센서 기준(설정값, 예: 20/21)
+     heater_cmd.py 취침          # 취침: 다락 센서 기준(설정값, 예: 22/23)
      heater_cmd.py 취침 19       # 임시: 다락 ON 19, OFF 19+밴드
      heater_cmd.py 도착 16:00            # 오늘(지났으면 내일) 16:00에 23°C가 되도록 자동 시작(예보·실측 단 W로 역산)
      heater_cmd.py 도착 내일 07:00       # 내일 07:00  /  도착 2026-11-14 20:00  /  도착 16:00 24(목표 24°C)

@@ -95,3 +95,4 @@ fan.log
 selftest.lock
 shelly_hb.log
 .guard_alert_ts
+alarm.log
