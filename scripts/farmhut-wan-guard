@@ -38,6 +38,7 @@ alist() {
   grep -v '^\s*#' "$ALLOW" | awk '{ mac=tolower($1) } mac ~ /^([0-9a-f][0-9a-f]:){5}[0-9a-f][0-9a-f]$/ {
       name=mac; for (i=2;i<=NF;i++) if ($i=="#" && i<NF) { name=$(i+1); break } else if ($i ~ /^#./) { name=substr($i,2); break }
       print "a" n++, mac, name }'
+  echo "api - Pi"      # Pi 자신(LTE 직접 입출력) — MAC 규칙 없이 input/output 체인에서 셈
 }
 
 # 한도 목록 → "번호 MAC 하루MB 한달MB 이름" 줄들
@@ -91,6 +92,12 @@ ruleset() {
     echo "  counter cd$j { packets 0 bytes $(used_saved "$j" d) }"
     echo "  counter cm$j { packets 0 bytes $(used_saved "$j" m) }"
   done < <(alist)
+  echo "  chain pi_in { type filter hook input priority -10; policy accept;"
+  echo "    iifname \"$WAN\" counter name \"cdapi\" counter name \"cmapi\""
+  echo "  }"
+  echo "  chain pi_out { type filter hook output priority -10; policy accept;"
+  echo "    oifname \"$WAN\" counter name \"cdapi\" counter name \"cmapi\""
+  echo "  }"
   while read -r i mac dmb mmb name; do
     echo "  quota qd$i { over $dmb mbytes used $(used_saved "$i" d) bytes }"
     echo "  quota qm$i { over $mmb mbytes used $(used_saved "$i" m) bytes }"
@@ -106,6 +113,7 @@ ruleset() {
     echo "    ct mark $mk accept"
   done < <(qlist)
   while read -r j mac name; do     # 항상 허용: 제한 없이 올리기+내려받기 사용량만 셈
+    [ "$mac" = "-" ] && continue
     local am; am=$(printf '0x%08x' $(( AMARK0 + ${j#a} )))
     echo "    iifname \"$LAN\" oifname \"$WAN\" ether saddr $mac ct mark set $am"
     echo "    ct mark $am counter name \"cd$j\""
@@ -127,7 +135,7 @@ apply() {
   nft delete table inet $T 2>/dev/null
   ruleset | nft -f - || { echo "nft 적용 실패"; return 1; }
   period d > "$VAR/wan_day"
-  echo "차단 적용: 항상 허용 $(alist | grep -c .)대, 한도 $(qlist | grep -c .)대"
+  echo "차단 적용: 항상 허용 $(alist | grep -vc ' - ')대, 한도 $(qlist | grep -c .)대"
 }
 
 open_until() { awk '{print $1+0}' "$OPEN" 2>/dev/null || echo 0; }
@@ -166,7 +174,11 @@ quota_line() {
   while read -r j mac name; do
     local ad am2; ad=$(used_live "$j" d); [ -n "$ad" ] || ad=$(used_saved "$j" d)
     am2=$(used_live "$j" m); [ -n "$am2" ] || am2=$(used_saved "$j" m)
-    out="$out · $name(항상 허용) 오늘 $(( ad / 1048576 ))MB, 이번 달 $(( am2 / 1048576 ))MB"
+    if [ "$mac" = "-" ]; then
+      out="$out · $name 자체 오늘 $(( ad / 1048576 ))MB, 이번 달 $(( am2 / 1048576 ))MB"
+    else
+      out="$out · $name(항상 허용) 오늘 $(( ad / 1048576 ))MB, 이번 달 $(( am2 / 1048576 ))MB"
+    fi
   done < <(alist)
   echo "$out"
 }

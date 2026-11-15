@@ -30,6 +30,7 @@ ALIASES = {
     "공유": "공유", "share": "공유", "인터넷": "공유",
     "센서": "센서", "온도": "센서", "습도": "센서", "sensors": "센서", "sensor": "센서",
     "보조": "보조", "보조히터": "보조", "aux": "보조",
+    "아침": "아침", "wake": "아침",
 }
 
 
@@ -194,6 +195,14 @@ def share_cmd(toks):
     args = ["sudo", "-n", WAN_GUARD, act] + ([str(sec)] if sec else []) + ([str(mb)] if (act == "open" and mb) else [])
     r = subprocess.run(args, capture_output=True, text=True, timeout=20)
     out = (r.stdout + r.stderr).strip()
+    if act == "status":
+        out = out.replace(" · ", "\n")
+        try:
+            du = json.load(open(os.path.join(BASE, "data_usage.json")))
+            out += "\n────\nLTE 동글 전체 이번 달 %s / %sGB (%.1f%%, 최근 1시간 %s, %s 기준)" % (
+                du.get("used"), du.get("limit_gb"), du.get("pct", 0), du.get("last_hour"), str(du.get("updated", ""))[11:16])
+        except Exception:
+            pass
     if act == "open" and r.returncode == 0:
         out += " — 넘거나 시간이 끝나면 자동 차단. 먼저 막으려면 '공유 끔', 더 필요하면 '공유 1시간 1기가'"
     return ("완료" if r.returncode == 0 else "오류"), out[-500:]
@@ -206,7 +215,7 @@ def run(cmd_text):
     for i, t in enumerate(toks):
         if t.lower() in ALIASES: verb = ALIASES[t.lower()]; toks.pop(i); break
     if not verb:
-        return "오류", "알 수 없는 명령 — 난방 / 동파 / 취침 / 도착 HH:MM [내일|날짜] [목표°C] / 도착 취소 / 상태 / 점검 / 기상 / 선풍기 켜|꺼|자동 / 공유 [N시간|N분|끔] / 센서 / 보조 켜|꺼|자동"
+        return "오류", "알 수 없는 명령 — 난방 / 동파 / 취침 / 도착 HH:MM [내일|날짜] [목표°C] / 도착 취소 / 상태 / 점검 / 기상 / 선풍기 켜|꺼|자동 / 공유 [N시간|N분|끔] / 센서 / 보조 켜|꺼|자동 / 아침 06:30"
     if verb == "상태":
         return "완료", status_text()
     if verb == "선풍기":
@@ -217,6 +226,13 @@ def run(cmd_text):
         return "완료", sensors_text()
     if verb == "보조":
         return aux_cmd(toks)
+    if verb == "아침":
+        import wake_heat as wh
+        w = wh.load_wake()
+        try: w2, msg = wh.parse_cmd(toks, w)
+        except ValueError as e: return "오류", str(e)
+        if msg is None: return "완료", wh.describe(w)
+        wh.save_wake(w2); return "완료", msg
     if verb == "기상":   # 기상청 → 시트 즉시 갱신. 최대 몇 분 걸리므로 백그라운드로 띄우고 바로 응답
         sync = os.path.join(BASE, "weather", "kma_sync.py")
         if not os.path.exists(sync): return "오류", "weather/kma_sync.py 없음(git pull 필요)"

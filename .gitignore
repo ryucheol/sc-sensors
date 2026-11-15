@@ -101,3 +101,6 @@ aux_cmd.json
 aux_state.json
 aux_status.json
 aux.log
+# 아침 난방 예약 런타임
+wake.json
+wake.log
