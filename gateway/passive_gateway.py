@@ -191,9 +191,13 @@ def net_info():
     ssid = ""
     try:
         # 활성 연결명(스캔 캐시와 무관하게 항상 확실) → 그 연결의 SSID
-        conn = subprocess.run(["nmcli", "-g", "GENERAL.CONNECTION", "device", "show", "wlan0"],
-                              capture_output=True, text=True, timeout=4).stdout.strip()
-        if conn and conn != "--":
+        out = subprocess.run(["nmcli", "-g", "GENERAL.STATE,GENERAL.CONNECTION", "device", "show", "wlan0"],
+                             capture_output=True, text=True, timeout=4).stdout.splitlines()
+        state = out[0].strip() if out else ""
+        conn = out[1].strip() if len(out) > 1 else ""
+        # 실제 연결(100)일 때만. 핫스팟이 꺼지면 NM이 같은 연결로 계속 재시도(activating)하는데,
+        # 그때 연결명만 보면 'Ryuspot에 붙어 있다'고 오인해 재실(도착·4시간 부재 출발) 판단이 틀어진다(11-15 발견).
+        if state.startswith("100") and conn and conn != "--":
             ssid = subprocess.run(["nmcli", "-g", "802-11-wireless.ssid", "connection", "show", conn],
                                   capture_output=True, text=True, timeout=4).stdout.strip() or conn
     except Exception:

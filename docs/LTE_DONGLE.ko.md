@@ -147,3 +147,20 @@ python3 scripts/lte_signal_check.py 60 무안테나    # 안테나 빼고 1분
 **도착 시험(15분)**: 유심 A 넣기 → USB 충전기에 꽂기 → 라벨의 Wi-Fi로 휴대폰 연결 → 관리 화면에서 통신사·4G·신호·APN 확인(비면 `lte.ktfwing.com`) → Wi-Fi·관리 비밀번호 변경 → 속도 1회.
 
 참고: aio.lv·4gltemall·lambda-tek 사양, ZTE MF79U 설명서(manualslib·manuals.plus), OpenWrt 포럼(MF286보다 MF79U가 안정적이라는 사용자 보고).
+
+## 8. 농막 현장 (2026-11-15, Pi에 연결)
+
+- Pi(리눅스)는 동글을 **자동으로 HiLink 모드(12d1:14dc)로 전환**하고 `cdc_ether`로 `eth1`(192.168.8.100)을 만든다. NetworkManager가 기본 경로를 LTE로 잡았다(metric 101, 휴대폰 핫스팟 wlan0은 600으로 예비). APN 프로필은 동글에 남아 있어 손댈 것 없음.
+- 농막 신호(100 GB 유심, `scripts/lte_signal_check.py` 1분):
+
+| 상태 | RSRP | SINR | 판정 |
+|---|---|---|---|
+| 외장 안테나, 땅쪽 | −90 dBm | 25.5 dB | ✅ |
+| 외장 안테나, 위로 세움 | −91 dBm | 24.0 dB | ✅ |
+| **안테나 없음** | **−81 dBm** | 21.5 dB | ✅ |
+
+- **결론: 농막에선 외장 안테나를 빼고 쓴다.** 외장을 꽂으면 내장 안테나가 끊기는데, 동봉 안테나가 내장보다 약 10 dB 나빴다(방향과 무관). 커넥터가 TS9이면 동글의 CRC9 단자와 접촉이 나빠 생기는 전형적 증상. 쓸 일이 생기면 CRC9 단자 안테나를 따로 구한다.
+- 시골이라 간섭이 적어 **SINR이 집(−1 dB)보다 훨씬 좋고**, 내려받기 약 27 Mbps(집 7.8).
+- 농막 망: 동글(eth1) → Pi(NM shared, eth0 10.42.0.1) → 버팔로 AP "Ryufarm" → 기기들. Pi의 Wi-Fi는 AP를 하지 않아 BLE 수신 저하 없음.
+- `data_watch` 한도 100 GB·주기 시작 13일(개통일 가정)로 설정. 6 GB 유심으로 바꿀 때 `heater_config.json`의 `data_watch.limit_gb`를 6으로.
+- 휴대폰 핫스팟을 끈 상태(=떠난 뒤 조건)에서 Pi 인터넷·Tailscale(smartcabin)·텔레그램·시트 업로드·서비스 6개 정상 확인.

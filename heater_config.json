@@ -55,5 +55,16 @@
     "enabled": true,
     "hold_min": 120,
     "max_temp": 27
+  },
+  "data_watch": {
+    "limit_gb": 100,
+    "cycle_day": 13,
+    "levels": [
+      0.5,
+      0.7,
+      0.85,
+      0.95
+    ],
+    "burst_mb_per_h": 500
   }
 }
