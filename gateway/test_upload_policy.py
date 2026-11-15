@@ -51,5 +51,18 @@ class SharePar(unittest.TestCase):
         self.assertEqual(s.share_parse(["상태"]), ("status", None, None))
 
 
+class Sensors(unittest.TestCase):
+    def test_text(self):
+        lat = {"다락": {"temp": 24.0, "hum": 40, "time_ms": 1000 * 1000, "batt": 98},
+               "내부1층": {"temp": 22.5, "hum": 45, "time_ms": 1000 * 1000},
+               "바닥외부": {"temp": 6.0, "hum": 86, "time_ms": (1000 - 3600) * 1000}}
+        t = s.sensors_text(lat, now=1000 + 90)
+        lines = t.split(chr(10))
+        self.assertTrue(lines[0].startswith("내부1층 22.5°C 45%"))
+        self.assertIn("배터리 98%", lines[1])
+        self.assertIn("수신 끊김", lines[2])
+        self.assertEqual(lines[-1], "다락−1층 +1.5°C")
+
+
 if __name__ == "__main__":
     unittest.main()

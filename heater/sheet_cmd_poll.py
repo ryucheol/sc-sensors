@@ -28,6 +28,7 @@ ALIASES = {
     "기상": "기상", "weather": "기상", "날씨": "기상",
     "선풍기": "선풍기", "fan": "선풍기", "팬": "선풍기",
     "공유": "공유", "share": "공유", "인터넷": "공유",
+    "센서": "센서", "온도": "센서", "습도": "센서", "sensors": "센서", "sensor": "센서",
 }
 
 
@@ -119,6 +120,32 @@ def fan_cmd(toks):
     return "완료", msg + " — 반영 최대 1분"
 
 
+def sensors_text(latest=None, now=None):
+    """모든 센서의 온도·습도·배터리·수신 경과(분) 한 줄씩 + 다락−1층 차(순수에 가깝게: latest·now 주입 가능)."""
+    if latest is None:
+        try: latest = json.load(open(os.path.join(BASE, "latest.json")))
+        except Exception: latest = {}
+    now = time.time() if now is None else now
+    order = ["내부1층", "다락", "바닥외부"]
+    names = order + sorted(k for k in latest if k not in order)
+    lines = []
+    for k in names:
+        v = latest.get(k)
+        if not v: continue
+        age = (now - v.get("time_ms", 0) / 1000.0) / 60.0 if v.get("time_ms") else None
+        s = "%s %s°C %s%%" % (k, "?" if v.get("temp") is None else "%.1f" % v["temp"],
+                              "?" if v.get("hum") is None else "%.0f" % v["hum"])
+        extra = []
+        if age is not None: extra.append("%d분 전" % round(age) if age >= 1 else "방금")
+        if v.get("batt") is not None: extra.append("배터리 %s%%" % v["batt"])
+        if extra: s += " (" + ", ".join(extra) + ")"
+        if age is not None and age > 45: s += " ⚠ 수신 끊김?"
+        lines.append(s)
+    f, a = (latest.get("내부1층") or {}).get("temp"), (latest.get("다락") or {}).get("temp")
+    if f is not None and a is not None: lines.append("다락−1층 %+.1f°C" % (a - f))
+    return "\n".join(lines) if lines else "센서 값 없음(latest.json)"
+
+
 WAN_GUARD = "/usr/local/sbin/farmhut-wan-guard"
 
 
@@ -162,13 +189,15 @@ def run(cmd_text):
     for i, t in enumerate(toks):
         if t.lower() in ALIASES: verb = ALIASES[t.lower()]; toks.pop(i); break
     if not verb:
-        return "오류", "알 수 없는 명령 — 난방 / 동파 / 취침 / 도착 HH:MM [내일|날짜] [목표°C] / 도착 취소 / 상태 / 점검 / 기상 / 선풍기 켜|꺼|자동 / 공유 [N시간|N분|끔]"
+        return "오류", "알 수 없는 명령 — 난방 / 동파 / 취침 / 도착 HH:MM [내일|날짜] [목표°C] / 도착 취소 / 상태 / 점검 / 기상 / 선풍기 켜|꺼|자동 / 공유 [N시간|N분|끔] / 센서"
     if verb == "상태":
         return "완료", status_text()
     if verb == "선풍기":
         return fan_cmd(toks)
     if verb == "공유":
         return share_cmd(toks)
+    if verb == "센서":
+        return "완료", sensors_text()
     if verb == "기상":   # 기상청 → 시트 즉시 갱신. 최대 몇 분 걸리므로 백그라운드로 띄우고 바로 응답
         sync = os.path.join(BASE, "weather", "kma_sync.py")
         if not os.path.exists(sync): return "오류", "weather/kma_sync.py 없음(git pull 필요)"
