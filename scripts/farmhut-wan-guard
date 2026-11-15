@@ -108,20 +108,27 @@ ruleset() {
   while read -r i mac dmb mmb name; do
     local mk; mk=$(printf '0x%08x' $(( MARK0 + i )))
     echo "    iifname \"$LAN\" oifname \"$WAN\" ether saddr $mac ct mark set $mk"
-    echo "    ct mark $mk quota name \"qd$i\" drop"     # 하루 먼저(한 달은 통과한 것만 셈)
-    echo "    ct mark $mk quota name \"qm$i\" drop"
+    # 한도 계산·차단은 실제로 LTE(eth1)를 지나는 패킷만(11-16: LTE 때 맺은 연결이 경로가 Wi-Fi로 바뀐 뒤에도 세어지던 문제)
+    for dir in oifname iifname; do
+      echo "    ct mark $mk $dir \"$WAN\" quota name \"qd$i\" drop"     # 하루 먼저(한 달은 통과한 것만 셈)
+      echo "    ct mark $mk $dir \"$WAN\" quota name \"qm$i\" drop"
+    done
     echo "    ct mark $mk accept"
   done < <(qlist)
-  while read -r j mac name; do     # 항상 허용: 제한 없이 올리기+내려받기 사용량만 셈
+  while read -r j mac name; do     # 항상 허용: 제한 없이 LTE로 오간 올리기+내려받기 사용량만 셈
     [ "$mac" = "-" ] && continue
     local am; am=$(printf '0x%08x' $(( AMARK0 + ${j#a} )))
     echo "    iifname \"$LAN\" oifname \"$WAN\" ether saddr $mac ct mark set $am"
-    echo "    ct mark $am counter name \"cd$j\""
-    echo "    ct mark $am counter name \"cm$j\" accept"
+    for dir in oifname iifname; do
+      echo "    ct mark $am $dir \"$WAN\" counter name \"cd$j\" counter name \"cm$j\""
+    done
+    echo "    ct mark $am accept"
   done < <(alist)
-  if [ -f "$OPEN" ]; then   # 공유 열림: 나머지 기기도 통과하되 열린 동안 합계 상한(넘으면 차단)
+  if [ -f "$OPEN" ]; then   # 공유 열림: 나머지 기기도 통과하되 열린 동안 LTE 합계 상한(넘으면 차단)
     echo "    iifname \"$LAN\" oifname \"$WAN\" ct mark set $OPENMARK"
-    echo "    ct mark $OPENMARK quota name \"qopen\" drop"
+    for dir in oifname iifname; do
+      echo "    ct mark $OPENMARK $dir \"$WAN\" quota name \"qopen\" drop"
+    done
     echo "    ct mark $OPENMARK accept"
   fi
   echo "    iifname \"$LAN\" oifname \"$WAN\" counter drop"
