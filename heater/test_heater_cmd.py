@@ -43,5 +43,15 @@ class Cli(unittest.TestCase):
         self.assertFalse(os.path.exists(os.path.join(self.base, "heater_state.json")))   # 기본 23도로 바뀌지 않음
 
 
+class ArrivalKeep(unittest.TestCase):
+    def test_used_up(self):
+        import heater_cmd as hcmd
+        now = 1_800_000_000
+        self.assertTrue(hcmd.arrival_used_up(None, now))
+        self.assertTrue(hcmd.arrival_used_up({"ts": now - 3600}, now))          # 지남
+        self.assertTrue(hcmd.arrival_used_up({"ts": now + 2 * 3600}, now))      # 곧 도착(현장 도착 무렵)
+        self.assertFalse(hcmd.arrival_used_up({"ts": now + 5 * 86400}, now))    # 며칠 뒤(캘린더) → 유지
+
+
 if __name__ == "__main__":
     unittest.main()

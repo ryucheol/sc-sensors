@@ -43,6 +43,16 @@ def parse_when(args):
     if dt <= now and day == now.date(): dt += datetime.timedelta(days=1)
     return dt
 
+ARRIVAL_KEEP_H = 12   # 모드 명령을 내려도 도착이 이보다 먼 예약은 지우지 않는다(11-15: 현장 '난방'이 11-20 캘린더 예약을 지운 사고)
+
+
+def arrival_used_up(arr, now, keep_h=ARRIVAL_KEEP_H):
+    """모드 명령 때 도착 예약을 정리할지(순수): 예약이 없거나, 도착이 keep_h시간 안이거나 이미 지났으면 True."""
+    if not arr or not arr.get("ts"):
+        return True
+    return arr["ts"] - now <= keep_h * 3600
+
+
 def arrival_cmd(args):
     cfg = json.load(open(CFG))
     try: st = json.load(open(STATE))
@@ -112,7 +122,8 @@ def main():
     try: st = json.load(open(STATE))
     except Exception: st = {}
     st.update(mode=mode, on=on, off=off, source="cmd", since=time.time(), last_cmd_ts=time.time())
-    st.pop("arrival", None)   # 사람이 직접 모드를 정하면 도착 예약은 역할을 다한 것
+    if arrival_used_up(st.get("arrival"), time.time()):
+        st.pop("arrival", None)   # 도착 무렵(12시간 안)·지난 예약은 역할을 다한 것. 며칠 뒤 예약(캘린더)은 그대로 둔다
     st.pop("manual", None)    # 수동 우선 시간도 해제(명령이 버튼보다 나중의 뜻)
     tmp = STATE + ".tmp"
     json.dump(st, open(tmp, "w"), ensure_ascii=False); os.replace(tmp, STATE)
