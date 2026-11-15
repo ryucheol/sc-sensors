@@ -9,8 +9,8 @@
  *   ⚠ 붙여넣은 뒤 SECRET 을 실제 값으로 다시 넣을 것. '새 배포'를 만들면 URL이 바뀌어 Pi 업로드가 모두 끊긴다.
  *
  * 변경 이력:
- *   v13 (2026-11-15) mode:summary — Pi 1분 기록의 시간별 요약(히터 kWh·가동분·평균 온습도)을 '농막_시간요약' 탭에 시각 키로 저장. mode:rawfile — 하루 1회 1분 원자료(gzip CSV)를 드라이브 '농막_원자료' 폴더에. driveTest()로 드라이브 권한 승인
  *   v14 (2026-11-16) Pi 무응답 감시 watchdog(): '농막_현재' 갱신이 75분 넘게 없으면 메일(6시간마다 재알림, 복구 메일). setupWatchdog() 한 번 실행.
+ *   v13 (2026-11-15) mode:summary — Pi 1분 기록의 시간별 요약(히터 kWh·가동분·평균 온습도)을 '농막_시간요약' 탭에 시각 키로 저장. mode:rawfile — 하루 1회 1분 원자료(gzip CSV)를 드라이브 '농막_원자료' 폴더에. driveTest()로 드라이브 권한 승인
  *   v12 (2026-11-11) mode:weather 2단계 키 — mid(→ 중기예보 A1·A3:H9), obs_daily(→ 부여_일별 날짜 키 upsert,
  *       확정을 잠정으로 덮지 않음), verify(→ 예보검증 A~C 끝에 24행, 같은 날짜면 건너뜀). doGet ?q=weather 에 daily_last.
  *       v11과 호환(2단계 키를 안 보내면 동작 동일). Pi는 kma_stage2.on 이 있을 때만 2단계 키를 보낸다.
