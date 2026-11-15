@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""구글 시트 '명령' 탭 폴링 → 히터 명령 실행 → 결과 기록. cron 매분 실행.
+"""구글 시트 '명령' 탭 폴링 → 히터 명령 실행 → 결과 기록. cron 매분 실행하되 실제 확인은 매시 7분(POLL_MINUTE, LTE 절약).
 
 시트(Apps Script v9) '명령' 탭: A 명령(사람이 입력) · B 상태 · C 처리시각 · D 결과 · E 입력시각(onEdit 자동).
 이 스크립트는 mode:cmd_pull 로 B가 빈 행을 받아 heater_cmd.py 로 실행하고 mode:cmd_ack 로 B~D를 채운다.
@@ -181,7 +181,24 @@ def run(cmd_text):
     return "완료", (out + "\n" + status_text())[-800:]
 
 
+POLL_MINUTE = 7   # 시트 명령·캘린더 도착은 매시 7분에 한 번만 확인(LTE 절약 — 급한 명령은 텔레그램이 즉시, 사용자 11-16 결정)
+
+
+def due_now(mode, minute):
+    """이번 분에 시트를 확인할지(순수). 모드와 무관하게 매시 POLL_MINUTE분."""
+    return minute == POLL_MINUTE
+
+
+def sheet_allowed(text):
+    """시트 명령 탭은 캘린더 도착 중계 전용(사용자 11-16 결정) — 도착/도착 취소만 실행(순수)."""
+    t = text.replace("\u3000", " ").split()
+    return bool(t) and ALIASES.get(t[0].lower()) == "도착"
+
+
 def main():
+    try: _mode = json.load(open(os.path.join(BASE, "heater_state.json"))).get("mode")
+    except Exception: _mode = None
+    if not due_now(_mode, time.localtime().tm_min): return
     url, secret = load_env()
     if not url: log("WEBAPP_URL 없음"); return
     if not online(): return
@@ -199,6 +216,8 @@ def main():
         except Exception: age_h = 0.0
         if age_h > CMD_TTL_H:
             status, result = "만료", "입력 후 %.0f시간 지나 실행하지 않음(Pi 오프라인?) — 필요하면 다시 입력" % age_h
+        elif not sheet_allowed(text):
+            status, result = "무시", "시트는 캘린더 도착 중계만 함(도착·도착 취소). 다른 명령은 텔레그램 봇으로"
         else:
             try: status, result = run(text)
             except subprocess.TimeoutExpired: status, result = "오류", "시간 초과"

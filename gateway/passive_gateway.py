@@ -472,9 +472,41 @@ async def sync_history_one(mac, last_ms):
 
 
 # ── 메인 루프 ───────────────────────────────────────────
+UNATTENDED_INTERVAL = float(os.environ.get("GW_UNATTENDED_INTERVAL", 600))  # 무인(동파 모드) 업로드 최소 간격(초) — LTE 절약
+UNATTENDED_JUMP_C = 0.5     # 무인이어도 마지막 업로드보다 이만큼 바뀐 센서가 있으면 즉시
+UNATTENDED_LOW_C = 6.0      # 무인이어도 어느 센서든 이 이하(동파 근접)면 즉시
+
+
+def _heater_mode():
+    try:
+        with open(HEATER_STATE) as f:
+            return json.load(f).get("mode")
+    except Exception:
+        return None
+
+
+def should_post(mode, now, last_ts, last_temps, temps):
+    """'농막_현재' 업로드 여부(순수). 재실(난방·취침)이면 항상(쿨다운은 호출부), 무인(동파)이면
+    UNATTENDED_INTERVAL 지났거나 큰 변화·저온일 때만. temps/last_temps: {센서: °C}."""
+    if mode != "frost" or not last_ts:
+        return True
+    if now - last_ts >= UNATTENDED_INTERVAL:
+        return True
+    for k, t in temps.items():
+        if t is None:
+            continue
+        if t <= UNATTENDED_LOW_C:
+            return True
+        p = (last_temps or {}).get(k)
+        if p is None or abs(t - p) >= UNATTENDED_JUMP_C:
+            return True
+    return False
+
+
 async def current_uploader(cfg, latest, dirty):
     """값이 바뀌면(dirty) 즉시 '농막_현재' 업로드하되, 연속 업로드는 최소 CURRENT_COOLDOWN(기본 30s) 간격.
     변화가 없어도 CURRENT_INTERVAL(기본 10분)마다 하트비트로 1회 올려 '갱신시각'을 살려둔다."""
+    last_post, last_temps = 0.0, {}
     while True:
         try:
             await asyncio.wait_for(dirty.wait(), timeout=CURRENT_INTERVAL)
@@ -504,11 +536,16 @@ async def current_uploader(cfg, latest, dirty):
                                for r in readings}, _f, ensure_ascii=False)
             except Exception:
                 pass
+        temps_now = {r["sensor"]: r["temp"] for r in readings}
+        if readings and not should_post(_heater_mode(), time.time(), last_post, last_temps, temps_now):
+            await asyncio.sleep(CURRENT_COOLDOWN)   # 무인: 작은 변화는 모아 두었다가 10분마다(LTE 절약)
+            continue
         if readings and await asyncio.to_thread(online):   # 오프라인이면 아예 시도 안 함(현재값은 큐 안 함)
             try:
                 net = await asyncio.to_thread(net_info)
                 res = post_current(readings, net)
                 log(f"[현재] {res.get('updated')}개 갱신 ({net.get('ssid','')} {net.get('ip','')})")
+                last_post, last_temps = time.time(), temps_now
             except Exception as e:
                 log(f"[현재] 업로드 오류: {e}")
         await asyncio.sleep(CURRENT_COOLDOWN)   # 쿨다운: 이 동안의 변화는 모아서 다음 1회로
