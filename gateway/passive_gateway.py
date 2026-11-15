@@ -49,7 +49,8 @@ AVG_CHECK = 20.0                                                        # 버킷
 BEACON_LOG = os.environ.get("GW_BEACON_LOG", "change").lower()          # 수신 로그: change(값 바뀔 때만, 기본)|all(반복까지 모두)|off
 HUMI_DEADBAND = float(os.environ.get("GW_HUMI_DEADBAND", 1.0))          # 습도 데드밴드(%): 마지막 '변화'값 대비 이 미만이면 변화로 안 침(로그·업로드 트리거만. 평균은 전 샘플 사용)
 MONITOR = os.environ.get("GW_MONITOR", "0").lower() in ("1", "true", "yes", "on")
-PRESENCE_SSID = os.environ.get("GW_PRESENCE_SSID", "Ryuspot")   # 이 SSID(폰 핫스팟)에 붙으면 재실로 봄. 빈 문자열이면 재실 기록 끔
+PRESENCE_SSID = os.environ.get("GW_PRESENCE_SSID", "Ryuspot")   # 이 SSID(폰 핫스팟·들고 다니는 Wi-Fi 동글)에 붙으면 재실. 쉼표로 여러 개, 빈 문자열이면 재실 기록 끔
+PRESENCE_SSIDS = {s.strip() for s in PRESENCE_SSID.split(",") if s.strip()}
 PRESENCE_ABSENT_MIN = float(os.environ.get("GW_PRESENCE_ABSENT_MIN", 240))  # 동파 명령 없이 핫스팟만 사라진 경우 이 분이 지나면 출발(추정)로 기록   # 모니터(읽기전용): 수신 로그만, 서버 업로드·센서 연결 없음
 SCAN_TIMEOUT = 15.0
 IDLE_TIMEOUT = 10.0
@@ -816,7 +817,7 @@ async def presence_task(latest, db):
         try:
             now_ms = int(time.time() * 1000)
             ssid = (await asyncio.to_thread(net_info)).get("ssid", "")
-            hotspot = (ssid == PRESENCE_SSID)
+            hotspot = (ssid in PRESENCE_SSIDS)
             hs = {}
             try: hs = json.load(open(HEATER_STATE))
             except Exception: pass

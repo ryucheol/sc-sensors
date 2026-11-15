@@ -164,6 +164,25 @@ def sensors_text(latest=None, now=None):
     return "\n".join(lines) if lines else "센서 값 없음(latest.json)"
 
 
+def uplink_text():
+    """지금 Pi의 인터넷 경로(기본 경로 장치) 한 줄."""
+    try:
+        r = subprocess.run(["ip", "route", "get", "1.1.1.1"], capture_output=True, text=True, timeout=5).stdout
+        dev = r.split(" dev ")[1].split()[0]
+    except Exception:
+        return "알 수 없음"
+    if dev == "eth1":
+        return "LTE 동글(6GB) — Ryufarm 기기는 차단·한도 적용"
+    if dev.startswith("wlan"):
+        try:
+            ssid = subprocess.run(["nmcli", "-g", "GENERAL.CONNECTION", "device", "show", dev],
+                                  capture_output=True, text=True, timeout=5).stdout.strip()
+        except Exception:
+            ssid = "?"
+        return "Wi-Fi %s(%s) — 차단·한도 없이 모두 사용" % (ssid, dev)
+    return dev
+
+
 WAN_GUARD = "/usr/local/sbin/farmhut-wan-guard"
 
 
@@ -197,6 +216,7 @@ def share_cmd(toks):
     out = (r.stdout + r.stderr).strip()
     if act == "status":
         out = out.replace(" · ", "\n")
+        out = "인터넷 경로: %s\n" % uplink_text() + out
         try:
             du = json.load(open(os.path.join(BASE, "data_usage.json")))
             out += "\n────\nLTE 동글 전체 이번 달 %s / %sGB (%.1f%%, 최근 1시간 %s, %s 기준)" % (

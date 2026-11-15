@@ -19,7 +19,7 @@
     1763
   ],
   "preheat": {
-    "enabled": true,
+    "enabled": false,
     "weekday": 4,
     "target_hour": 20,
     "target_min": 0,

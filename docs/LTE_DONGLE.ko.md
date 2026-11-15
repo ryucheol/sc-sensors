@@ -177,3 +177,20 @@ python3 scripts/lte_signal_check.py 60 무안테나    # 안테나 빼고 1분
   - 한도 `/etc/farmhut/wan_quota`(MAC 하루MB 한달MB # 이름): Home Mini 50/500(음성·알림은 늘 되고 유튜브 음악은 한도에서 끊김), Tuya 선풍기·보조 히터 각 5/30(클라우드 유지 → 앱이 Pi 고장 때 예비 리모컨). 연결 단위 표시(ct mark)로 **올리기+내려받기** 합계, 사용량은 매분 `/var/lib/farmhut`에 저장해 재부팅·재적용 뒤에도 이어 셈, 하루=자정·한 달=1일 초기화.
   - 나머지(노트북·휴대폰 등) 차단. 텔레그램·시트·Pi 터미널 `공유 [N시간|N분|끔|상태]`로 잠깐 열기(최대 24시간, 끝나면 자동 차단, 연 동안은 한도에 안 셈). 한도 첫 도달 시 텔레그램(`notify/wan_tick.sh`, cron 매분).
   - nft 함정 두 가지: 체인 이름 `fwd`는 예약어라 문법 오류, bash `${m:+...{ ... }}`는 안쪽 `}`에서 끝나 버림 → 따로 만들기. 설치 전 `nft -c -f`(일반 사용자도 문법 검사 가능)로 확인.
+
+## 10. 들고 다니는 Wi-Fi 동글을 '재실 때 1순위'로 (2026-11-16, Ryuspot으로 미리 시험)
+
+사람이 있을 때는 들고 온 Wi-Fi 동글(100 GB·5 Mbps 무제한 유심)로 Ryufarm 기기 전부가 나가고, 동글을 들고 떠나면 자동으로 LTE(6 GB)+차단·한도로 돌아가게 한다. 기기들은 Ryufarm에만 붙어 있으면 된다.
+
+- 원리: Pi가 동글 Wi-Fi에 손님으로 붙고(wlan0), 경로 우선순위 50 < LTE(eth1) 100대. 차단·한도 규칙(farmhut-wan-guard)은 **eth1로 나가는 것만** 거르므로 wlan0으로 나가는 동안은 자동으로 제한 없음. NM shared의 MASQUERADE는 나가는 장치와 무관.
+- 도구 `scripts/wifi_uplink.sh <연결|SSID> primary|backup|status` (NM 권한으로 sudo 불필요).
+- 재실 감지 SSID 여러 개: `gateway.env`의 `GW_PRESENCE_SSID=Ryuspot,<동글SSID>`.
+- `공유 상태` 첫 줄에 지금 인터넷 경로(LTE 동글 / Wi-Fi …).
+- **시험(Ryuspot을 primary로)**: Pi·Ryufarm 기기 모두 wlan0으로(노트북도 제한 없이 인터넷, Tailscale 직접 연결) → 핫스팟 끔 → 즉시 LTE·차단 적용, 텔레그램·히터 정상 → 다시 켬 → 1분 안에 스스로 다시 붙어 1순위 복귀. 끝나고 Ryuspot은 backup(600)으로 되돌림.
+- **주의**: Ryufarm에 붙은 '차단 대상' 기기(노트북)는 동글이 꺼지는 순간 인터넷이 끊긴다. 이 노트북에서 Claude로 작업할 때 두 번 끊김 → 작업용 노트북은 동글/핫스팟에 직접, 또는 '공유'를 먼저 연다.
+
+**동글 도착 시 절차**
+1. `ssh -t pi nmcli --ask device wifi connect "<SSID>"` (비밀번호 직접)
+2. `ssh pi '~/smart-cabin/scripts/wifi_uplink.sh "<SSID>" primary'`
+3. `gateway.env`에 `GW_PRESENCE_SSID=Ryuspot,<SSID>` → `sudo -n systemctl restart farmhut-gateway`
+4. 시험: 동글 켬(경로 wlan0) → 끔(LTE+차단) → 켬(복귀). 동글 채널은 Ryufarm 2.4 GHz와 겹치지 않게(또는 5 GHz).
