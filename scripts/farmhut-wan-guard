@@ -8,7 +8,8 @@
 # 설치: sudo bash scripts/install_wan_guard.sh  (→ /usr/local/sbin/farmhut-wan-guard, root 소유)
 # 사용(sudo -n 허용됨):
 #   apply        규칙 적용(오늘·이번 달 사용량을 이어서)
-#   open SEC     SEC초(60~86400) 동안 모두 허용(이 동안은 한도에 안 셈), 끝나면 tick이 다시 막음
+#   open SEC [MB] SEC초(60~86400) 동안 나머지 기기도 허용하되 합계 MB(기본 100, 최대 2048)까지 — 넘거나 시간이 끝나면
+#                tick이 다시 막음. 한도 기기(Home Mini·휴대폰 등)의 하루·한 달 한도는 열린 동안에도 그대로
 #   tick         매분(cron): 사용량 저장, 열림 종료·규칙 사라짐·날짜 바뀜이면 다시 적용.
 #                한도를 처음 넘은 순간 "EXCEEDED 이름 하루|한달 MB" 한 줄 출력(알림용)
 #   status       상태 한 줄 / print  적용할 규칙 출력(점검용)
@@ -20,6 +21,9 @@ VAR=/var/lib/farmhut; USED=$VAR/wan_quota_used
 OPEN=/run/farmhut-wan-open-until
 LAN=eth0; WAN=eth1; T=farmhut_wan
 MARK0=0x4e480000          # 한도 기기 연결 표시(ct mark) = MARK0 + 번호
+OPENMARK=0x4e48ff00       # 공유 열림 중 그 밖의 기기 연결 표시
+OPEN_MB_DEFAULT=100       # 공유 열림 동안 추가 기기 합계 상한(MB) 기본값(사용자 11-16)
+OPEN_MB_MAX=2048
 mkdir -p "$VAR"
 
 macs() {
@@ -78,6 +82,7 @@ ruleset() {
     echo "  quota qd$i { over $dmb mbytes used $(used_saved "$i" d) bytes }"
     echo "  quota qm$i { over $mmb mbytes used $(used_saved "$i" m) bytes }"
   done < <(qlist)
+  [ -f "$OPEN" ] && echo "  quota qopen { over $(open_mb) mbytes }"
   echo "  chain lan_wan {"
   echo "    type filter hook forward priority -10; policy accept;"
   while read -r i mac dmb mmb name; do
@@ -88,6 +93,11 @@ ruleset() {
     echo "    ct mark $mk accept"
   done < <(qlist)
   echo "    iifname \"$LAN\" oifname \"$WAN\" ether saddr @allow accept"
+  if [ -f "$OPEN" ]; then   # 공유 열림: 나머지 기기도 통과하되 열린 동안 합계 상한(넘으면 차단)
+    echo "    iifname \"$LAN\" oifname \"$WAN\" ct mark set $OPENMARK"
+    echo "    ct mark $OPENMARK quota name \"qopen\" drop"
+    echo "    ct mark $OPENMARK accept"
+  fi
   echo "    iifname \"$LAN\" oifname \"$WAN\" counter drop"
   echo "  }"
   echo "}"
@@ -95,20 +105,35 @@ ruleset() {
 
 apply() {
   save_used
+  rm -f "$OPEN"
   nft delete table inet $T 2>/dev/null
   ruleset | nft -f - || { echo "nft 적용 실패"; return 1; }
-  rm -f "$OPEN"
   period d > "$VAR/wan_day"
   echo "차단 적용: 항상 허용 $(macs | tr ',' '\n' | grep -c .)대, 한도 $(qlist | grep -c .)대"
 }
 
+open_until() { awk '{print $1+0}' "$OPEN" 2>/dev/null || echo 0; }
+open_mb() { awk '{print ($2 ? $2 : 100)}' "$OPEN" 2>/dev/null || echo 100; }
+
 open_for() {
-  local s="$1"
-  [[ "$s" =~ ^[0-9]+$ ]] && [ "$s" -ge 60 ] && [ "$s" -le 86400 ] || { echo "open SEC: 60~86400"; return 2; }
+  local s="$1" mb="${2:-$OPEN_MB_DEFAULT}"
+  [[ "$s" =~ ^[0-9]+$ ]] && [ "$s" -ge 60 ] && [ "$s" -le 86400 ] || { echo "open SEC [MB]: SEC 60~86400"; return 2; }
+  [[ "$mb" =~ ^[0-9]+$ ]] && [ "$mb" -ge 10 ] && [ "$mb" -le "$OPEN_MB_MAX" ] || { echo "open SEC [MB]: MB 10~$OPEN_MB_MAX"; return 2; }
   save_used
+  echo "$(( $(date +%s) + s )) $mb" > "$OPEN"
+  rm -f "$VAR/wan_open_exceeded"
   nft delete table inet $T 2>/dev/null
-  echo $(( $(date +%s) + s )) > "$OPEN"
-  echo "모두 허용: $(( s / 60 ))분 동안 ($(date -d @"$(cat "$OPEN")" +%H:%M)까지)"
+  ruleset | nft -f - || { rm -f "$OPEN"; echo "nft 적용 실패"; apply >/dev/null; return 1; }
+  echo "공유 열림: $(( s / 60 ))분 동안($(date -d @"$(open_until)" +%H:%M)까지), 추가 기기 합계 ${mb}MB까지"
+}
+
+open_used() {
+  nft -j list quota inet $T qopen 2>/dev/null | python3 -c '
+import sys, json
+try:
+    for o in json.load(sys.stdin)["nftables"]:
+        if "quota" in o: print(o["quota"].get("used", 0)); break
+except Exception: pass'
 }
 
 quota_line() {
@@ -125,7 +150,7 @@ quota_line() {
 
 status() {
   if [ -f "$OPEN" ]; then
-    echo "열림(모두 허용) ~$(date -d @"$(cat "$OPEN")" +%m-%d\ %H:%M)$(quota_line)"
+    local u; u=$(open_used); echo "공유 열림 ~$(date -d @"$(open_until)" +%m-%d\ %H:%M) · 추가 기기 $(( ${u:-0} / 1048576 ))/$(open_mb)MB$(quota_line)"
   elif nft list table inet $T >/dev/null 2>&1; then
     local n; n=$(nft list chain inet $T lan_wan 2>/dev/null | grep -oE 'packets [0-9]+' | tail -1 | awk '{print $2}')
     echo "차단 중 · 막은 패킷 ${n:-0}$(quota_line)"
@@ -136,7 +161,12 @@ status() {
 
 tick() {
   if [ -f "$OPEN" ]; then
-    [ "$(date +%s)" -ge "$(cat "$OPEN" 2>/dev/null || echo 0)" ] && apply >/dev/null
+    local ou; ou=$(open_used)
+    if [ -n "$ou" ] && [ "$ou" -ge $(( $(open_mb) * 1048576 )) ]; then
+      echo "EXCEEDED 공유 열림 $(open_mb)MB"; apply >/dev/null      # 상한 도달 → 시간이 남아도 다시 차단
+    elif [ "$(date +%s)" -ge "$(open_until)" ]; then
+      apply >/dev/null
+    fi
   elif ! nft list table inet $T >/dev/null 2>&1; then
     apply >/dev/null
   elif [ "$(cat "$VAR/wan_day" 2>/dev/null)" != "$(period d)" ]; then
@@ -159,7 +189,7 @@ tick() {
 
 case "${1:-}" in
   apply) apply ;;
-  open) open_for "${2:-}" ;;
+  open) open_for "${2:-}" "${3:-}" ;;
   tick) tick ;;
   status) status ;;
   print) ruleset ;;

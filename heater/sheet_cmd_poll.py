@@ -123,27 +123,35 @@ WAN_GUARD = "/usr/local/sbin/farmhut-wan-guard"
 
 
 def share_parse(toks):
-    """공유 인자 → ("open", 초) | ("apply", None) | ("status", None) (순수). 기본 1시간, 최대 24시간."""
+    """공유 인자 → ("open", 초, MB|None) | ("apply", None, None) | ("status", None, None) (순수).
+    시간 기본 1시간·최대 24시간, 용량은 '300MB'·'1기가'·'1GB' (없으면 스크립트 기본 100MB, 최대 2048)."""
     import re
-    txt = "".join(toks)
-    if not txt: return ("open", 3600)
-    if txt in ("끔", "꺼", "끄기", "차단", "off", "닫기", "막기"): return ("apply", None)
-    if txt in ("상태", "status", "?"): return ("status", None)
+    txt = "".join(toks).lower()
+    if not txt: return ("open", 3600, None)
+    if txt in ("끔", "꺼", "끄기", "차단", "off", "닫기", "막기"): return ("apply", None, None)
+    if txt in ("상태", "status", "?"): return ("status", None, None)
+    mb = None
+    for n, u in re.findall(r"(\d+(?:\.\d+)?)\s*(mb|메가|gb|기가|g)(?![a-z가-힣])", txt):
+        mb = (mb or 0) + float(n) * (1024 if u in ("gb", "기가", "g") else 1)
+    txt2 = re.sub(r"(\d+(?:\.\d+)?)\s*(mb|메가|gb|기가|g)(?![a-z가-힣])", "", txt)
     sec = 0
-    for n, u in re.findall(r"(\d+(?:\.\d+)?)\s*(시간|h|분|m)", txt):
+    for n, u in re.findall(r"(\d+(?:\.\d+)?)\s*(시간|h|분|m)", txt2):
         sec += float(n) * (3600 if u in ("시간", "h") else 60)
-    if not sec and re.fullmatch(r"\d+(?:\.\d+)?", txt): sec = float(txt) * 3600
-    if not sec: return ("status", None)
-    return ("open", int(min(max(sec, 60), 86400)))
+    if not sec and re.fullmatch(r"\d+(?:\.\d+)?", txt2): sec = float(txt2) * 3600
+    if not sec and mb is None: return ("status", None, None)
+    if not sec: sec = 3600
+    if mb is not None: mb = int(min(max(mb, 10), 2048))
+    return ("open", int(min(max(sec, 60), 86400)), mb)
 
 
 def share_cmd(toks):
     if not os.path.exists(WAN_GUARD): return "오류", "farmhut-wan-guard 미설치(sudo bash scripts/install_wan_guard.sh)"
-    act, sec = share_parse(toks)
-    args = ["sudo", "-n", WAN_GUARD, act] + ([str(sec)] if sec else [])
+    act, sec, mb = share_parse(toks)
+    args = ["sudo", "-n", WAN_GUARD, act] + ([str(sec)] if sec else []) + ([str(mb)] if (act == "open" and mb) else [])
     r = subprocess.run(args, capture_output=True, text=True, timeout=20)
     out = (r.stdout + r.stderr).strip()
-    if act == "open" and r.returncode == 0: out += " — Ryufarm 모든 기기 인터넷(LTE 6GB 주의). 끝나면 자동 차단, 먼저 막으려면 '공유 끔'"
+    if act == "open" and r.returncode == 0:
+        out += " — 넘거나 시간이 끝나면 자동 차단. 먼저 막으려면 '공유 끔', 더 필요하면 '공유 1시간 1기가'"
     return ("완료" if r.returncode == 0 else "오류"), out[-500:]
 
 

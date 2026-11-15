@@ -39,5 +39,17 @@ class CmdPoll(unittest.TestCase):
         self.assertFalse(s.sheet_allowed(""))
 
 
+class SharePar(unittest.TestCase):
+    def test_parse(self):
+        self.assertEqual(s.share_parse([]), ("open", 3600, None))
+        self.assertEqual(s.share_parse(["2시간"]), ("open", 7200, None))
+        self.assertEqual(s.share_parse(["1시간", "500MB"]), ("open", 3600, 500))
+        self.assertEqual(s.share_parse(["30분", "1기가"]), ("open", 1800, 1024))
+        self.assertEqual(s.share_parse(["1GB"]), ("open", 3600, 1024))
+        self.assertEqual(s.share_parse(["5기가"]), ("open", 3600, 2048))
+        self.assertEqual(s.share_parse(["끔"]), ("apply", None, None))
+        self.assertEqual(s.share_parse(["상태"]), ("status", None, None))
+
+
 if __name__ == "__main__":
     unittest.main()
