@@ -96,3 +96,8 @@ selftest.lock
 shelly_hb.log
 .guard_alert_ts
 alarm.log
+# 보조 히터 제어 런타임
+aux_cmd.json
+aux_state.json
+aux_status.json
+aux.log

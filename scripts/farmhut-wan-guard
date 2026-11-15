@@ -22,6 +22,7 @@ OPEN=/run/farmhut-wan-open-until
 LAN=eth0; WAN=eth1; T=farmhut_wan
 MARK0=0x4e480000          # 한도 기기 연결 표시(ct mark) = MARK0 + 번호
 OPENMARK=0x4e48ff00       # 공유 열림 중 그 밖의 기기 연결 표시
+AMARK0=0x4e48a000         # 항상 허용 기기 연결 표시 = AMARK0 + 번호(사용량만 셈, 제한 없음)
 OPEN_MB_DEFAULT=100       # 공유 열림 동안 추가 기기 합계 상한(MB) 기본값(사용자 11-16)
 OPEN_MB_MAX=2048
 mkdir -p "$VAR"
@@ -29,6 +30,14 @@ mkdir -p "$VAR"
 macs() {
   [ -f "$ALLOW" ] || return 0
   grep -v '^\s*#' "$ALLOW" | tr 'A-F' 'a-f' | grep -oE '^([0-9a-f]{2}:){5}[0-9a-f]{2}' | paste -sd, -
+}
+
+# 항상 허용 목록 → "a번호 MAC 이름" 줄들(이름 = '#' 뒤 첫 단어)
+alist() {
+  [ -f "$ALLOW" ] || return 0
+  grep -v '^\s*#' "$ALLOW" | awk '{ mac=tolower($1) } mac ~ /^([0-9a-f][0-9a-f]:){5}[0-9a-f][0-9a-f]$/ {
+      name=mac; for (i=2;i<=NF;i++) if ($i=="#" && i<NF) { name=$(i+1); break } else if ($i ~ /^#./) { name=substr($i,2); break }
+      print "a" n++, mac, name }'
 }
 
 # 한도 목록 → "번호 MAC 하루MB 한달MB 이름" 줄들
@@ -49,13 +58,16 @@ used_saved() {
   awk -v p="$(period "$2")" -v i="$1" -v k="$2" '$1==p && $2==i && $3==k {u=$4} END {print u+0}' "$USED"
 }
 
-# 지금 규칙의 사용량(바이트): $1 번호, $2 d|m (규칙 없으면 빈 값)
+# 지금 규칙의 사용량(바이트): $1 번호(한도 기기 0,1.. / 허용 기기 a0,a1..), $2 d|m (규칙 없으면 빈 값)
 used_live() {
-  nft -j list quota inet $T "q$2$1" 2>/dev/null | python3 -c '
+  local kind=quota obj="q$2$1"
+  case "$1" in a*) kind=counter; obj="c$2$1" ;; esac
+  nft -j list $kind inet $T "$obj" 2>/dev/null | python3 -c '
 import sys, json
 try:
     for o in json.load(sys.stdin)["nftables"]:
         if "quota" in o: print(o["quota"].get("used", 0)); break
+        if "counter" in o: print(o["counter"].get("bytes", 0)); break
 except Exception: pass'
 }
 
@@ -69,15 +81,16 @@ save_used() {
       awk -v i="$i" -v k="$k" '!($2==i && $3==k)' "$tmp" > "$tmp.2"; mv "$tmp.2" "$tmp"
       echo "$(period "$k") $i $k $u $name" >> "$tmp"
     done
-  done < <(qlist)
+  done < <(qlist; alist | awk '{print $1, $2, 0, 0, $3}')
   mv "$tmp" "$USED"
 }
 
 ruleset() {
-  local m el=""; m=$(macs)
-  [ -n "$m" ] && el=" elements = { $m };"     # ${m:+...{...}} 는 안쪽 } 에서 끝나 버리므로 따로 만든다
   echo "table inet $T {"
-  echo "  set allow { type ether_addr;$el }"
+  while read -r j mac name; do
+    echo "  counter cd$j { packets 0 bytes $(used_saved "$j" d) }"
+    echo "  counter cm$j { packets 0 bytes $(used_saved "$j" m) }"
+  done < <(alist)
   while read -r i mac dmb mmb name; do
     echo "  quota qd$i { over $dmb mbytes used $(used_saved "$i" d) bytes }"
     echo "  quota qm$i { over $mmb mbytes used $(used_saved "$i" m) bytes }"
@@ -92,7 +105,12 @@ ruleset() {
     echo "    ct mark $mk quota name \"qm$i\" drop"
     echo "    ct mark $mk accept"
   done < <(qlist)
-  echo "    iifname \"$LAN\" oifname \"$WAN\" ether saddr @allow accept"
+  while read -r j mac name; do     # 항상 허용: 제한 없이 올리기+내려받기 사용량만 셈
+    local am; am=$(printf '0x%08x' $(( AMARK0 + ${j#a} )))
+    echo "    iifname \"$LAN\" oifname \"$WAN\" ether saddr $mac ct mark set $am"
+    echo "    ct mark $am counter name \"cd$j\""
+    echo "    ct mark $am counter name \"cm$j\" accept"
+  done < <(alist)
   if [ -f "$OPEN" ]; then   # 공유 열림: 나머지 기기도 통과하되 열린 동안 합계 상한(넘으면 차단)
     echo "    iifname \"$LAN\" oifname \"$WAN\" ct mark set $OPENMARK"
     echo "    ct mark $OPENMARK quota name \"qopen\" drop"
@@ -109,7 +127,7 @@ apply() {
   nft delete table inet $T 2>/dev/null
   ruleset | nft -f - || { echo "nft 적용 실패"; return 1; }
   period d > "$VAR/wan_day"
-  echo "차단 적용: 항상 허용 $(macs | tr ',' '\n' | grep -c .)대, 한도 $(qlist | grep -c .)대"
+  echo "차단 적용: 항상 허용 $(alist | grep -c .)대, 한도 $(qlist | grep -c .)대"
 }
 
 open_until() { awk '{print $1+0}' "$OPEN" 2>/dev/null || echo 0; }
@@ -145,6 +163,11 @@ quota_line() {
     [ "$ud" -ge $(( dmb * 1048576 )) ] && out="$out(오늘 한도 도달)"
     [ "$um" -ge $(( mmb * 1048576 )) ] && out="$out(이달 한도 도달)"
   done < <(qlist)
+  while read -r j mac name; do
+    local ad am2; ad=$(used_live "$j" d); [ -n "$ad" ] || ad=$(used_saved "$j" d)
+    am2=$(used_live "$j" m); [ -n "$am2" ] || am2=$(used_saved "$j" m)
+    out="$out · $name(항상 허용) 오늘 $(( ad / 1048576 ))MB, 이번 달 $(( am2 / 1048576 ))MB"
+  done < <(alist)
   echo "$out"
 }
 

@@ -29,6 +29,7 @@ ALIASES = {
     "선풍기": "선풍기", "fan": "선풍기", "팬": "선풍기",
     "공유": "공유", "share": "공유", "인터넷": "공유",
     "센서": "센서", "온도": "센서", "습도": "센서", "sensors": "센서", "sensor": "센서",
+    "보조": "보조", "보조히터": "보조", "aux": "보조",
 }
 
 
@@ -86,6 +87,10 @@ def status_text():
         fs = json.load(open(os.path.join(BASE, "fan_status.json")))
         parts.append("선풍기 %s" % ("ON" if fs.get("on") else "OFF"))
     except Exception: pass
+    try:
+        as_ = json.load(open(os.path.join(BASE, "aux_status.json")))
+        if as_.get("on"): parts.append("보조히터 ON")
+    except Exception: pass
     if s.get("arrival"):
         try:
             a = s["arrival"]; ts = a.get("ts") if isinstance(a, dict) else None
@@ -103,6 +108,18 @@ def status_text():
 
 FAN_WORDS = {"켜": "on", "켜기": "on", "켬": "on", "on": "on", "꺼": "off", "끄기": "off", "끔": "off", "off": "off",
              "자동": "auto", "auto": "auto"}
+
+
+def aux_cmd(toks):
+    """보조 켜|꺼|자동 → aux_cmd.json (aux_control.py가 매분 반영). 켜/꺼는 2시간 뒤 자동. 동파 위험(1층 2.5°C 이하)은 '꺼'보다 우선."""
+    m = next((FAN_WORDS[t.lower()] for t in toks if t.lower() in FAN_WORDS), None)
+    if not m:
+        try: st = json.load(open(os.path.join(BASE, "aux_status.json")))
+        except Exception: st = {}
+        return "완료", "보조히터 %s — %s (명령: 보조 켜|꺼|자동)" % ("ON" if st.get("on") else "OFF", st.get("why", "?"))
+    json.dump({"mode": m, "ts": time.time()}, open(os.path.join(BASE, "aux_cmd.json"), "w"))
+    msg = {"on": "보조히터 켜기(2시간 뒤 자동으로 돌아감)", "off": "보조히터 끄기(2시간, 단 동파 위험이면 켬)", "auto": "보조히터 자동"}[m]
+    return "완료", msg + " — 반영 최대 1분"
 
 
 def fan_cmd(toks):
@@ -189,7 +206,7 @@ def run(cmd_text):
     for i, t in enumerate(toks):
         if t.lower() in ALIASES: verb = ALIASES[t.lower()]; toks.pop(i); break
     if not verb:
-        return "오류", "알 수 없는 명령 — 난방 / 동파 / 취침 / 도착 HH:MM [내일|날짜] [목표°C] / 도착 취소 / 상태 / 점검 / 기상 / 선풍기 켜|꺼|자동 / 공유 [N시간|N분|끔] / 센서"
+        return "오류", "알 수 없는 명령 — 난방 / 동파 / 취침 / 도착 HH:MM [내일|날짜] [목표°C] / 도착 취소 / 상태 / 점검 / 기상 / 선풍기 켜|꺼|자동 / 공유 [N시간|N분|끔] / 센서 / 보조 켜|꺼|자동"
     if verb == "상태":
         return "완료", status_text()
     if verb == "선풍기":
@@ -198,6 +215,8 @@ def run(cmd_text):
         return share_cmd(toks)
     if verb == "센서":
         return "완료", sensors_text()
+    if verb == "보조":
+        return aux_cmd(toks)
     if verb == "기상":   # 기상청 → 시트 즉시 갱신. 최대 몇 분 걸리므로 백그라운드로 띄우고 바로 응답
         sync = os.path.join(BASE, "weather", "kma_sync.py")
         if not os.path.exists(sync): return "오류", "weather/kma_sync.py 없음(git pull 필요)"
