@@ -96,7 +96,11 @@ def status_text():
         try:
             a = s["arrival"]; ts = a.get("ts") if isinstance(a, dict) else None
             parts.append("도착예약 %s" % (datetime.datetime.fromtimestamp(ts).strftime("%m-%d %H:%M") if ts else a))
-            if s.get("arrival_start_est"):
+            if s.get("arrival_start_pred"):   # 실내가 예보대로 식는 것까지 반영한 예고(표시용)
+                parts.append("예상시작 %s(그때 실내 약 %s°C, 선행 %.1fh)" % (
+                    datetime.datetime.fromtimestamp(s["arrival_start_pred"]).strftime("%m-%d %H:%M"),
+                    s.get("arrival_tin_pred"), s.get("arrival_lead_pred_h") or 0))
+            elif s.get("arrival_start_est"):
                 parts.append("예상시작 %s" % datetime.datetime.fromtimestamp(s["arrival_start_est"]).strftime("%m-%d %H:%M"))
         except Exception: pass
     if s.get("updated"):

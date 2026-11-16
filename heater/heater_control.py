@@ -158,6 +158,42 @@ def arrival_plan(cfg, st, t_in, t_out_fc, P=None):
     lead = preheat_lead_hours(cfg2, t_in, t_out_fc, P)
     return arr["ts"] - lead * 3600.0, lead
 
+def forecast_series(path=FORECAST):
+    """forecast.json 시간별 예보 → [(epoch초, 기온)] 시간순. 없으면 []."""
+    try:
+        fc = json.load(open(path))
+        return sorted((h["ms"] / 1000.0, float(h["tmp"])) for h in fc.get("hourly", []) if "tmp" in h and "ms" in h)
+    except Exception:
+        return []
+
+def predict_arrival_start(cfg, st, t_in, now_ts, series, t_out_now=None, P=None, step=600):
+    """도착 예약의 '예상' 시작 시각(표시용, 순수). 지금 실내 t_in에서 출발해, 시작 전까지 실내가 예보 기온 쪽으로
+       열시정수(tau)대로 식고(동파 모드 하한 frost.on은 히터가 지킴) 그 시점의 온도·남은 기간 예보 최저로 선행시간을 다시 구해
+       시작 조건이 처음 맞는 시각을 찾는다. 실제 켜기는 매분 실측으로 판단(arrival_plan) — 이 값은 며칠 전 예고용.
+       예보가 없는 구간은 예보 최저(없으면 지금 외기, 그것도 없으면 0°C)로 본다. 반환 (시작 epoch, 그때 예상 실내°C, 선행 h) 또는 (None,)*3."""
+    arr = st.get("arrival")
+    if not arr or not arr.get("ts") or t_in is None: return None, None, None
+    arr_ts = arr["ts"]
+    cfg2 = dict(cfg); pre = dict(cfg["preheat"]); pre["target_temp"] = arr.get("target", cfg["comfort"]["on"]); cfg2["preheat"] = pre
+    tau_s = cfg["preheat"]["tau_hours"] * 3600.0
+    floor = cfg["frost"]["on"]
+    beyond = min([t for _, t in series]) if series else (t_out_now if t_out_now is not None else 0.0)
+    def t_at(ts):
+        if not series or ts > series[-1][0] + 3600 or ts < series[0][0] - 3600:
+            return beyond if (not series or ts > series[-1][0]) else (t_out_now if t_out_now is not None else series[0][1])
+        return min(series, key=lambda x: abs(x[0] - ts))[1]
+    def fmin(a, b):
+        xs = [t for ts, t in series if a - 3600 <= ts <= b]
+        if not series or b > series[-1][0]: xs.append(beyond)
+        return min(xs) if xs else beyond
+    T, s = float(t_in), float(now_ts)
+    while s < arr_ts:
+        lead = preheat_lead_hours(cfg2, T, fmin(s, arr_ts), P)
+        if s >= arr_ts - lead * 3600.0: return s, round(T, 1), lead
+        To = t_at(s); T = max(floor, To + (T - To) * math.exp(-step / tau_s)) if T > floor else T
+        s += step
+    return arr_ts, round(T, 1), 0.0
+
 def schedule_step(cfg, st, t_in, t_out, dtn, tnow, P=None, t_out_fc=None):
     """스케줄 판단(순수): 도착 예약 / 금요일 예열 / 노쇼 복귀 / 안전 백스톱. st를 제자리 수정, (changed, 로그메시지목록) 반환.
        t_out_fc = 지금~도착 사이 예보 최저(없으면 현재 외기)."""
@@ -400,6 +436,8 @@ def main():
             _t_fc = forecast_min_temp(hours=max(1.0, (_arr["ts"] - now()) / 3600.0)) if _arr.get("ts") else None
             changed, slogs = schedule_step(cfg, st, t_floor_est, t_out, datetime.datetime.now(), now(), stage_w, _t_fc)
             arr_start, arr_lead = arrival_plan(cfg, st, t_floor_est, _t_fc if _t_fc is not None else t_out, stage_w) if st.get("arrival") else (None, None)
+            arr_pred = (predict_arrival_start(cfg, st, t_floor_est, now(), forecast_series(), t_out, stage_w)
+                        if st.get("arrival") and st.get("mode") != "comfort" else (None, None, None))
             for m in slogs: log(m)
             if changed: save_atomic(STATE, st)
 
@@ -589,6 +627,7 @@ def main():
                     "stage": stage, "stage_w": stage_w, "on_minutes": on_min,
                     "advice": advice, "advice_say": advice_speech(advice) if advice else None,
                     "arrival": st.get("arrival"), "arrival_start_est": arr_start, "arrival_lead_h": arr_lead,
+                    "arrival_start_pred": arr_pred[0], "arrival_tin_pred": arr_pred[1], "arrival_lead_pred_h": arr_pred[2],
                     "manual": ({"state": st["manual"]["state"], "left_min": max(0, int((st["manual"]["until"] - now()) / 60))}
                                if st.get("manual") else None)})
                 thermal_log(st.get("mode"), cur_relay, cur_watt, cur_volt, t_ctl, delta,

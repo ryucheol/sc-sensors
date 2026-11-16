@@ -145,6 +145,33 @@ class GuardActDetect(unittest.TestCase):
         self.assertFalse(hc.guard_recent_act("ON x @null", 1000))
 
 
+
+class PredictArrival(unittest.TestCase):
+    """며칠 뒤 도착: 지금 따뜻해도 예보대로 식는 것을 반영해 시작 시각을 예고(11-16: 27°C라 '선행 0h'로 나오던 문제)."""
+    NOW = datetime.datetime(2026, 11, 16, 14, 0).timestamp()
+    ARR = datetime.datetime(2026, 11, 20, 19, 0).timestamp()
+    def series(self, temp):   # 3일치 시간별 예보
+        return [(self.NOW + h * 3600, temp) for h in range(72)]
+    def test_cools_then_starts_earlier_than_arrival(self):
+        s = {"arrival": {"ts": self.ARR, "target": 23.5}}
+        start, tin, lead = hc.predict_arrival_start(CFG, s, 27.9, self.NOW, self.series(0.0), 0.0, 1770)
+        self.assertLess(start, self.ARR - 3600)            # 도착 시각 그대로(선행 0)가 아님
+        self.assertLess(tin, 15)                             # 4일 동안 식은 실내
+        self.assertGreaterEqual(tin, CFG["frost"]["on"])     # 동파 하한 아래로는 안 내려감
+        now_based, _ = hc.arrival_plan(CFG, s, 27.9, 0.0, 1770)
+        self.assertEqual(now_based, self.ARR)                # 기존 계산은 선행 0 → 의미 없음
+    def test_colder_forecast_starts_earlier(self):
+        s = {"arrival": {"ts": self.ARR, "target": 23.5}}
+        warm = hc.predict_arrival_start(CFG, s, 27.9, self.NOW, self.series(8.0), 8.0, 1770)[0]
+        cold = hc.predict_arrival_start(CFG, s, 27.9, self.NOW, self.series(-5.0), -5.0, 1770)[0]
+        self.assertLess(cold, warm)
+    def test_soon_matches_now_based(self):                   # 도착이 가까우면 기존 계산과 같아짐
+        s = {"arrival": {"ts": self.NOW + 3 * 3600, "target": 23.5}}
+        start, tin, lead = hc.predict_arrival_start(CFG, s, 10.0, self.NOW, self.series(0.0), 0.0, 1770)
+        self.assertEqual(start, self.NOW)                    # 이미 시작 조건(10°C→23.5에 3h로는 부족)
+    def test_no_arrival(self):
+        self.assertEqual(hc.predict_arrival_start(CFG, {}, 20, self.NOW, [], 0, 1770), (None, None, None))
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
 

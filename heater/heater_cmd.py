@@ -103,8 +103,11 @@ def arrival_cmd(args):
         print("도착 예약: %s 에 %g°C — 현재 내부 %s°C, 예보 최저 %s°C, 히터 %sW 기준 선행 %.1fh → 예상 시작 %s%s"
               % (dt.strftime("%m-%d(%a) %H:%M").replace("Mon","월").replace("Tue","화").replace("Wed","수").replace("Thu","목").replace("Fri","금").replace("Sat","토").replace("Sun","일"), target, t_in, "?" if t_fc is None else t_fc, int(P) if P else cfg["preheat"]["heater_watts"],
                  lead, time.strftime("%m-%d %H:%M", time.localtime(start)), " (이미 시작 조건)" if start <= time.time() else ""))
-        if dt.timestamp() - time.time() > 12 * 3600:
-            print("※ 예상 시작은 지금 실내 온도 기준입니다. 실제 시작 시각은 Pi가 그때 실내 온도·예보·단수로 1분마다 다시 계산합니다.")
+        ps, pt, pl = hc.predict_arrival_start(cfg, st, t_in, time.time(), hc.forecast_series(), t_out, P)
+        if ps and abs(ps - start) > 600:
+            print("↳ 그때까지 실내가 예보대로 식는 것을 반영하면: 예상 시작 %s (그때 실내 약 %s°C, 선행 %.1fh)"
+                  % (time.strftime("%m-%d %H:%M", time.localtime(ps)), pt, pl))
+        print("※ 실제 시작은 Pi가 1분마다 그때 실내 온도·예보·단수로 다시 계산해 정합니다(위 시각은 예고).")
         if lead >= cfg["preheat"]["max_lead_hours"]:
             print("⚠ 현재 단수로는 목표 도달이 어려워 최대 선행(%sh)으로 잡음 — 히터 단수를 올려 두세요" % cfg["preheat"]["max_lead_hours"])
     except Exception as e:
