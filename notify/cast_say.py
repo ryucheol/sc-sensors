@@ -4,6 +4,7 @@
 
   ~/cast-venv/bin/python notify/cast_say.py "좋은 아침입니다. 일어나세요." [--volume 0.6] [--repeat 2]
 대상: 이름 "1층 speaker" + 모델 "Google Home Mini" 가 정확히 하나일 때만(집에 스피커가 여럿이라 잘못 울리지 않게).
+종료 코드: 0 = 실제로 재생됨, 그 밖 = 실패(alert_sound.py가 잭 스피커로 넘김).
 소리 파일은 Pi가 Ryufarm 안에서 직접 내보낸다(10.42.0.1 임시 HTTP, LTE 안 씀). 음성은 tts_cache에 남아 다음엔 바로.
 """
 import argparse, hashlib, http.server, os, socketserver, subprocess, sys, threading, time
@@ -71,6 +72,8 @@ def main():
                 time.sleep(0.5); s = mc.status.player_state
                 if s in ("PLAYING", "BUFFERING"): seen = True
                 if seen and s == "IDLE": break
+            if not seen:
+                print("재생 시작 안 됨(%s) — 실패" % mc.status.player_state); return 2
             print("%s 재생 %d/%d (%s, 볼륨 %.2f)" % (time.strftime("%H:%M:%S"), i + 1, a.repeat, NAME, a.volume))
             if i + 1 < a.repeat: time.sleep(3)
     finally:

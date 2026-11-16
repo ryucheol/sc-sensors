@@ -54,5 +54,27 @@ class Texts(unittest.TestCase):
         self.assertEqual(a.chime_texts(D(2026, 11, 14, 8, 0), -1.5)[1], "실내 영하 일 점 오도.")
 
 
+
+class Route(unittest.TestCase):
+    def test_cast_first(self):        self.assertEqual(a.route(100, "cast", 0, True), "cast")
+    def test_backoff_after_fail(self):  self.assertEqual(a.route(100, "cast", 500, True), "local")
+    def test_backoff_expired(self):   self.assertEqual(a.route(600, "cast", 500, True), "cast")
+    def test_local_only(self):        self.assertEqual(a.route(100, "local", 0, True), "local")
+    def test_no_cast_env(self):       self.assertEqual(a.route(100, "cast", 0, False), "local")
+
+    def test_fallback_on_failure(self):
+        calls = []
+        old = (a._cast, a.say_local, a.CAST_PY, a.CAST_SCRIPT, a._cast_fail_until)
+        try:
+            def boom(t): raise RuntimeError("대상 없음")
+            a._cast = boom; a.say_local = lambda t: calls.append(("local", t))
+            a.CAST_PY = a.CAST_SCRIPT = __file__; a._cast_fail_until = 0.0
+            a.say("문 여세요"); self.assertEqual(calls, [("local", "문 여세요")])
+            self.assertGreater(a._cast_fail_until, 0)
+            a._cast = lambda t: calls.append(("cast", t))          # 백오프 중엔 캐스트 시도 안 함
+            a.say("두 번째"); self.assertEqual(calls[-1], ("local", "두 번째"))
+        finally:
+            a._cast, a.say_local, a.CAST_PY, a.CAST_SCRIPT, a._cast_fail_until = old
+
 if __name__ == "__main__":
     unittest.main()

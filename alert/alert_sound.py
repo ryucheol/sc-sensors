@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""난방(comfort) 과열/환기 음성알림 — 3.5mm 잭.
+"""난방(comfort) 과열/환기 음성알림 — Home Mini(캐스트) 우선, 안 되면 3.5mm 잭 백업 스피커(ALERT_OUTPUT=local 이면 잭만).
  엔진: gTTS(온라인, 영구캐시) → espeak 폴백(오프라인/실패). piper는 추후 연구(USE_PIPER).
  온라인(인터넷O): 기상청 예보 + 지금 바깥 → 명령.  오프라인: 바깥·1층·다락 센서 차례 → 명령만.
  - 26°C↑  : "문 여세요"(첫회 전체). 변화 없으면 5분마다 반복, 온도가 내려가기 시작하면(문 열어 반응) 반복 중지
@@ -260,7 +260,43 @@ def _gtts_to_cache(text, wav):
     os.replace(tmp, wav)   # 원자적 — 부분파일 캐시 방지
 
 
+# ---- 출력 경로: Home Mini(캐스트) 먼저, 실패하면 Pi 3.5mm 잭(백업 스피커) ----
+#  OUTPUT="cast" → 캐스트 시도 후 실패 시 잭 / "local" → 잭만. 캐스트가 실패하면 CAST_BACKOFF초 동안은
+#  바로 잭으로(매번 검색 10~25초 기다리면 경보가 늦어짐). 캐스트 venv·스크립트가 없으면 잭만.
+OUTPUT = os.environ.get("ALERT_OUTPUT", "cast")
+CAST_PY = os.path.expanduser("~/cast-venv/bin/python")
+CAST_SCRIPT = os.path.join(BASE, "notify", "cast_say.py")
+CAST_TIMEOUT = 75; CAST_BACKOFF = 600; CAST_VOLUME = "0.6"
+_cast_fail_until = 0.0
+
+
+def route(now, output, fail_until, cast_available):
+    """이번 발화를 어디로 보낼지(순수): 'cast' 또는 'local'."""
+    if output != "cast" or not cast_available:
+        return "local"
+    return "local" if now < fail_until else "cast"
+
+
+def _cast(text):
+    r = subprocess.run([CAST_PY, CAST_SCRIPT, text, "--volume", CAST_VOLUME],
+                       timeout=CAST_TIMEOUT, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+    if r.returncode != 0:
+        raise RuntimeError((r.stdout or b"").decode("utf-8", "replace").strip().splitlines()[-1:] or "rc=%d" % r.returncode)
+
+
 def say(text):
+    global _cast_fail_until
+    now = time.time()
+    if route(now, OUTPUT, _cast_fail_until, os.path.exists(CAST_PY) and os.path.exists(CAST_SCRIPT)) == "cast":
+        try:
+            _cast(text); return
+        except Exception as e:
+            _cast_fail_until = now + CAST_BACKOFF
+            logline("캐스트 실패 → 잭 스피커로 (%d분간 캐스트 생략): %s" % (CAST_BACKOFF // 60, e))
+    say_local(text)
+
+
+def say_local(text):
     # (추후 연구) piper 우선
     if PIPER:
         try:
