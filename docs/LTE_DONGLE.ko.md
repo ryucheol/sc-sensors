@@ -160,6 +160,7 @@ python3 scripts/lte_signal_check.py 60 무안테나    # 안테나 빼고 1분
 - 신호: **RSRP −100 dBm**(관리 화면) — 같은 집 E3372 안테나 없음 −99 dBm과 같은 수준(약함 경계). 신호는 같은데 속도가 1.6배 → 동글 성능 차이 또는 측정 시점 차이. SINR은 아래.
 - 관리 화면(확인): 주소 **192.168.0.1**(`ufi.ztedevice.com`), 2.4 GHz 최대 10대, 펌웨어 `BD_XCBZHKMF79UV1.0.0B03`, KT·LTE. 상세 화면에 SINR·RSRQ·밴드는 없음(이 펌웨어) → 맥에서 `curl -s -H "Referer: http://192.168.0.1/index.html" "http://192.168.0.1/goform/goform_get_cmd_process?isTest=false&multi_data=1&cmd=network_provider,network_type,lte_rsrp,lte_rsrq,lte_snr,lte_band,wan_apn,signalbar"`(로그인 없이 됨, IMEI·IMSI 안 읽음).
   - 집 결과: KT·LTE, **RSRP −100 · RSRQ −7 · SINR 7.0 dB** · 막대 4. 밴드·APN은 빈칸(APN 비어도 KT가 자동으로 붙여 줌 — 손댈 것 없음).
+  - **외장 안테나(E3372 동봉, TS9 → MF79U TS9 단자에 맞음), 11-17 00:38, 10초 간격 8회**: RSRP **−86~−87**(없을 때 −100 → +14 dB) · RSRQ −8~−12 · SINR **2~6 dB**(없을 때 7) · 막대 5. 신호는 커졌지만 간섭도 함께 커져 SINR은 오르지 않음 → 속도 이득은 작을 수 있음(같은 시각 안테나 있/없 속도 비교로 판단).
   - 같은 집 E3372는 SINR −1 dB → **신호 크기는 같아도 SINR이 8 dB 좋아** 속도가 1.6배였던 이유. 농막 시험 때도 이 명령으로 기록.
 - 망 주소가 겹치지 않음: 동글 192.168.0.x · E3372 192.168.8.x · 농막 Ryufarm 10.42.0.x → Pi가 wlan0으로 동글에 붙어도 충돌 없음.
 - WAN 주소가 10.x(통신사 사설망, CGNAT) → 바깥에서 들어오는 접속은 안 됨. Tailscale·텔레그램은 안에서 나가는 연결이라 영향 없음.
