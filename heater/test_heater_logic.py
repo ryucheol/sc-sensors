@@ -5,6 +5,8 @@ import json, os, datetime, unittest
 import heater_control as hc
 
 CFG = json.load(open(os.path.join(os.path.dirname(os.path.dirname(os.path.realpath(__file__))), "heater_config.json"), encoding="utf-8"))
+# 운영 설정에서 금요일 예열을 꺼도(11-14) 예열 로직 자체는 시험한다 → 테스트는 켠 상태로 고정
+CFG["preheat"]["enabled"] = True
 FRI = datetime.datetime(2026, 11, 6)   # 금요일(weekday 4)
 assert FRI.weekday() == 4
 
@@ -230,6 +232,8 @@ class TestStage(unittest.TestCase):
         a = hc.stage_advice(cfg, "frost", 1, 720, 0, None, None, None, False, 0, False)
         self.assertIn("예열 불가", a)
         self.assertIsNone(hc.stage_advice(cfg, "frost", 3, 1763, 0, None, None, None, False, 0, False))
+        off = json.loads(json.dumps(cfg)); off["preheat"]["enabled"] = False   # 예열 꺼져 있으면 '예열 불가' 조언 없음
+        self.assertIsNone(hc.stage_advice(off, "frost", 1, 720, 0, None, None, None, False, 0, False))
     def test_advice_occupied(self):
         cfg = dict(CFG); cfg["stages"] = [720, 1102, 1763]
         a = hc.stage_advice(cfg, "comfort", 1, 720, None, 10, 22.4, 23.0, True, 75, True)
