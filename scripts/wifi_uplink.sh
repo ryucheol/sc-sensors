@@ -18,7 +18,13 @@ if [ "${1:-}" = status ] || [ $# -eq 0 ]; then
   exit 0
 fi
 C="$1"; MODE="${2:?primary|backup}"
-nmcli -g NAME con show | grep -qx "$C" || C=$(nmcli -g NAME,802-11-wireless.ssid con show 2>/dev/null | awk -F: -v s="$1" '$2==s{print $1; exit}')
+# 이름이 아니면 SSID로 찾는다(nmcli 목록에는 ssid 필드가 없어 연결마다 조회 — 11-16 수정)
+if ! nmcli -g NAME con show | grep -qx "$C"; then
+  C=""
+  while IFS= read -r n; do
+    [ "$(nmcli -g 802-11-wireless.ssid con show "$n" 2>/dev/null)" = "$1" ] && { C="$n"; break; }
+  done < <(nmcli -g NAME,TYPE con show | awk -F: '$2=="802-11-wireless"{print $1}')
+fi
 [ -n "$C" ] || { echo "연결 없음: $1"; exit 1; }
 case "$MODE" in
   primary) M=50; P=30 ;;
