@@ -29,19 +29,41 @@ def parse_temp(a):
     m = _TEMP_RX.match(a.strip())
     return float(m.group(1)) if m else None
 
-def parse_when(args):
-    """['16:00'] / ['내일','07:00'] / ['모레','07:00'] / ['2026-11-14','20:00'] → datetime. 시각이 오늘 이미 지났으면 내일."""
-    now = datetime.datetime.now(); day = now.date(); hhmm = None
-    for a in args:
-        if a == "내일": day = now.date() + datetime.timedelta(days=1)
-        elif a == "모레": day = now.date() + datetime.timedelta(days=2)
-        elif len(a) == 10 and a[4] == "-": day = datetime.date.fromisoformat(a)
+DATE_MD = re.compile(r"^(\d{1,2})[-/](\d{1,2})$")           # 11-20, 11/20 (점은 온도 23.5와 헷갈려 받지 않음)
+DATE_KO = re.compile(r"^(\d{1,2})월(\d{1,2})일?$")          # 11월20일 (공백은 붙여서 처리)
+
+
+def parse_when(args, now=None):
+    """['16:00'] / ['내일','07:00'] / ['모레','07:00'] / ['2026-11-14','20:00'] / ['11-20','19:00'] / ['11/20'] / ['11월','20일'] → datetime.
+       시각이 오늘 이미 지났으면 내일. 월-일만 쓰면 올해(이미 지난 날이면 내년). 모르는 낱말은 오류(조용히 무시하면 오늘로 잡히는 사고, 11-16)."""
+    now = now or datetime.datetime.now(); day = now.date(); hhmm = None; explicit = False
+    toks = list(args); i = 0
+    while i < len(toks):
+        a = toks[i]
+        if a.endswith("월") and i + 1 < len(toks) and toks[i + 1].rstrip("일").isdigit():
+            a = a + toks[i + 1]; i += 1
+        m_md, m_ko = DATE_MD.match(a), DATE_KO.match(a)
+        if a == "내일": day = now.date() + datetime.timedelta(days=1); explicit = True
+        elif a == "모레": day = now.date() + datetime.timedelta(days=2); explicit = True
+        elif a == "오늘": day = now.date()
+        elif len(a) == 10 and a[4] == "-": day = datetime.date.fromisoformat(a); explicit = True
+        elif m_md or m_ko:
+            mo, d = [int(x) for x in (m_md or m_ko).groups()]
+            day = datetime.date(now.year, mo, d)
+            if day < now.date(): day = datetime.date(now.year + 1, mo, d)
+            explicit = True
         elif ":" in a: hhmm = a
+        elif parse_temp(a) is not None: pass          # 목표 온도는 arrival_cmd가 따로 읽음
+        else: raise ValueError("알 수 없는 낱말 '%s'" % a)
+        i += 1
     if not hhmm: raise ValueError("시각(HH:MM)이 필요합니다")
     h, m = [int(x) for x in hhmm.split(":")]
     dt = datetime.datetime.combine(day, datetime.time(h, m))
-    if dt <= now and day == now.date(): dt += datetime.timedelta(days=1)
+    if dt <= now:
+        if explicit: raise ValueError("이미 지난 시각입니다: %s" % dt.strftime("%Y-%m-%d %H:%M"))
+        dt += datetime.timedelta(days=1)
     return dt
+
 
 ARRIVAL_KEEP_H = 12   # 모드 명령을 내려도 도착이 이보다 먼 예약은 지우지 않는다(11-15: 현장 '난방'이 11-20 캘린더 예약을 지운 사고)
 
@@ -64,7 +86,7 @@ def arrival_cmd(args):
         print("사용: 도착 HH:MM [내일|모레|YYYY-MM-DD] [목표°C] / 도착 취소  (%s)" % e); sys.exit(1)
     target = cfg["comfort"]["on"]
     for a in args:
-        v = parse_temp(a) if ":" not in a and "-" not in a else None
+        v = parse_temp(a) if ":" not in a and not DATE_MD.match(a) and "-" not in a else None
         if v is not None and 10 <= v <= 30: target = v
     st["arrival"] = {"ts": dt.timestamp(), "target": target, "set_ts": time.time()}
     st["last_cmd_ts"] = time.time()
@@ -79,8 +101,10 @@ def arrival_cmd(args):
         except Exception: P = None
         start, lead = hc.arrival_plan(cfg, st, t_in, t_fc if t_fc is not None else t_out, P)
         print("도착 예약: %s 에 %g°C — 현재 내부 %s°C, 예보 최저 %s°C, 히터 %sW 기준 선행 %.1fh → 예상 시작 %s%s"
-              % (dt.strftime("%m-%d %H:%M"), target, t_in, "?" if t_fc is None else t_fc, int(P) if P else cfg["preheat"]["heater_watts"],
+              % (dt.strftime("%m-%d(%a) %H:%M").replace("Mon","월").replace("Tue","화").replace("Wed","수").replace("Thu","목").replace("Fri","금").replace("Sat","토").replace("Sun","일"), target, t_in, "?" if t_fc is None else t_fc, int(P) if P else cfg["preheat"]["heater_watts"],
                  lead, time.strftime("%m-%d %H:%M", time.localtime(start)), " (이미 시작 조건)" if start <= time.time() else ""))
+        if dt.timestamp() - time.time() > 12 * 3600:
+            print("※ 예상 시작은 지금 실내 온도 기준입니다. 실제 시작 시각은 Pi가 그때 실내 온도·예보·단수로 1분마다 다시 계산합니다.")
         if lead >= cfg["preheat"]["max_lead_hours"]:
             print("⚠ 현재 단수로는 목표 도달이 어려워 최대 선행(%sh)으로 잡음 — 히터 단수를 올려 두세요" % cfg["preheat"]["max_lead_hours"])
     except Exception as e:
