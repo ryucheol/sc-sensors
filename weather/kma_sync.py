@@ -252,10 +252,25 @@ def add_stage2(payload, did, key, now, st, srv):
         t0 = datetime.datetime.combine(today, datetime.time(0))
         if not any(r[0].startswith(today.strftime("%Y-%m-%d 00")) for r in hourly) and now >= t0 + datetime.timedelta(hours=1):
             hourly = get_obs(key, t0, now.replace(minute=0, second=0, microsecond=0)) + hourly
+        last_daily = srv.get("daily_last") or st.get("daily_last")
+        hm_src = list(hourly)
+        d1, d2 = s2.daily_window(today, last_daily)
+        if d1 <= d2:
+            # 확정할 날의 최고습도(L열)는 시간자료로만 구할 수 있다. 이번 실행의 시간자료가 그날 24시간을
+            # 다 덮지 못하면(며칠 만에 연결·2단계 처음 켬) 그 기간 시간자료를 따로 받는다(업로드는 안 함).
+            cnt = {}
+            for r in hourly: cnt[r[0][:10]] = cnt.get(r[0][:10], 0) + 1
+            days = [(d1 + datetime.timedelta(days=i)).strftime("%Y-%m-%d") for i in range((d2 - d1).days + 1)]
+            if any(cnt.get(dd, 0) < 24 for dd in days):
+                try:
+                    hm_src = get_obs(key, datetime.datetime.combine(d1, datetime.time(0)),
+                                     datetime.datetime.combine(d2, datetime.time(23))) + hm_src
+                except Exception as e:
+                    log("최고습도용 시간자료 실패(L열 빈칸): %s" % e)
         hm_max = {}
-        for r in hourly:
+        for r in hm_src:
             if r[2] != "": hm_max[r[0][:10]] = max(hm_max.get(r[0][:10], r[2]), r[2])
-        rows = s2.get_daily(key, today, srv.get("daily_last") or st.get("daily_last"), hm_max)
+        rows = s2.get_daily(key, today, last_daily, hm_max)
         prov = s2.provisional_row(today, hourly)
         if prov: rows.append(prov)
         if rows:

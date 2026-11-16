@@ -235,6 +235,23 @@ class Stage2Run(unittest.TestCase):
         self.assertEqual(st["mid_tmfc"], "202611110600"); self.assertEqual(st["daily_last"], "2026-11-10")
         self.assertEqual(st["verify_day"], "2026-11-11")
 
+    def test_hm_max_fetched_for_confirmed_days(self):
+        # 확정할 11/09~10의 시간자료가 이번 실행에 없으면 그 기간을 따로 받아 L열(최고습도)을 채운다
+        calls = []
+        def obs(key, start, end, fetch=None):
+            calls.append((start, end))
+            if start.date() == datetime.date(2026, 11, 10):
+                return [["2026-11-10 06:00", 0, 99, 0, 0], ["2026-11-10 14:00", 14, 31, 0, 0]]
+            return [["2026-11-11 00:00", 5, 90, 0, 3], ["2026-11-11 11:00", 12, 66, 0, 4]]
+        seen = {}
+        def daily(key, today, last, hm, fetch=None):
+            seen.update(hm); return [["2026-11-10"] + [1] * 11 + [""]]
+        with self.web("v12"), mock.patch.object(ks, "get_obs", side_effect=obs), mock.patch.object(s2, "get_daily", side_effect=daily):
+            self.assertEqual(ks.run(now=D(2026, 11, 11, 11, 42), stage2=True), 0)
+        self.assertIn((D(2026, 11, 10, 0), D(2026, 11, 10, 23)), calls)   # daily_last 11/09 → 11/10만 확정
+        self.assertEqual(seen.get("2026-11-10"), 99)
+        self.assertNotIn("2026-11-10 06:00", [r[0] for r in self.posted[0]["obs_hourly"]])   # 업로드엔 안 섞임
+
     def test_v11_webapp_fails_safely(self):
         with self.web("v11"):
             self.assertEqual(ks.run(now=D(2026, 11, 11, 11, 42), stage2=True), 1)
