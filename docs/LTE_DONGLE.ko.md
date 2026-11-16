@@ -157,8 +157,10 @@ python3 scripts/lte_signal_check.py 60 무안테나    # 안테나 빼고 1분
 
 - 집처럼 신호가 약한 곳에서도 E3372보다 빠르다. 농막은 신호가 훨씬 좋아(E3372 SINR 21~25 dB, 27 Mbps) 더 나올 것.
 - '부하 중 반응성 낮음' = 크게 받거나 올리는 동안 지연이 수 초로 늘어나는 LTE 동글의 흔한 버퍼 현상. 영상 통화 중 큰 업로드를 피하면 된다(히터·센서 제어에는 영향 없음).
-- 신호: **RSRP −100 dBm**(관리 화면) — 같은 집 E3372 안테나 없음 −99 dBm과 같은 수준(약함 경계). 신호는 같은데 속도가 1.6배 → 동글 성능 차이 또는 측정 시점 차이. SINR은 미기록.
-- 관리 화면(확인): 주소 **192.168.0.1**(`ufi.ztedevice.com`), 2.4 GHz 최대 10대, 펌웨어 `BD_XCBZHKMF79UV1.0.0B03`, KT·LTE. 상세 화면에 SINR·RSRQ·밴드는 없음(이 펌웨어) — 필요하면 `goform_get_cmd_process?cmd=lte_snr,...`로 읽기 시도.
+- 신호: **RSRP −100 dBm**(관리 화면) — 같은 집 E3372 안테나 없음 −99 dBm과 같은 수준(약함 경계). 신호는 같은데 속도가 1.6배 → 동글 성능 차이 또는 측정 시점 차이. SINR은 아래.
+- 관리 화면(확인): 주소 **192.168.0.1**(`ufi.ztedevice.com`), 2.4 GHz 최대 10대, 펌웨어 `BD_XCBZHKMF79UV1.0.0B03`, KT·LTE. 상세 화면에 SINR·RSRQ·밴드는 없음(이 펌웨어) → 맥에서 `curl -s -H "Referer: http://192.168.0.1/index.html" "http://192.168.0.1/goform/goform_get_cmd_process?isTest=false&multi_data=1&cmd=network_provider,network_type,lte_rsrp,lte_rsrq,lte_snr,lte_band,wan_apn,signalbar"`(로그인 없이 됨, IMEI·IMSI 안 읽음).
+  - 집 결과: KT·LTE, **RSRP −100 · RSRQ −7 · SINR 7.0 dB** · 막대 4. 밴드·APN은 빈칸(APN 비어도 KT가 자동으로 붙여 줌 — 손댈 것 없음).
+  - 같은 집 E3372는 SINR −1 dB → **신호 크기는 같아도 SINR이 8 dB 좋아** 속도가 1.6배였던 이유. 농막 시험 때도 이 명령으로 기록.
 - 망 주소가 겹치지 않음: 동글 192.168.0.x · E3372 192.168.8.x · 농막 Ryufarm 10.42.0.x → Pi가 wlan0으로 동글에 붙어도 충돌 없음.
 - WAN 주소가 10.x(통신사 사설망, CGNAT) → 바깥에서 들어오는 접속은 안 됨. Tailscale·텔레그램은 안에서 나가는 연결이라 영향 없음.
 - ⚠ 관리 화면에 전화번호·IMEI·IMSI가 그대로 보인다 — 화면 캡처를 공유할 때 가릴 것(이 문서엔 적지 않음).
