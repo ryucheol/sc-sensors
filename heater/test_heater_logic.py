@@ -214,6 +214,11 @@ class TestStage(unittest.TestCase):
     def test_detect(self):
         self.assertEqual(hc.detect_stage(720), 1); self.assertEqual(hc.detect_stage(1086), 2)
         self.assertEqual(hc.detect_stage(1775), 3); self.assertIsNone(hc.detect_stage(0)); self.assertIsNone(hc.detect_stage(2500))
+    def test_stage_from_samples(self):
+        self.assertEqual(hc.stage_from_samples([1049]), (None, None))                 # 표본 하나로는 판단 안 함
+        self.assertEqual(hc.stage_from_samples([1049, 1760, 1771]), (3, 1760))         # 켜짐 직후 낮은 값 하나는 무시(11-15 오인)
+        self.assertEqual(hc.stage_from_samples([1100, 1090, 1110, 1760]), (2, 1105))
+        self.assertEqual(hc.stage_from_samples([0, 50, 1763]), (None, None))
     def test_preheat_uses_measured_P(self):
         # 1단(720W)이면 외기 0°C에서 T_eq=15°C → 목표 도달 불가 → 최대 선행
         self.assertEqual(hc.preheat_lead_hours(CFG, 5, 0, 720), CFG["preheat"]["max_lead_hours"])

@@ -83,6 +83,17 @@ def detect_stage(watt, stages=STAGES_DEFAULT, tol=0.12):
             best = i
     return best
 
+STAGE_SETTLE_SEC = 120   # 켜진 직후 표본은 버림(플러그 측정 창에 꺼진 구간이 섞여 1763W가 ~1050W로 잡힘 → 2단 오인, 11-15)
+STAGE_MIN_SAMPLES = 3
+
+def stage_from_samples(samples, stages=STAGES_DEFAULT):
+    """켜진 뒤 안정된 W 표본들 → (단수, 중앙값 W) 또는 (None, None). 표본 3개 이상의 중앙값으로만 판단(순간값 하나로 단수를 바꾸지 않음). 순수."""
+    xs = sorted(w for w in samples if w is not None and w >= 100)
+    if len(xs) < STAGE_MIN_SAMPLES: return None, None
+    med = xs[len(xs) // 2] if len(xs) % 2 else (xs[len(xs) // 2 - 1] + xs[len(xs) // 2]) / 2.0
+    sg = detect_stage(med, stages)
+    return (sg, round(med)) if sg is not None else (None, None)
+
 def forecast_min_temp(path=FORECAST, hours=48, now_ms=None):
     """forecast.json 시간별 예보에서 앞으로 hours 시간의 최저 기온. 없으면 None."""
     try:
@@ -351,6 +362,7 @@ def main():
     prev_mode = None   # 모드 전환을 정확한 시각으로 로깅(현황 30분 간격 보완)
     stage = _ss.get("stage"); stage_w = _ss.get("stage_w")   # 단수(실측 W로 인식, 재시작 시 복원)
     on_since = None; thist = collections.deque(); advice = None; advice_log = 0.0
+    wbuf = collections.deque(maxlen=5)   # 단수 인식용: 켜진 지 STAGE_SETTLE_SEC 지난 W 표본
     while True:
         poll = 60
         try:
@@ -540,10 +552,13 @@ def main():
                     if not (expecting and cur_watt < wmin): fault_dt = 0.0; fault_active = False
                 # 단수 인식(켜져서 전력이 잡힐 때만) · 연속 ON 시간 · 30분 전 대비 하강 여부 · 조언
                 if status_ok and cur_relay and cur_watt >= 100:
-                    _sg = detect_stage(cur_watt, cfg.get("stages", STAGES_DEFAULT))
+                    if on_since is not None and tnow - on_since >= STAGE_SETTLE_SEC: wbuf.append(cur_watt)
+                    _sg, _sw = stage_from_samples(wbuf, cfg.get("stages", STAGES_DEFAULT))
                     if _sg is not None:
-                        if _sg != stage: log("히터 단수 감지: %s단 → %d단 (%.0fW)" % (stage if stage else "?", _sg, cur_watt))
-                        stage, stage_w = _sg, round(cur_watt)
+                        if _sg != stage: log("히터 단수 감지: %s단 → %d단 (중앙값 %dW, 표본 %d)" % (stage if stage else "?", _sg, _sw, len(wbuf)))
+                        stage, stage_w = _sg, _sw
+                elif status_ok and not cur_relay:
+                    wbuf.clear()
                 if cur_relay and status_ok:
                     on_since = on_since or tnow
                 else:
