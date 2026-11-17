@@ -200,6 +200,10 @@ python3 scripts/lte_signal_check.py 60 무안테나    # 안테나 빼고 1분
   - 나머지(노트북·휴대폰 등) 차단. 텔레그램·시트·Pi 터미널 `공유 [N시간|N분|끔|상태]`로 잠깐 열기(최대 24시간, 끝나면 자동 차단, 연 동안은 한도에 안 셈). 한도 첫 도달 시 텔레그램(`notify/wan_tick.sh`, cron 매분).
   - nft 함정 두 가지: 체인 이름 `fwd`는 예약어라 문법 오류, bash `${m:+...{ ... }}`는 안쪽 `}`에서 끝나 버림 → 따로 만들기. 설치 전 `nft -c -f`(일반 사용자도 문법 검사 가능)로 확인.
 
+- **11-17 버그 수정**: 자정에 `tick`→`apply`가 먼저 `save_used`를 부르면서 어제 카운터를 '오늘' 날짜로 저장 → 하루 한도가 0으로 안 돌아감(Home Mini가 이튿날도 50/50MB로 차단, 모든 기기 '오늘 = 이번 달'). 저장 날짜를 카운터가 세기 시작한 날(`wan_day`)로 바꿈. 가짜 nft로 자정·월초 넘김 시험. 복구 명령 `sudo -n farmhut-wan-guard reset-day`(오늘 하루치만 0, 이번 달 유지) — 11:37 적용, Home Mini 즉시 복귀.
+  - 설치된 사본은 root 소유 `/usr/local/sbin/farmhut-wan-guard` → **git pull만으로 반영 안 됨**: `sudo install -o root -g root -m 0755 scripts/farmhut-wan-guard /usr/local/sbin/farmhut-wan-guard`.
+  - 참고: Pi에 Claude Code 설치(11-17 11:1x)로 LTE 약 130 MB 사용 — 큰 설치는 동글 있을 때.
+
 ## 10. 들고 다니는 Wi-Fi 동글을 '재실 때 1순위'로 (2026-11-16, Ryuspot으로 미리 시험)
 
 사람이 있을 때는 들고 온 Wi-Fi 동글(100 GB·5 Mbps 무제한 유심)로 Ryufarm 기기 전부가 나가고, 동글을 들고 떠나면 자동으로 LTE(6 GB)+차단·한도로 돌아가게 한다. 기기들은 Ryufarm에만 붙어 있으면 된다.
