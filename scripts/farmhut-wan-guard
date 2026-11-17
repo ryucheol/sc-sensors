@@ -11,6 +11,7 @@
 #   open SEC [MB] SEC초(60~86400) 동안 나머지 기기도 허용하되 합계 MB(기본 100, 최대 2048)까지 — 넘거나 시간이 끝나면
 #                tick이 다시 막음. 한도 기기(Home Mini·휴대폰 등)의 하루·한 달 한도는 열린 동안에도 그대로
 #   tick         매분(cron): 사용량 저장, 열림 종료·규칙 사라짐·날짜 바뀜이면 다시 적용.
+#   reset-day    오늘 하루 사용량만 0으로(한 달은 유지) — 11-17 자정 넘김 버그 복구용
 #                한도를 처음 넘은 순간 "EXCEEDED 이름 하루|한달 MB" 한 줄 출력(알림용)
 #   status       상태 한 줄 / print  적용할 규칙 출력(점검용)
 set -u
@@ -72,18 +73,40 @@ try:
 except Exception: pass'
 }
 
+# 지금 카운터가 세고 있는 기간 = 마지막 apply 때의 날짜(wan_day). 자정 직후 apply가 먼저 save_used를 부를 때
+# 어제 카운터를 '오늘' 날짜로 저장하던 버그(11-17: 하루 한도가 0으로 안 돌아감)를 막는다.
+counting_period() {
+  local pd; pd=$(cat "$VAR/wan_day" 2>/dev/null); [ -n "$pd" ] || pd=$(period d)
+  [ "$1" = d ] && echo "$pd" || echo "${pd:0:7}"
+}
+
 save_used() {
   nft list table inet $T >/dev/null 2>&1 || return 0
-  local tmp; tmp=$(mktemp)
-  [ -f "$USED" ] && awk -v d="$(period d)" -v m="$(period m)" '$1==d || $1==m' "$USED" > "$tmp"
+  local tmp pd pm; tmp=$(mktemp); pd=$(counting_period d); pm=$(counting_period m)
+  : > "$tmp"
+  [ -f "$USED" ] && awk -v d="$(period d)" -v m="$(period m)" -v pd="$pd" -v pm="$pm" '$1==d || $1==m || $1==pd || $1==pm' "$USED" > "$tmp"
   while read -r i mac dmb mmb name; do
     for k in d m; do
-      local u; u=$(used_live "$i" "$k"); [ -n "$u" ] || continue
-      awk -v i="$i" -v k="$k" '!($2==i && $3==k)' "$tmp" > "$tmp.2"; mv "$tmp.2" "$tmp"
-      echo "$(period "$k") $i $k $u $name" >> "$tmp"
+      local u p; u=$(used_live "$i" "$k"); [ -n "$u" ] || continue
+      [ "$k" = d ] && p=$pd || p=$pm
+      awk -v p="$p" -v i="$i" -v k="$k" '!($1==p && $2==i && $3==k)' "$tmp" > "$tmp.2"; mv "$tmp.2" "$tmp"
+      echo "$p $i $k $u $name" >> "$tmp"
     done
   done < <(qlist; alist | awk '{print $1, $2, 0, 0, $3}')
   mv "$tmp" "$USED"
+}
+
+# 오늘 하루 사용량만 0으로(한 달은 유지) — 버그로 어제치가 넘어온 날 한 번 쓰는 복구용
+reset_day() {
+  save_used
+  local d; d=$(period d)
+  [ -f "$USED" ] && { awk -v d="$d" '!($1==d && $3=="d")' "$USED" > "$USED.tmp"; mv "$USED.tmp" "$USED"; }
+  rm -f "$VAR"/wan_exceeded_"$d"_*_d
+  rm -f "$OPEN"
+  nft delete table inet $T 2>/dev/null
+  ruleset | nft -f - || { echo "nft 적용 실패"; return 1; }
+  period d > "$VAR/wan_day"
+  echo "오늘($d) 하루 사용량 0으로 다시 시작 (이번 달 사용량은 그대로)"
 }
 
 ruleset() {
@@ -233,7 +256,8 @@ case "${1:-}" in
   apply) apply ;;
   open) open_for "${2:-}" "${3:-}" ;;
   tick) tick ;;
+  reset-day) reset_day; status ;;
   status) status ;;
   print) ruleset ;;
-  *) echo "사용: $0 apply|open SEC|tick|status|print"; exit 2 ;;
+  *) echo "사용: $0 apply|open SEC|tick|status|print|reset-day"; exit 2 ;;
 esac
