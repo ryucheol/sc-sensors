@@ -10,7 +10,7 @@
   2) 허용 번호(SMS_ALLOWED)에서 온 문자 중 비밀 단어(SMS_PREFIX)로 시작하는 것만 명령으로 실행한다.
      명령은 텔레그램 봇과 같다(telegram_bot.normalize/execute → heater/sheet_cmd_poll.run). 예: `동지 상태`, `동지 동파`.
      비밀 단어만 보내면 `상태`. 60분 넘게 늦게 처리되는 제어 명령은 실행하지 않는다(텔레그램과 같은 규칙).
-  3) 결과를 짧게 줄여 문자로 답하고(SMS_REPLY_MAX 글자), 전체 결과는 텔레그램에도 남긴다(끊겼으면 대기열).
+  3) 결과를 단문(40자, 넘으면 통신사가 장문 MMS로 과금)으로 줄여 답하고, 전체 결과는 텔레그램에도 남긴다(끊겼으면 대기열).
      처리한 명령 문자는 지운다. 그 밖의 문자(통신사 안내 등)는 읽음 처리만 하고 남긴다.
   4) 경보: 텔레그램 대기열이 SMS_ALARM_AFTER_MIN분 넘게 못 나가고 있을 때(=인터넷 끊김) cabin_watch의 중요 경보가
      켜져 있으면 문자로 보낸다. 같은 경보는 SMS_ALARM_REPEAT_H시간에 한 번.
@@ -38,7 +38,7 @@ LOG = os.path.join(BASE, "sms_bot.log")
 LOCK = os.path.join(BASE, ".sms_bot.lock")
 HOST = "http://192.168.8.1"
 
-DEFAULTS = {"SMS_ALLOWED": "", "SMS_PREFIX": "", "SMS_MONTH_MAX": "80", "SMS_REPLY_MAX": "130",
+DEFAULTS = {"SMS_ALLOWED": "", "SMS_PREFIX": "", "SMS_MONTH_MAX": "80", "SMS_REPLY_MAX": "40",
             "SMS_ALARM": "1", "SMS_ALARM_AFTER_MIN": "20", "SMS_ALARM_REPEAT_H": "6", "SMS_TTL_MIN": "60"}
 ALWAYS_OK = ("상태", "현황", "센서", "경보", "도움")
 ALARM_KEYS = ("low_indoor", "heater_fault", "frost_stuck", "plug_comm", "controller_down", "overheat", "forecast_frost")
@@ -105,10 +105,10 @@ def compact(text, n):
 
 
 def segments(text):
-    """문자 조각 수: 영숫자(GSM)만이면 160/153, 한글 등이 있으면 70/67 글자."""
-    gsm = all(ord(ch) < 128 for ch in text)
-    one, multi = (160, 153) if gsm else (70, 67)
-    return 1 if len(text) <= one else math.ceil(len(text) / multi)
+    """요금 건수 추정: 국내 단문은 80바이트. 동글은 한글이 섞이면 글자당 2바이트(UCS2)라 40자, 영숫자만이면 80자.
+    넘으면 통신사가 장문(LMS/MMS)으로 바꿔 전달한다(11-18 휴대폰에 'MMS' 표시) → 넘지 않게 compact로 자른다."""
+    lim = 80 if all(ord(ch) < 128 for ch in text) else 40
+    return max(1, math.ceil(len(text) / lim))
 
 
 def month_key(now):
@@ -218,15 +218,52 @@ def tg_send(text):
         log("텔레그램 기록 실패: %s" % e)
 
 
+def _load(name):
+    try: return json.load(open(os.path.join(BASE, name), encoding="utf-8"))
+    except Exception: return {}
+
+
+MODE_KR = {"frost": "동파", "comfort": "난방", "sleep": "취침"}
+
+
+def short_status(state, status, latest, now):
+    """단문(40자) 상태: '동파 1층13.6 외8.4 히터끔 도착11/20 19시'."""
+    parts = [MODE_KR.get((status or {}).get("mode") or (state or {}).get("mode"), "?")]
+    for label, name in (("1층", "내부1층"), ("외", "바닥외부")):
+        v = (latest or {}).get(name) or {}
+        if v.get("temp") is not None and now - v.get("time_ms", 0) / 1000.0 < 3600:
+            parts.append("%s%.1f" % (label, v["temp"]))
+    if status:
+        parts.append(("히터%.0fW" % (status.get("watt") or 0)) if status.get("relay") else "히터끔")
+    arr = (state or {}).get("arrival") or {}
+    if arr.get("ts") and arr["ts"] > now:
+        t = time.localtime(arr["ts"])
+        parts.append("도착%d/%d %d시" % (t.tm_mon, t.tm_mday, t.tm_hour))
+    return " ".join(parts)
+
+
 def run_command(cmd):
     import telegram_bot as tb
     return tb.execute(tb.normalize(cmd))
 
 
+def sms_reply(cmd, full, n, now=None):
+    """문자 답장: 상태는 짧은 전용 문구, 나머지는 결과를 n글자로 줄임."""
+    import telegram_bot as tb
+    if tb.normalize(cmd).split(" ", 1)[0] in ("상태", "현황"):
+        try:
+            return compact(short_status(_load("heater_state.json"), _load("heater_status.json"),
+                                        _load("latest.json"), now or time.time()), n)
+        except Exception:
+            pass
+    return compact(full, n)
+
+
 # ── 한 번 처리 ────────────────────────────────────────────────────
-def process(api, cfg, st, now, runner=run_command, tg=tg_send):
+def process(api, cfg, st, now, runner=run_command, tg=tg_send, reply_fn=None):
     """문자함 처리 → 처리한 명령 목록."""
     done = []
+    reply_fn = reply_fn or (lambda c, full, n: sms_reply(c, full, n, now))
     for m in api.inbox():
         if not m["unread"]: continue
         try: api.set_read(m["index"])
@@ -247,7 +284,7 @@ def process(api, cfg, st, now, runner=run_command, tg=tg_send):
             try: reply = runner(cmd)
             except Exception as e: reply = "오류: %s" % e
         log("문자 명령 %s %r → %s" % (mask_phone(phone), cmd, reply.replace("\n", " | ")[:200]))
-        send_sms(api, st, cfg, m["phone"], compact(reply, cfg["SMS_REPLY_MAX"]), now, "답장")
+        send_sms(api, st, cfg, m["phone"], reply_fn(cmd, reply, cfg["SMS_REPLY_MAX"]), now, "답장")
         tg("📱 문자 명령 '%s'\n%s" % (cmd, reply))
         try: api.delete(m["index"])
         except Exception as e: log("삭제 실패 %s: %s" % (m["index"], e))
@@ -278,7 +315,7 @@ def alarm_step(api, cfg, st, now, backlog_min, decisions):
     to = sorted(cfg["allowed"])[0]
     for k, msg in alarm_messages(decisions):
         if now - last.get(k, 0) < cfg["SMS_ALARM_REPEAT_H"] * 3600: continue
-        text = compact("[농막 경보·인터넷 끊김 %.0f분] %s" % (backlog_min, msg), cfg["SMS_REPLY_MAX"])
+        text = compact("[농막경보] " + re.sub(r"\s*\(.*$|\s*·.*$", "", msg), cfg["SMS_REPLY_MAX"])
         if send_sms(api, st, cfg, to, text, now, "경보 " + k):
             last[k] = now; out.append(k)
     return out

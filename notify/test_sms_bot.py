@@ -13,7 +13,7 @@ NOW = time.mktime(time.strptime("2026-11-18 10:00:00", "%Y-%m-%d %H:%M:%S"))
 
 
 def cfg(**kw):
-    c = {"allowed": {"01011112222"}, "SMS_PREFIX": "동지", "SMS_MONTH_MAX": 80, "SMS_REPLY_MAX": 130,
+    c = {"allowed": {"01011112222"}, "SMS_PREFIX": "동지", "SMS_MONTH_MAX": 80, "SMS_REPLY_MAX": 40,
          "SMS_ALARM": True, "SMS_ALARM_AFTER_MIN": 20, "SMS_ALARM_REPEAT_H": 6, "SMS_TTL_MIN": 60}
     c.update(kw); return c
 
@@ -55,11 +55,20 @@ class Pure(unittest.TestCase):
         self.assertTrue(sb.compact("가" * 300, 130).endswith("…"))
 
     def test_segments(self):
-        self.assertEqual(sb.segments("a" * 160), 1)
-        self.assertEqual(sb.segments("a" * 161), 2)
-        self.assertEqual(sb.segments("가" * 70), 1)
-        self.assertEqual(sb.segments("가" * 71), 2)
-        self.assertEqual(sb.segments("가" * 130), 2)
+        self.assertEqual(sb.segments("a" * 80), 1)
+        self.assertEqual(sb.segments("a" * 81), 2)
+        self.assertEqual(sb.segments("가" * 40), 1)
+        self.assertEqual(sb.segments("가a" * 20 + "b"), 2)   # 한글 섞이면 영문도 2바이트
+
+    def test_short_status(self):
+        latest = {"내부1층": {"temp": 13.6, "time_ms": NOW * 1000}, "바닥외부": {"temp": 8.4, "time_ms": NOW * 1000}}
+        st = {"mode": "frost", "arrival": {"ts": NOW + 2 * 86400 + 9 * 3600}}
+        s = sb.short_status(st, {"mode": "frost", "relay": False, "watt": 0}, latest, NOW)
+        self.assertEqual(s, "동파 1층13.6 외8.4 히터끔 도착11/20 19시")
+        self.assertLessEqual(len(s), 40)
+        s = sb.short_status({"mode": "comfort"}, {"mode": "comfort", "relay": True, "watt": 1772},
+                            {"내부1층": {"temp": 20.0, "time_ms": (NOW - 7200) * 1000}}, NOW)
+        self.assertEqual(s, "난방 히터1772W")                              # 낡은 센서 값은 뺌
 
     def test_month_cap(self):
         st = {"sent": {"2026-11": 79}}
@@ -78,7 +87,8 @@ class Process(unittest.TestCase):
 
     def go(self, msgs, c=None, st=None):
         api = FakeApi(msgs); st = {} if st is None else st
-        done = sb.process(api, c or cfg(), st, NOW, runner=self.runner, tg=lambda t: self.tg.append(t))
+        done = sb.process(api, c or cfg(), st, NOW, runner=self.runner, tg=lambda t: self.tg.append(t),
+                          reply_fn=lambda cmd, full, n: sb.compact(full, n))
         return api, st, done
 
     def test_allowed_command_runs_replies_deletes(self):
@@ -117,7 +127,7 @@ class Process(unittest.TestCase):
 class Alarm(unittest.TestCase):
     def setUp(self):
         sb.tg_send = lambda t: None
-        self.dec = {"low_indoor": (True, "🥶 실내 저온: 내부1층 1.5°C", "ok"),
+        self.dec = {"low_indoor": (True, "🥶 실내 저온: 내부1층 1.5°C (동파 켜짐 기준 3.0°C보다 낮음) · 히터 꺼짐", "ok"),
                     "overheat": (False, "과열", "ok"), "sensor_lost": (True, "센서 끊김", "ok")}
 
     def test_no_alarm_while_telegram_ok(self):
@@ -129,7 +139,7 @@ class Alarm(unittest.TestCase):
         api = FakeApi([]); st = {}
         self.assertEqual(sb.alarm_step(api, cfg(), st, NOW, 30, self.dec), ["low_indoor"])   # sensor_lost는 문자 대상 아님
         self.assertEqual(api.sent[0][0], "01011112222")
-        self.assertIn("실내 저온", api.sent[0][1]); self.assertIn("인터넷 끊김 30분", api.sent[0][1])
+        self.assertEqual(api.sent[0][1], "[농막경보] 실내 저온: 내부1층 1.5°C")
         self.assertEqual(sb.alarm_step(api, cfg(), st, NOW + 3600, 90, self.dec), [])          # 6시간 안 재발송 없음
         self.assertEqual(sb.alarm_step(api, cfg(), st, NOW + 7 * 3600, 450, self.dec), ["low_indoor"])
 

@@ -241,9 +241,11 @@ E3372 HiLink 관리 API로 Pi가 문자를 읽고 보낼 수 있는지 확인했
 `send-sms` 요청 본문: `<request><Index>-1</Index><Phones><Phone>번호</Phone></Phones><Sca></Sca><Content>내용</Content><Length>글자수</Length><Reserved>1</Reserved><Date>YYYY-MM-DD hh:mm:ss</Date></request>`
 
 **구현 (2026-11-18, `notify/sms_bot.py`, cron 매분, 테스트 `notify/test_sms_bot.py` 15개)**
-- 설정 `sms.env`(gitignore, 예시 `sms.env.example`): 허용 번호 `SMS_ALLOWED`, 비밀 단어 `SMS_PREFIX`, 월 상한 `SMS_MONTH_MAX`(80조각), 답장 길이 `SMS_REPLY_MAX`(130자).
+- 설정 `sms.env`(gitignore, 예시 `sms.env.example`): 허용 번호 `SMS_ALLOWED`, 비밀 단어 `SMS_PREFIX`, 월 상한 `SMS_MONTH_MAX`(80건), 답장 길이 `SMS_REPLY_MAX`(40자).
 - 허용 번호 + `비밀단어 명령`만 실행(텔레그램 봇의 `normalize`/`execute` 재사용 → 명령 목록 동일). 비밀 단어만 보내면 `상태`. 60분 넘게 늦은 제어 명령은 만료.
-- 답장은 이모지 빼고 130자까지(한글 70자 넘으면 2조각으로 셈), 전체 결과는 텔레그램에도. 처리한 명령 문자는 삭제, 나머지는 읽음 처리만.
+- 답장은 **단문 40자 안**(이모지 제거). `상태`는 전용 짧은 문구(`동파 1층13.6 외8.3 히터끔 도착11/20 19시`), 전체 결과는 텔레그램에도.
+  - 이유: 첫 실전 답장(130자, 동글은 2조각으로 보냄)이 휴대폰에 **'MMS'**로 표시됨 → 통신사가 긴 문자를 장문으로 합쳐 전달, 무료 100건(단문) 밖 장문 요금(약 44원/건) 가능. 국내 단문은 80바이트이고 동글은 한글이 섞이면 글자당 2바이트라 **40자**.
+  - 요금(티플러스 가성비플러스 6GB, 공식 상세): 단문 100건 기본 뒤 22원, 사진 MMS 220원/건, 텍스트 장문은 안내마다 44원 등으로 다름. 받기는 무료. 처리한 명령 문자는 삭제, 나머지는 읽음 처리만.
 - 경보: 텔레그램 대기열이 20분 넘게 못 나가면(=인터넷 끊김) cabin_watch 중요 경보(저온·가열 안 됨·동파 중 안 꺼짐·플러그 통신·제어기·과열·동파 예보)를 문자로, 같은 경보 6시간에 한 번.
 - 상태 확인: `python3 notify/sms_bot.py status`(번호·본문 가림), 로그 `sms_bot.log`.
 - 실전 시험(11-18 06:43): `상태` 명령 → 2초 뒤 실행 → 답장 2조각 발신 성공 → 문자 삭제. `set-read`·`delete-sms` API 동작 확인.
