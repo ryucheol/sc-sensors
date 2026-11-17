@@ -225,3 +225,19 @@ python3 scripts/lte_signal_check.py 60 무안테나    # 안테나 빼고 1분
 2. `ssh pi '~/smart-cabin/scripts/wifi_uplink.sh "<SSID>" primary'`
 3. `gateway.env`에 `GW_PRESENCE_SSID=Ryuspot,<SSID>` → `sudo -n systemctl restart farmhut-gateway`
 4. 시험: 동글 켬(경로 wlan0) → 끔(LTE+차단) → 켬(복귀). 동글 채널은 Ryufarm 2.4 GHz와 겹치지 않게(또는 5 GHz).
+
+## 11. 동글 문자(SMS) 받기·보내기 시험 (2026-11-17 밤, Pi에서 원격)
+
+E3372 HiLink 관리 API로 Pi가 문자를 읽고 보낼 수 있는지 확인했다. 인터넷(LTE 데이터)이 끊겨도 문자는 통하므로 **텔레그램의 예비 통로**(명령 받기·최후 경보) 후보다. 전화번호·문자 내용은 여기 적지 않는다.
+
+| 항목 | 결과 |
+|---|---|
+| API | `/api/monitoring/check-notifications`(안 읽음 수), `/api/sms/sms-count`, `/api/sms/sms-list`(POST, BoxType 1=받은편지함 2=보낸편지함), `/api/sms/send-sms`, `/api/sms/send-status`. 로그인 없이 `SesTokInfo` 세션·토큰만 필요(`data_watch`·`lte_watch`와 같은 방식) |
+| 받기 (6 GB 유심) | ✅ 휴대폰에서 보낸 짧은 문자 `Test 123`·`한글` 모두 **본문까지** 몇 초 안에 수신. 한글 명령 사용 가능 |
+| 받기 한계 | 통신사 안내 문자 12건(114·대표번호 등)은 시각·발신번호는 있으나 **본문이 빈칸** → 긴 문자(LMS)는 이 펌웨어가 본문을 못 받는 것으로 추정. 명령은 짧게. 기아 커넥트 경로 공유 문자(링크 포함, 길 가능성)는 따로 시험 필요 |
+| 보내기 | ✅ `send-sms` → `OK`, `send-status` 성공 1·실패 0, 휴대폰 도착 확인(23:10). 요금: 월 100건 무료, 이후 건당 22원(사용자 확인) |
+| 저장 | 동글 내부 최대 500건(유심 20건). 목록 조회만으로는 읽음 표시가 바뀌지 않음 |
+
+`send-sms` 요청 본문: `<request><Index>-1</Index><Phones><Phone>번호</Phone></Phones><Sca></Sca><Content>내용</Content><Length>글자수</Length><Reserved>1</Reserved><Date>YYYY-MM-DD hh:mm:ss</Date></request>`
+
+**다음(결정 대기)**: 문자 명령 통로 — 허용 번호 + 비밀 단어(`동지 상태` 등)만 받아 `heater_cmd.py`로 실행, 결과 회신, 인터넷 단절 중 동파 위험 경보 문자. 매분 확인, 처리한 문자는 삭제, 월 발신 건수 상한(무료 100건 안).
