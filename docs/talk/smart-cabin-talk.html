@@ -139,7 +139,7 @@ svg text { font-family:Inter, sans-serif; }
     <div class="card" style="padding:10px"><h2 style="font-size:12px">SIM card</h2><p style="font-size:10.5px">6 GB LTE plan, ₩1,900 a month, KT network.</p></div>
     <div class="card" style="padding:10px"><h2 style="font-size:12px">New plug</h2><p style="font-size:10.5px">Shelly plug tested: local API, power meter, Bluetooth, scripts.</p></div>
     <div class="cardd" style="padding:10px"><h2 style="font-size:12px">Online</h2><p style="font-size:10.5px">LTE dongle on the Pi, remote login, Telegram bot, data guard, Shelly guard live.</p></div>
-    <div class="card" style="padding:10px"><h2 style="font-size:12px">Dashboard</h2><p style="font-size:10.5px">Sheet rebuilt: 5 views, heater kWh and cost, voice alerts via Home Mini.</p></div>
+    <div class="card" style="padding:10px"><h2 style="font-size:12px">Dashboard</h2><p style="font-size:10.5px">Sheet rebuilt: 5 views, heater energy, voice alerts via Home Mini.</p></div>
     <div class="card" style="padding:10px"><h2 style="font-size:12px">Backups</h2><p style="font-size:10.5px">SMS commands through the dongle, carry‑on Wi‑Fi dongle as first route.</p></div>
   </div>
   <div class="bar" style="margin-top:24px">The control rule did not change. Everything new is about watching, talking and failing safely.</div>
@@ -215,11 +215,7 @@ svg text { font-family:Inter, sans-serif; }
     <tr><td>Arrival</td><td>Hotspot or dongle appears, or a "heat" command</td><td>time and indoor temperature</td></tr>
     <tr><td>Departure</td><td>"frost" command, or no hotspot for 4 hours</td><td>time and how long the stay was</td></tr>
   </table>
-  <div class="grid g3" style="margin-top:16px">
-    <div class="card"><span class="tag">next</span><h2 style="margin-top:6px">Car hotspot</h2><p>The car's Wi‑Fi turns on with the ignition. Its appearance means "arriving"; it vanishing alone is ambiguous.</p></div>
-    <div class="card"><span class="tag">next</span><h2 style="margin-top:6px">Thermometer in a bag</h2><p>A spare Bluetooth sensor carried around: seen in the last 10 minutes = someone is here.</p></div>
-    <div class="card"><span class="tag">later</span><h2 style="margin-top:6px">Car data API</h2><p>Location and parking status from the carmaker. Open in Europe only for now.</p></div>
-  </div>
+  <div class="bar" style="margin-top:18px">Nobody has to remember to tell the cabin. Carrying the dongle is enough.</div>
   <div class="foot"><span>Smart Cabin · Autonomous Heating</span><span>8 / 21</span></div>
 </section>
 
@@ -267,15 +263,14 @@ svg text { font-family:Inter, sans-serif; }
       </g>
     </svg>
     <div>
-      <p style="margin-bottom:8px">Nights with someone there cost 5–6 kWh. Empty days cost nothing so far: sun and stored heat keep the cabin above the 3 °C frost line.</p>
+      <p style="margin-bottom:8px">Nights with someone there use 5–6 kWh. Empty days have needed no heating so far: sun and stored heat keep the cabin above the 3 °C frost line.</p>
       <table><tr><th>Sheet view</th><th>Shows</th></tr>
         <tr><td>Now</td><td>live values, heater mode, tonight's frost risk, to‑dos</td></tr>
         <tr><td>5 days</td><td>hourly temperature and humidity</td></tr>
-        <tr><td>Heating</td><td>kWh, running hours, cost for any period</td></tr>
+        <tr><td>Heating</td><td>heater energy and running hours</td></tr>
         <tr><td>Season</td><td>daily low–high bars, like a weather app</td></tr>
         <tr><td>Forecast</td><td>forecast vs what really happened</td></tr>
       </table>
-      <p style="margin-top:8px">Farm electricity ≈ ₩90 per kWh, so a heated weekend costs about ₩1,000.</p>
     </div>
   </div>
   <div class="foot"><span>Smart Cabin · Autonomous Heating · real data, 8–17 Nov 2026</span><span>10 / 21</span></div>
@@ -350,7 +345,7 @@ svg text { font-family:Inter, sans-serif; }
     <div class="card"><h2>Time limits · fault detection</h2><p>No command for 36 h → frost mode. Plug ON but under 100 W for 5 min → heater broken, alert.</p></div>
     <div class="card"><h2>Off the internet <span class="new">NEW</span></h2><p>If LTE data dies, alerts and commands still go by SMS through the same dongle.</p></div>
   </div>
-  <div class="obar" style="margin-top:14px">Each layer fails toward ON. Too warm costs a few hundred won; frozen pipes cost a season.</div>
+  <div class="obar" style="margin-top:14px">Each layer fails toward ON. A room that is too warm is a small waste; frozen pipes ruin a season.</div>
   <div class="foot"><span>Smart Cabin · Autonomous Heating</span><span>14 / 21</span></div>
 </section>
 
