@@ -1,0 +1,498 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<title>Smart Cabin: Autonomous Heating System</title>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600;700&family=Noto+Sans+Lao:wght@700&family=JetBrains+Mono:wght@500&display=swap" rel="stylesheet">
+<style>
+@page { size: 960px 540px; margin: 0; }
+:root { --bg:#f4f1ea; --card:#fbfaf6; --line:#e2ddd2; --ink:#1d2433; --mute:#5b6270; --orange:#e8823a; --rust:#b9531d; --blue:#2f6aa8; --green:#2e8b57; --dark:#1d2433; --peach:#f8dcc6; }
+* { box-sizing:border-box; margin:0; padding:0; }
+body { font-family:Inter, sans-serif; color:var(--ink); background:#888; }
+.s { width:960px; height:540px; background:var(--bg); position:relative; overflow:hidden; page-break-after:always; padding:36px 48px 0 48px; }
+.s.dark { background:var(--dark); color:#eef0f4; }
+.k { font-size:10.5px; letter-spacing:1.4px; text-transform:uppercase; color:var(--rust); font-weight:600; }
+.dark .k { color:var(--orange); }
+h1 { font-family:'Space Grotesk',sans-serif; font-size:30px; font-weight:600; margin-top:6px; letter-spacing:-.3px; }
+h2 { font-family:'Space Grotesk',sans-serif; font-size:15px; font-weight:600; margin-bottom:5px; }
+p, li { font-size:11.5px; line-height:1.45; color:var(--mute); }
+.dark p, .dark li { color:#c8ccd6; }
+.foot { position:absolute; left:48px; right:48px; bottom:18px; font-size:9px; color:#8a8f99; display:flex; justify-content:space-between; }
+.card { background:var(--card); border:1px solid var(--line); border-radius:8px; padding:14px 16px; }
+.cardd { background:var(--dark); color:#eef0f4; border-radius:8px; padding:14px 16px; }
+.cardd p, .cardd li { color:#c8ccd6; }
+.cardd h2 { color:#fff; }
+.grid { display:grid; gap:12px; }
+.g2 { grid-template-columns:1fr 1fr; } .g3 { grid-template-columns:1fr 1fr 1fr; } .g4 { grid-template-columns:repeat(4,1fr); }
+.bar { background:var(--dark); color:#fff; border-radius:8px; padding:12px 18px; font-weight:600; font-size:13px; }
+.obar { background:var(--orange); color:#1d2433; border-radius:8px; padding:12px 18px; font-weight:600; font-size:13px; }
+table { width:100%; border-collapse:collapse; font-size:11.5px; }
+th { text-align:left; font-weight:600; background:#ebe6db; padding:6px 8px; border-bottom:1px solid var(--line); }
+td { padding:6px 8px; border-bottom:1px solid var(--line); color:#3a404c; }
+.dark th { background:#2a3243; color:#fff; border-color:#384154; } .dark td { color:#d6dae2; border-color:#384154; }
+.big { font-family:'Space Grotesk',sans-serif; font-size:30px; font-weight:700; color:var(--orange); }
+.mono { font-family:'JetBrains Mono',monospace; font-size:11px; }
+.tag { display:inline-block; font-size:9.5px; font-weight:600; padding:2px 7px; border-radius:10px; background:var(--peach); color:var(--rust); }
+.new { display:inline-block; font-size:8.5px; font-weight:700; padding:1px 6px; border-radius:8px; background:var(--orange); color:#fff; margin-left:6px; vertical-align:2px; letter-spacing:.5px; }
+ul { padding-left:16px; }
+svg text { font-family:Inter, sans-serif; }
+</style></head><body>
+
+<!-- 1 -->
+<section class="s dark" style="padding:0">
+  <div style="position:absolute; right:-140px; top:-60px; width:620px; height:620px; border-radius:50%; background:radial-gradient(circle, #e8823a 0%, rgba(232,130,58,.55) 30%, rgba(29,36,51,0) 68%);"></div>
+  <div style="position:absolute; left:58px; top:118px;">
+    <div style="font-family:'Noto Sans Lao'; font-size:22px; font-weight:700;">ສະບາຍດີ!</div>
+    <div class="k" style="margin-top:8px">Sabaidee! · Student talk · revised edition</div>
+    <div style="font-family:'Space Grotesk'; font-size:46px; font-weight:600; line-height:1.08; margin-top:14px;">A Cabin That Keeps<br>Itself Warm</div>
+    <p style="margin-top:16px; font-size:13px; max-width:430px;">An autonomous heating system built with a Raspberry Pi, Bluetooth thermometers and a smart plug, now online through a ₩1,900-a-month LTE line</p>
+    <p style="margin-top:16px; font-size:10.5px;">RYU Cheol · ETRI · first given 6 November 2026 · updated 18 November 2026</p>
+  </div>
+</section>
+
+<!-- 2 -->
+<section class="s">
+  <div class="k">The problem</div><h1>An empty cabin in winter</h1>
+  <div class="grid g3" style="margin-top:22px">
+    <div class="card"><h2>Pipes can freeze</h2><p>Nobody is there for weeks. Water pipes crack when the cabin gets too cold.</p></div>
+    <div class="card"><h2>Warm on arrival</h2><p>On a visit the cabin should already be comfortable, without heating all week.</p></div>
+    <div class="card"><h2>Internet is a bonus</h2><p>The cabin is now online, but a link can drop at any moment. Every decision is still made on site.</p></div>
+  </div>
+  <div class="bar" style="margin-top:22px">Goal: protect the cabin automatically. Use the internet to watch and talk, never to decide.</div>
+  <div class="grid g3" style="margin-top:16px">
+    <div class="card" style="grid-column:span 3; display:flex; gap:28px; align-items:center">
+      <div><div class="big">8 Nov</div><p>Offline. Data left only when a visitor's phone hotspot was on.</p></div>
+      <div style="font-size:26px; color:var(--orange)">→</div>
+      <div><div class="big">18 Nov</div><p>Online all the time: logs every minute, alerts by Telegram and SMS, remote login.</p></div>
+    </div>
+  </div>
+  <div class="foot"><span>Smart Cabin · Autonomous Heating</span><span>2 / 21</span></div>
+</section>
+
+<!-- 3 -->
+<section class="s">
+  <div class="k">The cabin</div><h1>Three levels, three sensors</h1>
+  <div style="display:flex; gap:18px; margin-top:16px">
+    <svg width="430" height="300" viewBox="0 0 430 300">
+      <rect x="0" y="0" width="430" height="300" rx="8" fill="#fbfaf6" stroke="#e2ddd2"/>
+      <text x="10" y="18" font-size="9.5" fill="#8a8f99">Not to scale</text>
+      <rect x="230" y="30" width="130" height="66" fill="#f8dcc6" stroke="#1d2433" stroke-width="1.5"/>
+      <text x="245" y="50" font-size="10.5" font-weight="600" fill="#1d2433">Attic · 3 m × 4 m</text>
+      <circle cx="252" cy="66" r="5" fill="#2f6aa8"/><text x="262" y="70" font-size="10" fill="#1d2433">Attic sensor</text>
+      <rect x="70" y="96" width="290" height="140" fill="#fbfaf6" stroke="#1d2433" stroke-width="1.5"/>
+      <rect x="70" y="140" width="100" height="6" fill="#1d2433"/><text x="76" y="134" font-size="10" fill="#1d2433">Mezzanine</text>
+      <circle cx="255" cy="166" r="5" fill="#2f6aa8"/><text x="265" y="170" font-size="10" fill="#1d2433">Inside sensor</text>
+      <text x="265" y="190" font-size="10" font-weight="600" fill="#1d2433">Ground floor</text>
+      <rect x="90" y="214" width="34" height="20" fill="#b9531d"/><text x="88" y="208" font-size="10" fill="#1d2433">Heater</text>
+      <rect x="70" y="236" width="290" height="14" fill="#e2ddd2"/>
+      <line x1="90" y1="250" x2="90" y2="280" stroke="#1d2433" stroke-width="3"/><line x1="340" y1="250" x2="340" y2="280" stroke="#1d2433" stroke-width="3"/>
+      <circle cx="140" cy="262" r="5" fill="#2f6aa8"/><text x="150" y="266" font-size="10" fill="#1d2433">Outside sensor, under the floor</text>
+      <text x="368" y="66" font-size="10" fill="#5b6270">2 m</text><text x="368" y="170" font-size="10" fill="#5b6270">3 m</text>
+      <text x="250" y="292" font-size="9.5" fill="#5b6270">Raised floor on posts</text>
+    </svg>
+    <img src="cabin.jpg" style="width:404px; height:300px; object-fit:cover; border-radius:8px">
+  </div>
+  <p style="margin-top:12px">Ground floor 3 m high · attic 2 m high · mezzanine open to the ceiling · raised floor on posts · Buyeo, South Korea</p>
+  <div class="foot"><span>Smart Cabin · Autonomous Heating</span><span>3 / 21</span></div>
+</section>
+
+<!-- 4 -->
+<section class="s">
+  <div class="k">Big picture</div><h1>Sense, think, act</h1>
+  <svg width="864" height="110" viewBox="0 0 864 110" style="margin-top:22px">
+    <defs><marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z" fill="#5b6270"/></marker></defs>
+    <g font-size="11">
+      <rect x="0" y="20" width="118" height="54" rx="6" fill="#2f6aa8"/><text x="12" y="44" fill="#fff" font-weight="600">Sensors</text><text x="12" y="60" fill="#dbe6f3" font-size="9.5">Bluetooth, every minute</text>
+      <rect x="148" y="20" width="118" height="54" rx="6" fill="#2f6aa8"/><text x="160" y="44" fill="#fff" font-weight="600">Gateway</text><text x="160" y="60" fill="#dbe6f3" font-size="9.5">Raspberry Pi</text>
+      <rect x="296" y="20" width="118" height="54" rx="6" fill="#ebe6db"/><text x="308" y="44" fill="#1d2433" font-weight="600">latest.json</text><text x="308" y="60" fill="#5b6270" font-size="9.5">one shared file</text>
+      <rect x="444" y="20" width="118" height="54" rx="6" fill="#1d2433"/><text x="456" y="44" fill="#fff" font-weight="600">Controller</text><text x="456" y="60" fill="#c8ccd6" font-size="9.5">Python, every minute</text>
+      <rect x="592" y="20" width="118" height="54" rx="6" fill="#b9531d"/><text x="604" y="44" fill="#fff" font-weight="600">Smart plug</text><text x="604" y="60" fill="#f8dcc6" font-size="9.5">Shelly, Wi‑Fi (LAN)</text>
+      <rect x="740" y="20" width="118" height="54" rx="6" fill="#b9531d"/><text x="752" y="44" fill="#fff" font-weight="600">Heater</text><text x="752" y="60" fill="#f8dcc6" font-size="9.5">0.7–1.8 kW</text>
+      <path d="M120 47H144M268 47H292M416 47H440M564 47H588M712 47H736" stroke="#5b6270" stroke-width="2" marker-end="url(#a)"/>
+      <rect x="0" y="92" width="10" height="10" fill="#2f6aa8"/><text x="16" y="101" font-size="10" fill="#5b6270">Sense</text>
+      <rect x="64" y="92" width="10" height="10" fill="#1d2433"/><text x="80" y="101" font-size="10" fill="#5b6270">Think</text>
+      <rect x="126" y="92" width="10" height="10" fill="#b9531d"/><text x="142" y="101" font-size="10" fill="#5b6270">Act</text>
+    </g>
+  </svg>
+  <div class="grid g3" style="margin-top:22px">
+    <div class="card"><h2>Separate programs</h2><p>Gateway, controller, uploader, Telegram bot and SMS bot share only files. If one crashes, the others keep running.</p></div>
+    <div class="card"><h2>Local first</h2><p>The heater loop never waits for the internet. Sheets, Telegram and remote login are extras on top.</p></div>
+    <div class="card"><h2>One command path</h2><p>Sheet, Telegram and SMS all end in the same small program, so "frost" means the same thing everywhere.</p></div>
+  </div>
+  <div class="foot"><span>Smart Cabin · Autonomous Heating</span><span>4 / 21</span></div>
+</section>
+
+<!-- 5 -->
+<section class="s">
+  <div class="k">Ten days later</div><h1>What changed since the first talk</h1>
+  <svg width="864" height="90" viewBox="0 0 864 90" style="margin-top:14px">
+    <line x1="20" y1="60" x2="844" y2="60" stroke="#c9c2b4" stroke-width="2"/>
+    <g font-size="11">
+      <circle cx="40" cy="60" r="7" fill="#1d2433"/><text x="40" y="38" text-anchor="middle" font-weight="700" fill="#1d2433">8 Nov</text>
+      <circle cx="200" cy="60" r="7" fill="#1d2433"/><text x="200" y="38" text-anchor="middle" font-weight="700" fill="#1d2433">11 Nov</text>
+      <circle cx="360" cy="60" r="7" fill="#1d2433"/><text x="360" y="38" text-anchor="middle" font-weight="700" fill="#1d2433">13 Nov</text>
+      <circle cx="520" cy="60" r="9" fill="#e8823a"/><text x="520" y="38" text-anchor="middle" font-weight="700" fill="#b9531d">15 Nov · cabin visit</text>
+      <circle cx="680" cy="60" r="7" fill="#1d2433"/><text x="680" y="38" text-anchor="middle" font-weight="700" fill="#1d2433">16 Nov</text>
+      <circle cx="830" cy="60" r="7" fill="#1d2433"/><text x="826" y="38" text-anchor="middle" font-weight="700" fill="#1d2433">17 Nov</text>
+    </g>
+  </svg>
+  <div style="margin-top:4px; display:grid; grid-template-columns:repeat(6,1fr); gap:8px;">
+    <div class="card" style="padding:10px"><h2 style="font-size:12px">Offline</h2><p style="font-size:10.5px">Talk given. Data leaves only via a phone hotspot.</p></div>
+    <div class="card" style="padding:10px"><h2 style="font-size:12px">SIM card</h2><p style="font-size:10.5px">6 GB LTE plan, ₩1,900 a month, KT network.</p></div>
+    <div class="card" style="padding:10px"><h2 style="font-size:12px">New plug</h2><p style="font-size:10.5px">Shelly plug tested: local API, power meter, Bluetooth, scripts.</p></div>
+    <div class="cardd" style="padding:10px"><h2 style="font-size:12px">Online</h2><p style="font-size:10.5px">LTE dongle on the Pi, remote login, Telegram bot, data guard, Shelly guard live.</p></div>
+    <div class="card" style="padding:10px"><h2 style="font-size:12px">Dashboard</h2><p style="font-size:10.5px">Sheet rebuilt: 5 views, heater kWh and cost, voice alerts via Home Mini.</p></div>
+    <div class="card" style="padding:10px"><h2 style="font-size:12px">Backups</h2><p style="font-size:10.5px">SMS commands through the dongle, carry‑on Wi‑Fi dongle as first route.</p></div>
+  </div>
+  <div class="bar" style="margin-top:24px">The control rule did not change. Everything new is about watching, talking and failing safely.</div>
+  <div class="foot"><span>Smart Cabin · Autonomous Heating</span><span>5 / 21</span></div>
+</section>
+
+<!-- 6 -->
+<section class="s">
+  <div class="k">Network · now</div><h1>How the devices talk today</h1>
+  <svg width="864" height="336" viewBox="0 0 864 336" style="margin-top:6px">
+    <defs><marker id="b" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#5b6270"/></marker></defs>
+    <g font-size="10.5">
+      <rect x="0" y="0" width="864" height="64" rx="8" fill="#ebe6db"/><text x="12" y="20" font-size="10" font-weight="700" fill="#5b6270">INTERNET</text>
+      <rect x="110" y="12" width="150" height="40" rx="6" fill="#2e8b57"/><text x="122" y="30" fill="#fff" font-weight="600">Google Sheets</text><text x="122" y="44" fill="#d7efe0" font-size="9.5">log and dashboard</text>
+      <rect x="276" y="12" width="150" height="40" rx="6" fill="#2f6aa8"/><text x="288" y="30" fill="#fff" font-weight="600">Telegram bot</text><text x="288" y="44" fill="#dbe6f3" font-size="9.5">commands and alerts</text>
+      <rect x="442" y="12" width="150" height="40" rx="6" fill="#5b6270"/><text x="454" y="30" fill="#fff" font-weight="600">Weather service</text><text x="454" y="44" fill="#e4e6ea" font-size="9.5">KMA forecast, free API</text>
+      <rect x="608" y="12" width="150" height="40" rx="6" fill="#1d2433"/><text x="620" y="30" fill="#fff" font-weight="600">Tailscale</text><text x="620" y="44" fill="#c8ccd6" font-size="9.5">remote login, no open port</text>
+      <rect x="0" y="118" width="200" height="62" rx="6" fill="#fbfaf6" stroke="#2f6aa8" stroke-width="1.5"/><text x="12" y="138" fill="#1d2433" font-weight="600">LTE dongle · USB</text><text x="12" y="154" fill="#5b6270" font-size="9.5">6 GB a month, always on</text><text x="12" y="168" fill="#5b6270" font-size="9.5">also sends and receives SMS</text>
+      <rect x="300" y="112" width="250" height="74" rx="6" fill="#1d2433"/><text x="314" y="134" fill="#fff" font-weight="600" font-size="12">Raspberry Pi</text><text x="314" y="151" fill="#c8ccd6" font-size="9.5">gateway · controller · router</text><text x="314" y="166" fill="#c8ccd6" font-size="9.5">data guard: who may use LTE</text>
+      <rect x="650" y="118" width="214" height="62" rx="6" fill="#fbfaf6" stroke="#e8823a" stroke-width="1.5"/><text x="662" y="138" fill="#1d2433" font-weight="600">Carry‑on Wi‑Fi dongle</text><text x="662" y="154" fill="#5b6270" font-size="9.5">or phone hotspot, 100 GB</text><text x="662" y="168" fill="#b9531d" font-size="9.5" font-weight="600">used first when someone is there</text>
+      <path d="M100 118V64M757 118V64" stroke="#5b6270" stroke-width="1.5"/>
+      <path d="M202 149H298" stroke="#5b6270" stroke-width="1.5" marker-end="url(#b)" marker-start="url(#b)"/><text x="214" y="142" fill="#5b6270" font-size="9.5">USB</text>
+      <path d="M552 149H648" stroke="#5b6270" stroke-width="1.5" stroke-dasharray="4 3" marker-end="url(#b)" marker-start="url(#b)"/><text x="566" y="142" fill="#5b6270" font-size="9.5">Wi‑Fi</text>
+      <rect x="0" y="246" width="150" height="56" rx="6" fill="#2f6aa8"/><text x="12" y="268" fill="#fff" font-weight="600">Sensors × 3</text><text x="12" y="284" fill="#dbe6f3" font-size="9.5">Bluetooth broadcasts</text>
+      <rect x="210" y="246" width="170" height="56" rx="6" fill="#fbfaf6" stroke="#5b6270"/><text x="222" y="268" fill="#1d2433" font-weight="600">Access point</text><text x="222" y="284" fill="#5b6270" font-size="9.5">Wi‑Fi "Ryufarm"</text>
+      <rect x="440" y="246" width="130" height="56" rx="6" fill="#b9531d"/><text x="452" y="268" fill="#fff" font-weight="600">Shelly plug</text><text x="452" y="284" fill="#f8dcc6" font-size="9.5">switch · meter · guard</text>
+      <rect x="600" y="246" width="100" height="56" rx="6" fill="#b9531d"/><text x="612" y="268" fill="#fff" font-weight="600">Heater</text><text x="612" y="284" fill="#f8dcc6" font-size="9.5">1.8 kW max</text>
+      <rect x="730" y="246" width="134" height="56" rx="6" fill="#fbfaf6" stroke="#5b6270"/><text x="742" y="268" fill="#1d2433" font-weight="600">Home Mini, fan</text><text x="742" y="284" fill="#5b6270" font-size="9.5">voice alerts, aux heater</text>
+      <path d="M340 186L90 246" stroke="#2f6aa8" stroke-width="1.5" stroke-dasharray="4 3"/><text x="150" y="220" fill="#2f6aa8" font-size="9.5">Bluetooth</text>
+      <path d="M420 186L300 246" stroke="#5b6270" stroke-width="1.5"/><text x="366" y="226" fill="#5b6270" font-size="9.5">LAN cable</text>
+      <path d="M380 274H438" stroke="#5b6270" stroke-width="1.5" stroke-dasharray="4 3"/><path d="M380 250C520 212 700 212 797 246" fill="none" stroke="#5b6270" stroke-width="1.5" stroke-dasharray="4 3"/><text x="388" y="268" fill="#5b6270" font-size="9.5">Wi‑Fi</text>
+      <path d="M572 274H598" stroke="#5b6270" stroke-width="2" marker-end="url(#b)"/>
+      <path d="M75 302V318H505V302" fill="none" stroke="#2f6aa8" stroke-width="1.2" stroke-dasharray="2 3"/><text x="200" y="332" fill="#2f6aa8" font-size="9.5">Bluetooth: the plug also hears the sensors itself</text>
+    </g>
+  </svg>
+  <div class="foot"><span>Smart Cabin · Autonomous Heating · solid = wired, dashed = wireless</span><span>6 / 21</span></div>
+</section>
+
+<!-- 7 -->
+<section class="s">
+  <div class="k">Data budget</div><h1>Living on 6 GB a month</h1>
+  <div style="display:grid; grid-template-columns:1.15fr 1fr; gap:16px; margin-top:16px">
+    <div>
+      <table>
+        <tr><th>Device on the cabin Wi‑Fi</th><th>LTE allowed</th><th>Why</th></tr>
+        <tr><td>Raspberry Pi itself</td><td>always</td><td>logs, alerts, forecast</td></tr>
+        <tr><td>Shelly heater plug</td><td>always</td><td>its own forecast and clock</td></tr>
+        <tr><td>Home Mini speaker</td><td>50 MB a day · 500 MB a month</td><td>one video would eat a week</td></tr>
+        <tr><td>Fan, aux heater plugs</td><td>5 MB a day · 30 MB a month</td><td>cloud app as a spare remote</td></tr>
+        <tr><td>Phone left in the cabin</td><td>100 MB a day · 700 MB a month</td><td>messages only</td></tr>
+        <tr><td>Everything else (laptops…)</td><td>blocked</td><td>use the carry‑on dongle</td></tr>
+      </table>
+      <p style="margin-top:8px">The Pi is the router, so one firewall table decides. Limits reset at midnight and on the 1st; a Telegram message says when one is reached.</p>
+    </div>
+    <div class="grid" style="grid-template-rows:auto auto auto; gap:10px">
+      <div class="cardd"><p style="color:#c8ccd6">Used so far this month · 18 Nov, 06:46</p><div class="big">456 MB <span style="font-size:16px; color:#c8ccd6">/ 6 GB · 7.4 %</span></div></div>
+      <div class="card"><h2>Alerts</h2><p>Every 10 minutes the Pi reads the dongle's own counter. Telegram at 50, 70, 85 and 95 %, and at once if one hour uses over 200 MB.</p></div>
+      <div class="card" style="border-color:#e8823a"><h2>Lessons measured</h2><p>A remote AI session left open used 4–9 MB an hour. One installer took 130 MB. A speed test can take 100 MB. Do big things only on the carry‑on dongle.</p></div>
+    </div>
+  </div>
+  <div class="foot"><span>Smart Cabin · Autonomous Heating</span><span>7 / 21</span></div>
+</section>
+
+<!-- 8 -->
+<section class="s">
+  <div class="k">Presence</div><h1>The cabin knows when you are there</h1>
+  <div class="grid g2" style="margin-top:18px">
+    <div class="card"><h2>Someone is there</h2><p>The phone hotspot or the carry‑on Wi‑Fi dongle appears. The Pi joins it and sends everything through it first: fast, no limits, no LTE data used.</p></div>
+    <div class="card"><h2>Nobody is there</h2><p>The dongle leaves with its owner. Within a minute the Pi falls back to LTE, and the data guard switches back on by itself.</p></div>
+  </div>
+  <table style="margin-top:16px">
+    <tr><th>Event</th><th>Signal</th><th>Written to the Sheet</th></tr>
+    <tr><td>Arrival</td><td>Hotspot or dongle appears, or a "heat" command</td><td>time and indoor temperature</td></tr>
+    <tr><td>Departure</td><td>"frost" command, or no hotspot for 4 hours</td><td>time and how long the stay was</td></tr>
+  </table>
+  <div class="grid g3" style="margin-top:16px">
+    <div class="card"><span class="tag">next</span><h2 style="margin-top:6px">Car hotspot</h2><p>The car's Wi‑Fi turns on with the ignition. Its appearance means "arriving"; it vanishing alone is ambiguous.</p></div>
+    <div class="card"><span class="tag">next</span><h2 style="margin-top:6px">Thermometer in a bag</h2><p>A spare Bluetooth sensor carried around: seen in the last 10 minutes = someone is here.</p></div>
+    <div class="card"><span class="tag">later</span><h2 style="margin-top:6px">Car data API</h2><p>Location and parking status from the carmaker. Open in Europe only for now.</p></div>
+  </div>
+  <div class="foot"><span>Smart Cabin · Autonomous Heating</span><span>8 / 21</span></div>
+</section>
+
+<!-- 9 -->
+<section class="s">
+  <div class="k">Sense</div><h1>Cheap sensors, quietly listening</h1>
+  <div style="display:grid; grid-template-columns:1.2fr 1fr; gap:18px; margin-top:16px">
+    <div>
+      <h2>Xiaomi LYWSD03MMC + open pvvx firmware</h2><p>A small Bluetooth thermometer and hygrometer, about US$4 each. A new reading every minute since 7–8 Nov.</p>
+      <h2 style="margin-top:12px">Passive listening, now by two receivers</h2><p>The Pi never connects; it only hears broadcasts. The Shelly plug now hears the same sensors itself, so the heater can be guarded even when the Pi is down.</p>
+      <h2 style="margin-top:12px">Encrypted messages</h2><p>Each sensor has its own key. Both the Pi and the plug decrypt with AES‑CCM. Keys never leave the cabin network.</p>
+      <h2 style="margin-top:12px">Store and forward</h2><p>Readings queue on the Pi; when the link returns, missing hours are sent in order.</p>
+    </div>
+    <div>
+      <table><tr><th>Sensor</th><th>Used for</th></tr>
+        <tr><td>Inside</td><td>Frost and comfort control</td></tr>
+        <tr><td>Outside</td><td>Outdoor temperature, garden frost</td></tr>
+        <tr><td>Attic</td><td>Sleeping mode and backup</td></tr>
+        <tr><td>CO₂ monitor</td><td>Air quality, second backup</td></tr>
+      </table>
+      <img src="thermo.jpg" style="width:100%; height:120px; object-fit:cover; border-radius:8px; margin-top:12px">
+    </div>
+  </div>
+  <div class="foot"><span>Smart Cabin · Autonomous Heating</span><span>9 / 21</span></div>
+</section>
+
+<!-- 10 -->
+<section class="s">
+  <div class="k">Data</div><h1>Every reading lands in a Google Sheet</h1>
+  <div style="display:grid; grid-template-columns:1.35fr 1fr; gap:16px; margin-top:12px">
+    <svg width="500" height="330" viewBox="0 0 500 330">
+      <rect width="500" height="330" rx="8" fill="#fbfaf6" stroke="#e2ddd2"/>
+      <text x="16" y="22" font-size="11" font-weight="600" fill="#1d2433">Heater energy per day (bars, kWh) and daily mean temperature (lines, °C)</text>
+      <g font-size="9" fill="#8a8f99">
+        <line x1="46" y1="280" x2="476" y2="280" stroke="#c9c2b4"/>
+        <line x1="46" y1="225" x2="476" y2="225" stroke="#ece7dd"/><line x1="46" y1="170" x2="476" y2="170" stroke="#ece7dd"/><line x1="46" y1="115" x2="476" y2="115" stroke="#ece7dd"/><line x1="46" y1="60" x2="476" y2="60" stroke="#ece7dd"/>
+        <text x="40" y="283" text-anchor="end">0</text><text x="40" y="228" text-anchor="end">5</text><text x="40" y="173" text-anchor="end">10</text><text x="40" y="118" text-anchor="end">15</text><text x="40" y="63" text-anchor="end">20</text>
+      </g>
+      <g id="bars"></g>
+      <g font-size="9.5">
+        <rect x="56" y="300" width="10" height="8" fill="#e8823a"/><text x="70" y="308" fill="#5b6270">heater kWh</text>
+        <rect x="140" y="303" width="14" height="3" fill="#b9531d"/><text x="158" y="308" fill="#5b6270">ground floor °C</text>
+        <rect x="250" y="303" width="14" height="3" fill="#2e8b57"/><text x="268" y="308" fill="#5b6270">outside °C</text>
+        <text x="350" y="308" fill="#8a8f99">same scale: 1 kWh = 1 °C</text>
+      </g>
+    </svg>
+    <div>
+      <p style="margin-bottom:8px">Nights with someone there cost 5–6 kWh. Empty days cost nothing so far: sun and stored heat keep the cabin above the 3 °C frost line.</p>
+      <table><tr><th>Sheet view</th><th>Shows</th></tr>
+        <tr><td>Now</td><td>live values, heater mode, tonight's frost risk, to‑dos</td></tr>
+        <tr><td>5 days</td><td>hourly temperature and humidity</td></tr>
+        <tr><td>Heating</td><td>kWh, running hours, cost for any period</td></tr>
+        <tr><td>Season</td><td>daily low–high bars, like a weather app</td></tr>
+        <tr><td>Forecast</td><td>forecast vs what really happened</td></tr>
+      </table>
+      <p style="margin-top:8px">Farm electricity ≈ ₩90 per kWh, so a heated weekend costs about ₩1,000.</p>
+    </div>
+  </div>
+  <div class="foot"><span>Smart Cabin · Autonomous Heating · real data, 8–17 Nov 2026</span><span>10 / 21</span></div>
+</section>
+
+<!-- 11 -->
+<section class="s dark">
+  <div class="k">Act</div><h1>A smarter plug switches the heater</h1>
+  <div class="grid g3" style="margin-top:18px">
+    <div class="cardd" style="background:#2a3243"><div class="big">3 steps</div><p>720, 1,102 or 1,763 W, chosen on the heater. The plug's meter tells the Pi which step is set.</p></div>
+    <div class="cardd" style="background:#2a3243"><div class="big">Local API</div><p>Commands travel Pi → Wi‑Fi → plug. No cloud in the control loop, password protected.</p></div>
+    <div class="cardd" style="background:#2a3243"><div class="big">Scripts</div><p>The plug runs its own small JavaScript program: a second brain next to the heater.</p></div>
+  </div>
+  <p style="margin-top:20px; font-size:12.5px"><b style="color:#fff">Why the meter matters:</b> plug ON but almost no power → the heater has failed. Step known → preheat time can be computed.</p>
+  <p style="margin-top:10px; font-size:12.5px"><b style="color:#fff">A bug we found:</b> the first reading after switching on is partly from the OFF time. 1,763 W looked like 1,049 W, so the Pi thought "step 2". Now it waits 2 minutes and takes the median of 3 readings.</p>
+  <img src="plug.jpg" style="position:absolute; right:48px; bottom:46px; width:150px; height:96px; object-fit:cover; border-radius:8px; opacity:.9">
+  <div class="foot"><span>Smart Cabin · Autonomous Heating</span><span>11 / 21</span></div>
+</section>
+
+<!-- 12 -->
+<section class="s">
+  <div class="k">Think</div><h1>Three modes, one simple rule</h1>
+  <div style="display:grid; grid-template-columns:1fr 1fr; gap:18px; margin-top:16px">
+    <div>
+      <ul><li>Below the ON value: heater ON</li><li>Above the OFF value: heater OFF</li><li>In between: keep the current state</li></ul>
+      <p style="margin-top:8px">Why a gap? Without it the relay would click every minute.</p>
+    </div>
+    <svg width="400" height="96" viewBox="0 0 400 96"><rect width="400" height="96" rx="8" fill="#fbfaf6" stroke="#e2ddd2"/><rect x="10" y="30" width="380" height="30" fill="#f8dcc6"/><polyline points="10,60 70,30 120,60 180,30 230,60 290,30 340,60 390,30" fill="none" stroke="#1d2433" stroke-width="1.5"/><text x="12" y="24" font-size="9.5" fill="#5b6270">OFF value</text><text x="12" y="76" font-size="9.5" fill="#5b6270">ON value</text></svg>
+  </div>
+  <table style="margin-top:16px">
+    <tr><th>Mode</th><th>When</th><th>Sensor</th><th>ON below / OFF above</th></tr>
+    <tr><td>Frost</td><td>Nobody is there</td><td>Inside</td><td>3 °C / 5 °C</td></tr>
+    <tr><td>Comfort</td><td>You have arrived</td><td>Inside</td><td>23 °C / 23.5 °C</td></tr>
+    <tr><td>Sleep</td><td>Sleeping in the attic</td><td>Attic</td><td>20 °C / 21 °C</td></tr>
+  </table>
+  <div class="card" style="margin-top:14px"><p><b style="color:#1d2433">Same commands from anywhere:</b> <span class="mono">frost</span> · <span class="mono">heat 23</span> · <span class="mono">sleep</span> · <span class="mono">arrive 11-20 19:00</span> · <span class="mono">status</span>, typed in the Sheet, sent by Telegram, or texted to the dongle.</p></div>
+  <div class="foot"><span>Smart Cabin · Autonomous Heating</span><span>12 / 21</span></div>
+</section>
+
+<!-- 13 -->
+<section class="s">
+  <div class="k">Plan ahead</div><h1>"I arrive Friday 19:00": warm on arrival</h1>
+  <div style="display:grid; grid-template-columns:1fr 1fr; gap:14px; margin-top:14px">
+    <div class="card">
+      <h2>Start early by</h2>
+      <p class="mono" style="color:#1d2433; margin-top:4px">τ × ln( (T_eq − T_in) / (T_eq − T_target) ) × margin</p>
+      <p class="mono" style="color:#1d2433">T_eq = T_out + P / UA</p>
+      <p style="margin-top:6px">τ = 9.16 h · UA = 47 W/K · P = the measured step (1,763 W) · margin 1.25 · at most 10 h</p>
+    </div>
+    <div class="cardd">
+      <h2 style="color:#f3b07e">Recomputed every minute</h2>
+      <p>The Pi uses the indoor temperature now, the forecast low until arrival, and the plug's real power. If the forecast turns colder, the start moves earlier.</p>
+    </div>
+  </div>
+  <div class="grid g3" style="margin-top:14px">
+    <div class="card"><h2>1. Book it</h2><p>One message: <span class="mono">arrive 11-20 19:00</span>. The reply shows the date with its weekday, so a wrong date is easy to spot.</p></div>
+    <div class="card"><h2>2. Predict</h2><p>Simulate the empty cabin cooling toward the forecast: 27 °C today, about 3 °C by Friday morning → start ≈ 09:00.</p></div>
+    <div class="card"><h2>3. No show?</h2><p>Nobody confirms within 3 hours of arrival time: back to frost mode.</p></div>
+  </div>
+  <p style="margin-top:12px">Old rule ("every Friday 20:00") was switched off on 14 Nov. Real visits are not on a schedule.</p>
+  <div class="foot"><span>Smart Cabin · Autonomous Heating</span><span>13 / 21</span></div>
+</section>
+
+<!-- 14 -->
+<section class="s">
+  <div class="k">Safety first</div><h1>Assume that things will fail</h1>
+  <div class="grid g3" style="margin-top:16px">
+    <div class="cardd"><h2 style="color:#f3b07e">1 · Dead‑man timer</h2><p>While the heater is OFF the Pi renews the plug's own "turn on in 30 min" timer every 5 min. Pi dead → the timer runs out → heater ON.</p></div>
+    <div class="cardd"><h2 style="color:#f3b07e">2 · Guard inside the plug <span class="new">NEW</span></h2><p>The plug hears the sensors, fetches the forecast itself and gets a heartbeat from the Pi. No heartbeat for 10 min → it keeps 3–5 °C on its own.</p></div>
+    <div class="card"><h2>Boot grace</h2><p>After a power cut the plug waits 10 min before acting, so Pi and plug never fight, and the Pi never mistakes the plug for a person.</p></div>
+    <div class="card"><h2>Stale sensor</h2><p>No fresh reading for 45 min in frost mode → heater ON.</p></div>
+    <div class="card"><h2>Time limits · fault detection</h2><p>No command for 36 h → frost mode. Plug ON but under 100 W for 5 min → heater broken, alert.</p></div>
+    <div class="card"><h2>Off the internet <span class="new">NEW</span></h2><p>If LTE data dies, alerts and commands still go by SMS through the same dongle.</p></div>
+  </div>
+  <div class="obar" style="margin-top:14px">Each layer fails toward ON. Too warm costs a few hundred won; frozen pipes cost a season.</div>
+  <div class="foot"><span>Smart Cabin · Autonomous Heating</span><span>14 / 21</span></div>
+</section>
+
+<!-- 15 -->
+<section class="s">
+  <div class="k">Talking to the cabin</div><h1>Four ways in, four ways out</h1>
+  <table style="margin-top:16px">
+    <tr><th>Channel</th><th>In: commands</th><th>Out: what the cabin says</th><th>Needs</th></tr>
+    <tr><td><b>Telegram bot</b></td><td>status, heat, frost, arrive …</td><td>alerts, data warnings, replies</td><td>internet</td></tr>
+    <tr><td><b>Google Sheet</b></td><td>a "commands" tab, polled every minute</td><td>dashboard, results next to each command</td><td>internet</td></tr>
+    <tr><td><b>SMS to the dongle</b> <span class="new">NEW</span></td><td>a short code word + command, from allowed numbers</td><td>40‑letter replies, alarm when offline</td><td>mobile signal only</td></tr>
+    <tr><td><b>Voice</b></td><td>(planned: "Hey Google, heating 23")</td><td>Home Mini speaks; falls back to a wired speaker</td><td>cabin Wi‑Fi</td></tr>
+  </table>
+  <div class="grid g3" style="margin-top:16px">
+    <div class="card"><h2>Free and cheap</h2><p>Telegram is free. SMS: 100 short texts a month are in the ₩1,900 plan; the bot stops at 80.</p></div>
+    <div class="card"><h2>Same brain</h2><p>All four end in one command program with one lock, so two messages can never clash.</p></div>
+    <div class="card"><h2>Speaks when it matters</h2><p>"Open the door, 26 °C", "the heater draws no power", a time signal every 20 min while you are there.</p></div>
+  </div>
+  <div class="foot"><span>Smart Cabin · Autonomous Heating</span><span>15 / 21</span></div>
+</section>
+
+<!-- 16 -->
+<section class="s">
+  <div class="k">Weather service</div><h1>Using the public forecast</h1>
+  <div style="display:grid; grid-template-columns:1fr 1.3fr; gap:14px; margin-top:14px">
+    <div class="cardd">
+      <h2 style="color:#f3b07e">The feed</h2>
+      <ul><li>Korea Meteorological Administration open API, free key</li><li>Short‑range: 8 issues a day, 72 h, 5 km grid</li><li>Mid‑range: days 4–10, twice a day</li><li>Observed values from the nearest station (Buyeo)</li><li>The Pi syncs it into the Sheet every 30 min; the plug fetches the next 6 h itself</li></ul>
+    </div>
+    <div>
+      <table><tr><th>Use</th><th>How</th></tr>
+        <tr><td>Can this heater step hold?</td><td>warmest room = T_out + P / UA</td></tr>
+        <tr><td>Preheat start</td><td>forecast low until arrival</td></tr>
+        <tr><td>Plug guard</td><td>min(outside sensor, 6 h forecast)</td></tr>
+        <tr><td>Garden frost</td><td>station forecast − 1 to 3 °C on clear, calm nights</td></tr>
+        <tr><td>Forecast check</td><td>yesterday 23:00 forecast vs today measured</td></tr>
+      </table>
+      <div class="card" style="margin-top:10px; background:#fdf1e7; border-color:#f3c9a6"><p><b style="color:#1d2433">Why the garden correction:</b> on 7, 8 and 10 Nov the station forecast stayed above 0 °C, yet there was frost in the garden. Clear sky + no wind = 2–4 °C colder at ground level.</p></div>
+    </div>
+  </div>
+  <div class="foot"><span>Smart Cabin · Autonomous Heating</span><span>16 / 21</span></div>
+</section>
+
+<!-- 17 -->
+<section class="s">
+  <div class="k">Prove it</div><h1>Going online brought new bugs</h1>
+  <div class="grid g3" style="margin-top:16px">
+    <div class="card"><span class="tag">16 Nov</span><h2 style="margin-top:6px">"11-20" meant today</h2><p>The arrival command did not know the short date form, quietly ignored it, and booked 19:00 <i>today</i>. Fix: understand 11-20, 11/20, "20 Nov"; refuse unknown words; show the weekday.</p></div>
+    <div class="card"><span class="tag">17 Nov</span><h2 style="margin-top:6px">Limits never reset</h2><p>At midnight yesterday's counter was saved under today's date, so the speaker stayed blocked a second day. Found by reading the status text; reproduced with a fake firewall; fixed.</p></div>
+    <div class="card"><span class="tag">17 Nov</span><h2 style="margin-top:6px">Step 3 read as step 2</h2><p>One power sample right after switching on. Fix: wait, then the median of three. A test now pins the exact numbers seen.</p></div>
+  </div>
+  <div style="display:grid; grid-template-columns:1fr 1.4fr; gap:14px; margin-top:16px">
+    <div class="cardd"><p style="color:#c8ccd6">Automated tests</p><div class="big">57 → 255</div><p>Decision logic is pure functions, so it runs on a laptop with no heater, plug or internet.</p></div>
+    <div class="card"><h2>The pattern</h2><p>Each bug was a <b style="color:#1d2433">silent default</b>: an unknown word ignored, a date assumed, one sample trusted. Offline code fails loudly in the cabin; online code fails quietly, far away. So: reject what you do not understand, and echo it back to the human.</p></div>
+  </div>
+  <div class="foot"><span>Smart Cabin · Autonomous Heating</span><span>17 / 21</span></div>
+</section>
+
+<!-- 18 -->
+<section class="s">
+  <div class="k">Firmware update · 7–8 November</div><h1>Teaching the sensors to speak every minute</h1>
+  <div style="display:grid; grid-template-columns:1fr 1.15fr; gap:16px; margin-top:16px">
+    <div>
+      <h2>The problem we found</h2><p>The stock firmware broadcast every 2 seconds, but the value only changed every 12 minutes. The controller was always acting on old news.</p>
+      <h2 style="margin-top:12px">What we did</h2><p>Flashed the open‑source pvvx firmware over Bluetooth from a laptop browser, no cable. Kept Xiaomi's encrypted format, so the gateway code did not change. Measure every 20 s, broadcast every 5 s.</p>
+    </div>
+    <table><tr><th>Measured in the cabin</th><th>Stock</th><th>pvvx</th></tr>
+      <tr><td>New reading every</td><td>12 min</td><td>1 min</td></tr>
+      <tr><td>Overshoot past the OFF value</td><td>+0.4 °C</td><td>+0.1 °C</td></tr>
+      <tr><td>Temperature swing per cycle</td><td>1.1 °C</td><td>0.7 °C</td></tr>
+      <tr><td>Radio bursts per minute</td><td>29</td><td>12</td></tr>
+      <tr><td>Battery shown</td><td>"100 %"</td><td>67–96 % real</td></tr>
+    </table>
+  </div>
+  <div class="bar" style="margin-top:18px">Lesson: the control rule never changed. The sensor's <span style="color:#f3b07e">latency</span>, not its accuracy, was the whole problem.</div>
+  <div class="foot"><span>Smart Cabin · Autonomous Heating</span><span>18 / 21</span></div>
+</section>
+
+<!-- 19 -->
+<section class="s">
+  <div class="k">Next · learn</div><h1>Let the cabin learn its own physics</h1>
+  <div style="display:grid; grid-template-columns:1.25fr 1fr; gap:14px; margin-top:14px">
+    <div class="cardd">
+      <h2 style="color:#f3b07e">Two heat balances, six unknowns</h2>
+      <p class="mono" style="color:#fff">C₁·dT₁/dt = P·u − UA₁(T₁−T_out) − G(T₁−T₂) + a·Sun</p>
+      <p class="mono" style="color:#fff">C₂·dT₂/dt = G(T₁−T₂) − UA₂(T₂−T_out)</p>
+      <p style="margin-top:6px">T₁ ground floor, T₂ attic · C heat capacity · UA heat loss · G coupling between floors · a window area · u heater on/off · P measured watts</p>
+    </div>
+    <div class="card"><h2>Data, now uploaded every hour</h2><ul><li>Indoor temperatures and plug power, every minute</li><li>Station observations: wind, cloud, sunshine</li><li>Every forecast issued, to score it later</li><li>Arrivals and departures</li></ul></div>
+  </div>
+  <div class="grid g3" style="margin-top:14px">
+    <div class="card"><h2>Why it matters</h2><p>On 16 Nov the attic reached 29 °C with the heater off. A sunny window can beat the heater.</p></div>
+    <div class="card"><h2>Fit, then trust</h2><p>First fit 15 Nov; validation 29 Nov. Held‑out days must predict within 0.3 °C an hour ahead.</p></div>
+    <div class="card"><h2>Then use it</h2><p>Start later on a sunny day, earlier on a cloudy one. Let the sun finish the job.</p></div>
+  </div>
+  <div class="foot"><span>Smart Cabin · Autonomous Heating</span><span>19 / 21</span></div>
+</section>
+
+<!-- 20 -->
+<section class="s dark">
+  <div class="k">Your turn</div><h1>What would you build in Laos?</h1>
+  <div class="grid g3" style="margin-top:20px">
+    <div class="cardd" style="background:#2a3243"><h2 style="color:#f3b07e">Cooling</h2><p>Fans or air conditioners that run only when a room is too hot.</p></div>
+    <div class="cardd" style="background:#2a3243"><h2 style="color:#f3b07e">Greenhouse</h2><p>Keep temperature and humidity in range, even when the network is down.</p></div>
+    <div class="cardd" style="background:#2a3243"><h2 style="color:#f3b07e">Storage rooms</h2><p>Protect rice, coffee or seeds from heat and damp.</p></div>
+  </div>
+  <div class="obar" style="margin-top:22px">Discussion 1: when your system fails, what is the safe state, ON or OFF?</div>
+  <div class="obar" style="margin-top:10px; background:#f3b07e">Discussion 2: what new ways to fail does the internet add, and how would you notice them?</div>
+  <p style="margin-top:20px; font-size:13px; color:#fff">Code and notes: <u>github.com/ryucheol/sc-sensors</u></p>
+  <div class="foot"><span>Smart Cabin · Autonomous Heating</span><span>20 / 21</span></div>
+</section>
+
+<!-- 21 -->
+<section class="s">
+  <div class="k">What it takes</div><h1>Parts and budget</h1>
+  <div style="display:grid; grid-template-columns:repeat(6,1fr); gap:8px; margin-top:12px">
+    <div class="card" style="padding:8px"><img src="pi.jpg" style="width:100%; height:70px; object-fit:cover; border-radius:5px"><h2 style="font-size:11.5px; margin-top:6px">Raspberry Pi 4 + SD</h2><p style="color:#b9531d; font-weight:600">$60–90 est.</p></div>
+    <div class="card" style="padding:8px"><img src="thermo.jpg" style="width:100%; height:70px; object-fit:cover; border-radius:5px"><h2 style="font-size:11.5px; margin-top:6px">Thermometer × 3</h2><p style="color:#b9531d; font-weight:600">₩17,544 · $12.5</p></div>
+    <div class="card" style="padding:8px"><img src="plug.jpg" style="width:100%; height:70px; object-fit:cover; border-radius:5px"><h2 style="font-size:11.5px; margin-top:6px">Shelly plug <span class="new">NEW</span></h2><p style="color:#b9531d; font-weight:600">₩14,600 · $10.4</p></div>
+    <div class="card" style="padding:8px"><div style="height:70px; border-radius:5px; background:#ebe6db; display:flex; align-items:center; justify-content:center; font-size:22px; font-weight:700; color:#2f6aa8">LTE</div><h2 style="font-size:11.5px; margin-top:6px">LTE dongle <span class="new">NEW</span></h2><p style="color:#b9531d; font-weight:600">₩31,700 · $22.6</p></div>
+    <div class="card" style="padding:8px"><div style="height:70px; border-radius:5px; background:#ebe6db; display:flex; align-items:center; justify-content:center; font-size:15px; font-weight:700; color:#2f6aa8">SIM 6 GB</div><h2 style="font-size:11.5px; margin-top:6px">LTE plan <span class="new">NEW</span></h2><p style="color:#b9531d; font-weight:600">₩1,900 · $1.4 / month</p></div>
+    <div class="card" style="padding:8px"><img src="heater.jpg" style="width:100%; height:70px; object-fit:cover; border-radius:5px"><h2 style="font-size:11.5px; margin-top:6px">Electric heater</h2><p style="color:#b9531d; font-weight:600">₩59,900 · $42.8</p></div>
+  </div>
+  <div style="display:flex; align-items:center; gap:24px; margin-top:14px; background:#1d2433; color:#fff; border-radius:8px; padding:14px 20px">
+    <div><p style="color:#c8ccd6">Total, now online</p><div class="big">$150–180</div></div>
+    <p style="color:#c8ccd6; max-width:420px">+ $1.4 a month. The old Wi‑Fi plug (₩4,650) still runs a spare heater. Optional: carry‑on Wi‑Fi dongle ₩41,500, a used access point.</p>
+    <div style="margin-left:auto; background:#e8823a; color:#1d2433; font-weight:700; border-radius:8px; padding:12px 18px; font-size:16px">Questions?</div>
+  </div>
+  <p style="margin-top:10px; font-size:9.5px">Prices paid Nov 2026, ₩1,400 = US$1. Photos: Wikimedia Commons, Laserlicht and J. Hallick (CC BY-SA 4.0), product listing images.</p>
+  <div class="foot"><span>Smart Cabin · Autonomous Heating</span><span>21 / 21</span></div>
+</section>
+
+<script>
+// slide 10 chart: real daily values from the Heating sheet (8–17 Nov 2026)
+const d=[['11-08',4.8,22.2,8.5],['11-09',0,13.4,8.1],['11-10',0,13.9,6.5],['11-11',0,16.3,8.9],['11-12',0,14.4,8.1],['11-13',5.3,16.7,11.3],['11-14',0,17.7,12.2],['11-15',5.3,19.1,12.7],['11-16',6.1,23.5,10.8],['11-17',0,17.4,11.8]];
+const g=document.getElementById('bars'); const ns='http://www.w3.org/2000/svg';
+const X=i=>66+i*41, Y=v=>280-v*11; let p1='',p2='';
+d.forEach((r,i)=>{ if(r[1]>0){const b=document.createElementNS(ns,'rect'); b.setAttribute('x',X(i)-11); b.setAttribute('y',Y(r[1])); b.setAttribute('width',22); b.setAttribute('height',280-Y(r[1])); b.setAttribute('fill','#e8823a'); b.setAttribute('rx',2); g.appendChild(b);
+  const t=document.createElementNS(ns,'text'); t.setAttribute('x',X(i)); t.setAttribute('y',Y(r[1])-4); t.setAttribute('text-anchor','middle'); t.setAttribute('font-size','9'); t.setAttribute('fill','#b9531d'); t.textContent=r[1]; g.appendChild(t);}
+  const l=document.createElementNS(ns,'text'); l.setAttribute('x',X(i)); l.setAttribute('y',293); l.setAttribute('text-anchor','middle'); l.setAttribute('font-size','8.5'); l.setAttribute('fill','#8a8f99'); l.textContent=r[0]; g.appendChild(l);
+  p1+=(i?'L':'M')+X(i)+' '+Y(r[2]); p2+=(i?'L':'M')+X(i)+' '+Y(r[3]); });
+[[p1,'#b9531d'],[p2,'#2e8b57']].forEach(([p,c])=>{const e=document.createElementNS(ns,'path'); e.setAttribute('d',p); e.setAttribute('fill','none'); e.setAttribute('stroke',c); e.setAttribute('stroke-width',2); g.appendChild(e);});
+const n=document.createElementNS(ns,'text'); n.setAttribute('x',X(9)); n.setAttribute('y',Y(17.4)-8); n.setAttribute('text-anchor','middle'); n.setAttribute('font-size','8.5'); n.setAttribute('fill','#8a8f99'); n.textContent='part day'; g.appendChild(n);
+</script>
+</body></html>
