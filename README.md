@@ -1,6 +1,6 @@
 # Smart Cabin — A Cabin That Keeps Itself Warm
 
-**[📑 Talk slides (PDF, 21 pages, English, updated 18 Nov 2026)](docs/smart-cabin-talk.pdf)** · iATER 특강 "A Cabin That Keeps Itself Warm" (RYU Cheol, ETRI, Nov 2026)
+**[📑 Talk slides (PDF, 20 pages, English, updated 18 Nov 2026)](docs/smart-cabin-talk.pdf)** · iATER 특강 "A Cabin That Keeps Itself Warm" (RYU Cheol, ETRI, Nov 2026)
 
 > **For students:** this repository is the real system behind the talk. A small farm cabin in Korea is empty most of the winter. A Raspberry Pi listens to three cheap Bluetooth thermometers, decides whether a heater should run, switches it through a smart plug — with no internet needed for the decision — and logs everything to a Google Sheet when a connection exists. Total hardware about **US$150**. Every slide below points to the code or document that implements it. Start with the PDF, then follow the table in §2.
 
@@ -147,7 +147,7 @@ smart-cabin/
 
 | 문서 | 내용 |
 |---|---|
-| [docs/smart-cabin-talk.pdf](docs/smart-cabin-talk.pdf) | 특강 슬라이드(영문 21쪽, 11-18 온라인 반영 개정, 원본 [docs/talk/](docs/talk/)) |
+| [docs/smart-cabin-talk.pdf](docs/smart-cabin-talk.pdf) | 특강 슬라이드(영문 20쪽, 11-18 온라인 반영 개정, 원본 [docs/talk/](docs/talk/)) |
 | [docs/PVVX_B16_FLASH.ko.md](docs/PVVX_B16_FLASH.ko.md) | 센서 펌웨어 전환: 분석·절차·설정·검증·드리프트 실측 |
 | [docs/THERMAL_MODEL.ko.md](docs/THERMAL_MODEL.ko.md) | 열모델 학습 계획·데이터·성층·습도·우선순위 |
 | [docs/ENERGY_SAVINGS.ko.md](docs/ENERGY_SAVINGS.ko.md) | 정밀 제어와 전력 절약 정량화 |
