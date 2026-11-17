@@ -104,3 +104,8 @@ aux.log
 # 아침 난방 예약 런타임
 wake.json
 wake.log
+
+# 문자 명령 통로(notify/sms_bot.py) 런타임 — sms.env 는 위 *.env 규칙으로 제외
+sms_state.json
+sms_state.json.tmp
+.sms_bot.lock
