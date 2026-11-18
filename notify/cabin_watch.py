@@ -193,7 +193,7 @@ def evaluate(now, cfg, state, status, latest, fc, fc_mtime=None):
             msg = "❄ 동파 %s: %d시간 예보 최저 %s°C (%s)" % ("위험" if danger else "주의", N["forecast_hours"], _f1(tmin), when)
             if t_eq is not None:
                 stage = (status or {}).get("stage")
-                msg += " · 지금 히터 %s단 %.0fW면 실내 최저 약 %s°C" % (stage or "?", pw, _f1(t_eq))
+                msg += " · 히터 %s단 %.0fW로 유지 가능한 온도 약 %s°C" % (stage or "?", pw, _f1(t_eq))
                 if danger: msg += " → 히터 단을 올리세요(동파 켜짐 기준 %s°C)" % _f1(frost["on"])
             msg += " · 모드 %s" % mode_kr
             if mode != "frost": msg += " (떠날 때 동파 모드 확인)"
