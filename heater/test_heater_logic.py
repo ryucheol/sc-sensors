@@ -292,3 +292,34 @@ class TestArrival(unittest.TestCase):
         s = st(arrival={"ts": arr_ts, "target": 23})
         start, lead = hc.arrival_plan(CFG, s, 5, 0, 720)   # 1단·외기 0 → 도달 불가 → 최대 선행
         self.assertEqual(lead, CFG["preheat"]["max_lead_hours"])
+
+
+class PreheatPower(unittest.TestCase):
+    """무인 예열은 보조 히터도 함께 돈다 → 선행시간 계산에 보조 W를 더해 덜 일찍 시작(11-20)."""
+    def aux(self, age_s, now=1_800_000_000):
+        return {"updated": datetime.datetime.fromtimestamp(now - age_s).strftime("%Y-%m-%d %H:%M:%S"), "on": False}
+
+    def test_adds_aux_when_fresh(self):
+        now = 1_800_000_000
+        self.assertEqual(hc.preheat_power(CFG, 1772, self.aux(60, now), now), 1772 + 470)
+
+    def test_main_only_when_aux_stale_or_missing(self):
+        now = 1_800_000_000
+        self.assertEqual(hc.preheat_power(CFG, 1772, self.aux(3600, now), now), 1772)
+        self.assertEqual(hc.preheat_power(CFG, 1772, None, now), 1772)
+        self.assertEqual(hc.preheat_power(CFG, 1772, {"updated": "garbage"}, now), 1772)
+
+    def test_disabled_by_config(self):
+        now = 1_800_000_000
+        cfg = dict(CFG); cfg["aux"] = {"enabled": True, "preheat_boost": False}
+        self.assertEqual(hc.preheat_power(cfg, 1772, self.aux(60, now), now), 1772)
+        cfg["aux"] = {"enabled": False}
+        self.assertEqual(hc.preheat_power(cfg, 1772, self.aux(60, now), now), 1772)
+
+    def test_falls_back_to_config_watts(self):
+        self.assertEqual(hc.preheat_power(CFG, None, None), CFG["preheat"]["heater_watts"])
+
+    def test_shorter_lead_with_aux(self):
+        main = hc.preheat_lead_hours(CFG, 8.8, -3, 1772)
+        both = hc.preheat_lead_hours(CFG, 8.8, -3, 1772 + 470)
+        self.assertLess(both, main - 2)   # 11-20 조건: 약 9.6h → 6h 안팎

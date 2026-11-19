@@ -132,6 +132,26 @@ def advice_speech(adv):
     return (adv.replace("°C", "도").replace("W로", "와트로").replace("W ", "와트 ").replace("→", ", ")
                .replace("·", ", ").replace("%", "퍼센트"))
 
+AUX_STATUS = os.path.join(BASE, "aux_status.json")
+
+def preheat_power(cfg, stage_w, aux_status=None, now_ts=None, fresh_s=900):
+    """도착 예열 선행시간 계산용 출력(W, 순수). 메인 단 W(없으면 preheat.heater_watts)에, 보조 히터가 예열 보강에
+       쓰이는 경우(aux.enabled·aux.preheat_boost, 보조 플러그가 최근 fresh_s 안에 응답) 보조 W(aux.watts, 기본 470)를 더한다.
+       무인 예열은 시끄러워도 되므로 함께 돌려 예열을 짧게 → 덜 일찍 시작해 데우는 동안 새는 열이 준다(사용자 11-20)."""
+    base = stage_w or cfg["preheat"]["heater_watts"]
+    a = cfg.get("aux") or {}
+    if not a.get("enabled", True) or not a.get("preheat_boost", True) or not aux_status:
+        return base
+    try:
+        age = (now_ts or time.time()) - datetime.datetime.strptime(aux_status["updated"], "%Y-%m-%d %H:%M:%S").timestamp()
+    except Exception:
+        return base
+    return base + a.get("watts", 470) if 0 <= age <= fresh_s else base
+
+def load_aux_status(path=None):
+    try: return json.load(open(path or AUX_STATUS))
+    except Exception: return None
+
 def preheat_lead_hours(cfg, t_in, t_out, P=None):
     p = cfg["preheat"]
     tgt, tau, ua = p["target_temp"], p["tau_hours"], p["ua_w_per_k"]
@@ -434,9 +454,10 @@ def main():
             # ── 스케줄: 금요일 적응형 예열 / 노쇼 복귀 / 안전 백스톱 ──
             _arr = st.get("arrival") or {}
             _t_fc = forecast_min_temp(hours=max(1.0, (_arr["ts"] - now()) / 3600.0)) if _arr.get("ts") else None
-            changed, slogs = schedule_step(cfg, st, t_floor_est, t_out, datetime.datetime.now(), now(), stage_w, _t_fc)
-            arr_start, arr_lead = arrival_plan(cfg, st, t_floor_est, _t_fc if _t_fc is not None else t_out, stage_w) if st.get("arrival") else (None, None)
-            arr_pred = (predict_arrival_start(cfg, st, t_floor_est, now(), forecast_series(), t_out, stage_w)
+            p_pre = preheat_power(cfg, stage_w, load_aux_status())   # 메인 + (응답하는) 보조 히터
+            changed, slogs = schedule_step(cfg, st, t_floor_est, t_out, datetime.datetime.now(), now(), p_pre, _t_fc)
+            arr_start, arr_lead = arrival_plan(cfg, st, t_floor_est, _t_fc if _t_fc is not None else t_out, p_pre) if st.get("arrival") else (None, None)
+            arr_pred = (predict_arrival_start(cfg, st, t_floor_est, now(), forecast_series(), t_out, p_pre)
                         if st.get("arrival") and st.get("mode") != "comfort" else (None, None, None))
             for m in slogs: log(m)
             if changed: save_atomic(STATE, st)

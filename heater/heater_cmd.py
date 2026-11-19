@@ -99,6 +99,7 @@ def arrival_cmd(args):
         t_fc = hc.forecast_min_temp(hours=max(1.0, (dt.timestamp() - time.time()) / 3600.0))
         try: P = json.load(open(os.path.join(BASE, "heater_status.json"))).get("stage_w")
         except Exception: P = None
+        P = hc.preheat_power(cfg, P, hc.load_aux_status(os.path.join(BASE, "aux_status.json")))   # 메인 + 보조
         start, lead = hc.arrival_plan(cfg, st, t_in, t_fc if t_fc is not None else t_out, P)
         print("도착 예약: %s 에 %g°C — 현재 내부 %s°C, 예보 최저 %s°C, 히터 %sW 기준 선행 %.1fh → 예상 시작 %s%s"
               % (dt.strftime("%m-%d(%a) %H:%M").replace("Mon","월").replace("Tue","화").replace("Wed","수").replace("Thu","목").replace("Fri","금").replace("Sat","토").replace("Sun","일"), target, t_in, "?" if t_fc is None else t_fc, int(P) if P else cfg["preheat"]["heater_watts"],
