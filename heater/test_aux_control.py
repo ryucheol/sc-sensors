@@ -47,5 +47,32 @@ class Decide(unittest.TestCase):
         self.assertIsNone(ac.floor_temp({"내부1층": {"temp": 2.0, "time_ms": (N - 3600) * 1000}}, N, 15))
 
 
+class SelfTest(unittest.TestCase):
+    def st(self, h_ahead, mode="frost"):
+        return {"mode": mode, "arrival": {"ts": N + h_ahead * 3600, "target": 23.5}}
+
+    def test_due_within_window_once(self):
+        self.assertTrue(ac.selftest_due(N, C, self.st(8), {}, False, {}))
+        self.assertFalse(ac.selftest_due(N, C, self.st(8), {}, False, {"selftest_for": N + 8 * 3600}))   # 이 예약은 이미
+
+    def test_not_due(self):
+        self.assertFalse(ac.selftest_due(N, C, self.st(30), {}, False, {}))            # 아직 멂
+        self.assertFalse(ac.selftest_due(N, C, self.st(-1), {}, False, {}))            # 지난 예약
+        self.assertFalse(ac.selftest_due(N, C, self.st(8, "comfort"), {}, False, {}))  # 이미 예열 중
+        self.assertFalse(ac.selftest_due(N, C, self.st(8), {}, True, {}))              # 사람이 있음
+        self.assertFalse(ac.selftest_due(N, C, self.st(8), {"mode": "off", "ts": N - 60}, False, {}))   # 수동 끄기
+        self.assertFalse(ac.selftest_due(N, C, {"mode": "frost"}, {}, False, {}))      # 예약 없음
+
+    def test_observe(self):
+        m = ac.observe(N, C, True, 470, {})
+        self.assertTrue(m["heat_ok"])
+        m = ac.observe(N, C, True, 0, m)                      # 막 0 W: 아직 판정 안 함
+        self.assertTrue(m["heat_ok"])
+        m = ac.observe(N + C["bad_after_s"], C, True, 0, m)   # 2분 이어짐 → 안 됨
+        self.assertFalse(m["heat_ok"])
+        m = ac.observe(N + 999, C, False, 0, m)               # 꺼져 있으면 판정 유지
+        self.assertFalse(m["heat_ok"])
+
+
 if __name__ == "__main__":
     unittest.main()

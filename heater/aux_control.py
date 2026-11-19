@@ -11,6 +11,10 @@
      목표−0.3 이상이면 끔 → 사람이 오기 전 빨리 데움.
   4) 메인 고장 백업: 동파 모드인데 메인 플러그가 켜져 있으나 가열 안 됨(heater_ok=false)·통신 끊김이면 1층 < frost_off_c 동안 켬.
   그 밖(재실 난방·취침, 동파 평시)엔 끔.
+자가 점검(11-20): 도착 예약이 있고 아직 예열 전(동파 모드)이며 도착까지 selftest_before_h(12) 안이면, 그 예약에 한 번
+         selftest_s(20)초 켜서 전력을 잰다(재실·수동 끄기 중엔 안 함). 켜진 동안의 실측도 반영(≥ok_w 정상, <bad_w가 2분 → 안 됨).
+         결과 heat_ok(True/False/None)를 aux_status.json에 쓰고, 메인 제어기는 heat_ok=False면 예열 계산에서 보조를 뺀다
+         (본체 스위치만 꺼 두고 떠나도 늦게 데워지지 않게).
 데드맨: 켜 둔 동안 Tuya 카운트다운(DP9)을 30분으로 5분마다 다시 걸어, Pi가 죽으면 30분 뒤 스스로 꺼짐
          (Pi 없을 때의 동파는 Shelly 가드가 메인 히터로 맡는다).
 설정: heater_config.json "aux": {"enabled":true,"frost_on_c":2.5,"frost_off_c":4.0,"boost_gap_c":1.0,
@@ -25,9 +29,10 @@ sys.path.insert(0, HERE)
 P = {k: os.path.join(BASE, v) for k, v in {
     "cfg": "heater_config.json", "keys": "tuya_keys.json", "state": "heater_state.json", "status": "heater_status.json",
     "latest": "latest.json", "cmd": "aux_cmd.json", "mine": "aux_state.json", "out": "aux_status.json",
-    "log": "aux.log"}.items()}
+    "log": "aux.log", "presence": "presence_state.json"}.items()}
 DEFAULTS = {"enabled": True, "frost_on_c": 2.5, "frost_off_c": 4.0, "boost_gap_c": 1.0, "manual_hold_h": 2,
-            "deadman_s": 1800, "sensor_stale_min": 15}
+            "deadman_s": 1800, "sensor_stale_min": 15,
+            "selftest_before_h": 12, "selftest_s": 20, "ok_w": 100, "bad_w": 50, "bad_after_s": 120}
 
 
 def load(path, default=None):
@@ -84,6 +89,35 @@ def decide(now, c, state, status, t1, cmd, cur_on):
     return False, "자동: %s 모드 평시(보조는 무인 예비·보강용)" % ({"comfort": "난방", "sleep": "취침", "frost": "동파"}.get(mode, mode or "?"))
 
 
+def selftest_due(now, c, state, cmd, present, mine):
+    """자가 점검을 지금 할지(순수). 도착 예약이 있고, 아직 예열 전(comfort 아님), 도착까지 selftest_before_h 안,
+       이 예약에 대해 아직 안 함, 재실 아님, 수동 '끄기' 유지 중 아님."""
+    arr = (state or {}).get("arrival") or {}
+    ts = arr.get("ts")
+    if not ts or (state or {}).get("mode") == "comfort" or present:
+        return False
+    if not (0 < ts - now <= c["selftest_before_h"] * 3600):
+        return False
+    cmd = cmd or {}
+    if cmd.get("mode") == "off" and now - cmd.get("ts", 0) < c["manual_hold_h"] * 3600:
+        return False
+    return (mine or {}).get("selftest_for") != ts
+
+
+def observe(now, c, actual_on, watt, mine):
+    """켜진 동안의 실측으로 heat_ok 갱신(순수, mine을 고쳐 반환). ≥ok_w면 정상, <bad_w가 bad_after_s 이어지면 안 됨."""
+    mine = dict(mine or {})
+    if not actual_on:
+        mine.pop("low_since", None); return mine
+    if watt >= c["ok_w"]:
+        mine.update(heat_ok=True, heat_ok_ts=now); mine.pop("low_since", None)
+    elif watt < c["bad_w"]:
+        ls = mine.setdefault("low_since", now)
+        if now - ls >= c["bad_after_s"]:
+            mine.update(heat_ok=False, heat_ok_ts=now)
+    return mine
+
+
 def device():
     devs = load(P["keys"], []) or []
     dev = next((d for d in devs if d.get("name") == "Secondary heater"), None)
@@ -133,8 +167,35 @@ def main(argv):
     except Exception as e:
         log("보조 히터 제어 실패: %s" % e)
     w = (dps.get("19") or 0) / 10.0
+    state = load(P["state"], {}) or {}
+    present = (load(P["presence"], {}) or {}).get("present")
+    if not actual and not want and selftest_due(now, c, state, load(P["cmd"], {}), present, mine):
+        mine["selftest_for"] = (state.get("arrival") or {}).get("ts")
+        try:
+            dev.turn_on(); time.sleep(c["selftest_s"])
+            w_t = ((dev.status() or {}).get("dps") or {}).get("19")
+            w_t = (w_t or 0) / 10.0
+            dev.turn_off()
+            ok = w_t >= c["ok_w"]
+            mine.update(heat_ok=ok, heat_ok_ts=time.time(), selftest_w=w_t)
+            log("보조 히터 자가 점검(도착 예약 전): %.0fW → %s" % (w_t, "정상" if ok else "가열 안 됨 — 예열 계산에서 제외(본체 스위치·콘센트 확인)"))
+            if not ok:
+                try:
+                    sys.path.insert(0, os.path.join(BASE, "notify"))
+                    import telegram_notify as tg
+                    tg.send("보조 히터 자가 점검: 켜도 %.0fW — 본체 스위치가 꺼져 있는 듯합니다. 도착 예열은 메인 히터만으로 계산해 더 일찍 시작합니다." % w_t,
+                            key="aux_selftest", min_interval=6 * 3600)
+                except Exception:
+                    pass
+        except Exception as e:
+            try: dev.turn_off()
+            except Exception: pass
+            log("보조 히터 자가 점검 실패: %s" % e)
+    else:
+        mine = observe(now, c, actual, w, mine)
     json.dump(mine, open(P["mine"], "w"))
-    json.dump({"updated": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "on": actual, "why": why, "watt": w},
+    json.dump({"updated": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "on": actual, "why": why, "watt": w,
+               "heat_ok": mine.get("heat_ok"), "heat_ok_ts": mine.get("heat_ok_ts")},
               open(P["out"], "w", encoding="utf-8"), ensure_ascii=False)
     return 0
 

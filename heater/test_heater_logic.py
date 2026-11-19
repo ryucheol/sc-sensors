@@ -316,6 +316,13 @@ class PreheatPower(unittest.TestCase):
         cfg["aux"] = {"enabled": False}
         self.assertEqual(hc.preheat_power(cfg, 1772, self.aux(60, now), now), 1772)
 
+    def test_excluded_when_selftest_failed(self):
+        now = 1_800_000_000
+        a = self.aux(60, now); a["heat_ok"] = False
+        self.assertEqual(hc.preheat_power(CFG, 1772, a, now), 1772)
+        a["heat_ok"] = True
+        self.assertEqual(hc.preheat_power(CFG, 1772, a, now), 1772 + 470)
+
     def test_falls_back_to_config_watts(self):
         self.assertEqual(hc.preheat_power(CFG, None, None), CFG["preheat"]["heater_watts"])
 

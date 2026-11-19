@@ -142,6 +142,8 @@ def preheat_power(cfg, stage_w, aux_status=None, now_ts=None, fresh_s=900):
     a = cfg.get("aux") or {}
     if not a.get("enabled", True) or not a.get("preheat_boost", True) or not aux_status:
         return base
+    if aux_status.get("heat_ok") is False:   # 자가 점검·실측에서 가열 안 됨(본체 스위치 꺼짐 등) → 빼고 계산
+        return base
     try:
         age = (now_ts or time.time()) - datetime.datetime.strptime(aux_status["updated"], "%Y-%m-%d %H:%M:%S").timestamp()
     except Exception:
