@@ -245,6 +245,12 @@ def add_stage2(payload, did, key, now, st, srv):
             tm, rows = s2.get_mid(key, now)
             payload["mid"] = {"tmfc": tm, "rows": rows}
             did.append("중기 %s %d행" % (tm, len(rows)))
+            try:   # 떠날 때 점검(heater/depart_check.py)이 4~10일 최저를 보도록 로컬에도 남긴다
+                tmp = os.path.join(BASE, "mid_forecast.json.tmp")
+                with open(tmp, "w", encoding="utf-8") as f: json.dump({"tmfc": tm, "rows": rows}, f, ensure_ascii=False)
+                os.replace(tmp, os.path.join(BASE, "mid_forecast.json"))
+            except Exception as e:
+                log("중기예보 로컬 저장 실패: %s" % e)
     except Exception as e:
         log("중기예보 실패(2단계): %s" % e)
     try:

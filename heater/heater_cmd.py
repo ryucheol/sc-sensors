@@ -148,6 +148,7 @@ def main():
 
     try: st = json.load(open(STATE))
     except Exception: st = {}
+    prev_mode = st.get("mode")
     st.update(mode=mode, on=on, off=off, source="cmd", since=time.time(), last_cmd_ts=time.time())
     if arrival_used_up(st.get("arrival"), time.time()):
         st.pop("arrival", None)   # 도착 무렵(12시간 안)·지난 예약은 역할을 다한 것. 며칠 뒤 예약(캘린더)은 그대로 둔다
@@ -157,6 +158,20 @@ def main():
 
     label = {"comfort": "난방(도착)", "frost": "동파(떠남)", "sleep": "취침(다락기준)"}.get(mode, mode)
     print("%s 설정: ON %g°C / OFF %g°C — 제어 반영 최대 %s초" % (label, on, off, cfg.get("poll_sec", 60)))
+    if mode == "frost":
+        depart_notice(prev_mode)
+
+def depart_notice(prev_mode):
+    """떠날 때(동파) 예보 최저가 낮으면 물 빼기 목록을 답장에 붙이고, 머물던 중이었으면 Home Mini로도 말한다."""
+    try:
+        import depart_check as dc
+        msg, voice, dcfg = dc.check()
+        if msg:
+            print(msg)
+            if voice and prev_mode in ("comfort", "sleep") and dcfg.get("voice", True):
+                dc.announce(voice)
+    except Exception as e:   # 점검 알림 때문에 동파 명령이 실패하면 안 된다
+        print("(물 동파 점검 생략: %s)" % e)
 
 if __name__ == "__main__":
     main()
