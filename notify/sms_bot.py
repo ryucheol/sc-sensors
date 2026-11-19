@@ -239,6 +239,9 @@ def short_status(state, status, latest, now):
     if arr.get("ts") and arr["ts"] > now:
         t = time.localtime(arr["ts"])
         parts.append("도착%d/%d %d시" % (t.tm_mon, t.tm_mday, t.tm_hour))
+        st = state or {}
+        if st.get("mode") == "comfort" and st.get("source") in ("arrival", "preheat") and st.get("since"):
+            parts.append("예열중")
     return " ".join(parts)
 
 

@@ -60,6 +60,12 @@ class Pure(unittest.TestCase):
         self.assertEqual(sb.segments("가" * 40), 1)
         self.assertEqual(sb.segments("가a" * 20 + "b"), 2)   # 한글 섞이면 영문도 2바이트
 
+    def test_short_status_preheat(self):
+        st = {"mode": "comfort", "source": "arrival", "since": NOW - 3600, "arrival": {"ts": NOW + 7200}}
+        s = sb.short_status(st, {"mode": "comfort", "relay": True, "watt": 1800}, {}, NOW)
+        self.assertIn("예열중", s)
+        self.assertLessEqual(len(s), 40)
+
     def test_short_status(self):
         latest = {"내부1층": {"temp": 13.6, "time_ms": NOW * 1000}, "바닥외부": {"temp": 8.4, "time_ms": NOW * 1000}}
         st = {"mode": "frost", "arrival": {"ts": NOW + 2 * 86400 + 9 * 3600}}

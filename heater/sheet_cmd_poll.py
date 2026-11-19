@@ -71,6 +71,13 @@ def online():
     except OSError: return False
 
 
+def preheat_started(st):
+    """도착 예열이 이미 시작됐으면 시작 epoch, 아니면 None. 제어기가 예열을 켤 때 mode=comfort, source=arrival, since=시각."""
+    if (st or {}).get("mode") == "comfort" and st.get("source") in ("arrival", "preheat") and st.get("since"):
+        return st["since"]
+    return None
+
+
 def status_text():
     """현재 상태 한 줄(상태 명령·각 명령 결과 뒤에 붙임)."""
     try: s = json.load(open(os.path.join(BASE, "heater_status.json")))
@@ -96,7 +103,10 @@ def status_text():
         try:
             a = s["arrival"]; ts = a.get("ts") if isinstance(a, dict) else None
             parts.append("도착예약 %s" % (datetime.datetime.fromtimestamp(ts).strftime("%m-%d %H:%M") if ts else a))
-            if s.get("arrival_start_pred"):   # 실내가 예보대로 식는 것까지 반영한 예고(표시용)
+            started = preheat_started(st)
+            if started:   # 예열이 이미 시작됨 → 예고 대신 실제 시작 시각
+                parts.append("예열 중(%s 시작)" % datetime.datetime.fromtimestamp(started).strftime("%m-%d %H:%M"))
+            elif s.get("arrival_start_pred"):   # 실내가 예보대로 식는 것까지 반영한 예고(표시용)
                 parts.append("예상시작 %s(그때 실내 약 %s°C, 선행 %.1fh)" % (
                     datetime.datetime.fromtimestamp(s["arrival_start_pred"]).strftime("%m-%d %H:%M"),
                     s.get("arrival_tin_pred"), s.get("arrival_lead_pred_h") or 0))
