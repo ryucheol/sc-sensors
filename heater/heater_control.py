@@ -156,13 +156,17 @@ def load_aux_status(path=None):
 
 def preheat_lead_hours(cfg, t_in, t_out, P=None):
     p = cfg["preheat"]
-    tgt, tau, ua = p["target_temp"], p["tau_hours"], p["ua_w_per_k"]
+    # 식은 집을 데울 때(11-20 실측): 히터 열의 일부가 벽·가구를 데우는 데 들어가 실내 공기는 '유효 출력' heat_eff×P로,
+    # 더 짧은 시정수 heat_tau_hours로 다가간다(1층 8.8→19°C/6h, 바깥 0~1°C: heat_eff 0.62, heat_tau 6.3h).
+    # 식는 쪽 시정수 tau_hours(밤 실측 중앙값 12h)는 예고 시뮬레이션(predict_arrival_start)에서 쓴다.
+    tgt, ua = p["target_temp"], p["ua_w_per_k"]
+    tau = p.get("heat_tau_hours", p["tau_hours"]); eff = p.get("heat_eff", 1.0)
     P = P or p["heater_watts"]   # 실측 단 W가 있으면 그것(1단으로 두면 선행시간·도달가능이 달라진다)
     margin, maxlead = p["margin"], p["max_lead_hours"]
     if t_in is None:        return maxlead          # 온도 모르면 안전하게 최대 선행
     if t_in >= tgt:         return 0.0
     if t_out is None: t_out = 0.0                    # 외기 모르면 0°C 가정(보수적)
-    t_eq = t_out + P / ua
+    t_eq = t_out + eff * P / ua
     if t_eq <= tgt + 1:     return maxlead           # 그 외기선 목표 도달 어려움 → 최대 선행
     lead = tau * math.log((t_eq - t_in) / (t_eq - tgt)) * margin
     return max(0.0, min(lead, maxlead))

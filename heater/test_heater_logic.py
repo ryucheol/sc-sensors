@@ -47,7 +47,7 @@ class PreheatLead(unittest.TestCase):
     def test_cold_outdoor_capped(self):
         self.assertEqual(hc.preheat_lead_hours(CFG, 3, -40), CFG["preheat"]["max_lead_hours"])
     def test_monotonic_colder_outside_longer(self):
-        self.assertGreater(hc.preheat_lead_hours(CFG, 5, -5), hc.preheat_lead_hours(CFG, 5, 5))
+        self.assertGreater(hc.preheat_lead_hours(CFG, 15, 5), hc.preheat_lead_hours(CFG, 15, 10))
     def test_within_bounds(self):
         v = hc.preheat_lead_hours(CFG, 5, 0)
         self.assertTrue(0 < v <= CFG["preheat"]["max_lead_hours"])
@@ -251,7 +251,7 @@ class TestStage(unittest.TestCase):
     def test_preheat_uses_measured_P(self):
         # 1단(720W)이면 외기 0°C에서 T_eq=15°C → 목표 도달 불가 → 최대 선행
         self.assertEqual(hc.preheat_lead_hours(CFG, 5, 0, 720), CFG["preheat"]["max_lead_hours"])
-        self.assertLess(hc.preheat_lead_hours(CFG, 5, 0, 1763), CFG["preheat"]["max_lead_hours"])
+        self.assertLess(hc.preheat_lead_hours(CFG, 15, 8, 1763), CFG["preheat"]["max_lead_hours"])
     def test_advice_frost(self):
         cfg = dict(CFG); cfg["stages"] = [720, 1102, 1763]
         a = hc.stage_advice(cfg, "frost", 1, 720, -12, None, None, None, False, 0, False)   # T_eq=3.3<5
@@ -327,6 +327,12 @@ class PreheatPower(unittest.TestCase):
         self.assertEqual(hc.preheat_power(CFG, None, None), CFG["preheat"]["heater_watts"])
 
     def test_shorter_lead_with_aux(self):
-        main = hc.preheat_lead_hours(CFG, 8.8, -3, 1772)
-        both = hc.preheat_lead_hours(CFG, 8.8, -3, 1772 + 470)
-        self.assertLess(both, main - 2)   # 11-20 조건: 약 9.6h → 6h 안팎
+        # 식은 집(12°C)·바깥 5°C: 메인만 약 7h → 보조 포함 약 3h (11-20 실측 보정 모델)
+        main = hc.preheat_lead_hours(CFG, 12, 5, 1772)
+        both = hc.preheat_lead_hours(CFG, 12, 5, 1772 + 470)
+        self.assertLess(both, main - 2)
+
+    def test_calibrated_11_20(self):
+        # 11-20 실측: 1층 8.8°C, 바닥외부 0~1°C에서 메인만으론 10h 안에 23.5°C 불가(실제 6h에 19°C) → 최대 선행
+        cfg = dict(CFG); pre = dict(CFG["preheat"]); pre["target_temp"] = 23.5; cfg["preheat"] = pre
+        self.assertEqual(hc.preheat_lead_hours(cfg, 8.8, 0.5, 1815), CFG["preheat"]["max_lead_hours"])
