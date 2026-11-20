@@ -526,15 +526,27 @@ async def current_uploader(cfg, latest, dirty):
         if readings:   # 히터 제어용: 현재온도를 로컬 파일로 내보냄(인터넷 무관, 항상 최신)
             try:
                 _lp = os.path.join(_HERE, "latest.json")
-                with open(_lp, "w") as _f:
-                    # time_ms = 그 센서의 마지막 비콘 '수신' 시각(쓴 시각 아님) → 센서별 고장(배터리·전파)을
-                    # 히터 제어기가 stale로 잡을 수 있게. 하트비트로 옛 값에 새 시각이 찍히는 것을 막는다.
-                    # batt: 마지막 배터리 %도 함께 저장 → 재시작 후 되읽어 batt_q 공백 방지(순정은 수 시간에 1회만 송신)
-                    json.dump({r["sensor"]: {"temp": r["temp"], "hum": r["hum"],
-                                             "time_ms": round(latest[r["sensor"]].get("ts", now_ms / 1000) * 1000),
-                                             **({"batt": latest[r["sensor"]]["batt"]}
-                                                if "batt" in latest[r["sensor"]] else {})}
-                               for r in readings}, _f, ensure_ascii=False)
+                # time_ms = 그 센서의 마지막 비콘 '수신' 시각(쓴 시각 아님) → 센서별 고장(배터리·전파)을
+                # 히터 제어기가 stale로 잡을 수 있게. 하트비트로 옛 값에 새 시각이 찍히는 것을 막는다.
+                # batt: 마지막 배터리 %도 함께 저장 → 재시작 후 되읽어 batt_q 공백 방지(순정은 수 시간에 1회만 송신)
+                _new = {r["sensor"]: {"temp": r["temp"], "hum": r["hum"],
+                                      "time_ms": round(latest[r["sensor"]].get("ts", now_ms / 1000) * 1000),
+                                      **({"batt": latest[r["sensor"]]["batt"]}
+                                         if "batt" in latest[r["sensor"]] else {})}
+                        for r in readings}
+                # 재시작 직후 아직 신호를 못 받은 센서는 직전 파일의 값을 '옛 수신 시각 그대로' 유지한다
+                # (11-20: 게이트웨이 재시작 1분 동안 다락이 빠져 '수신 끊김' 오경보·선풍기 꺼짐). 정말 죽었으면
+                # 옛 time_ms 때문에 제어기의 stale(45분) 판정으로 그대로 잡힌다.
+                try:
+                    with open(_lp) as _f:
+                        for _k, _v in json.load(_f).items():
+                            if _k in cfg and _k not in _new and isinstance(_v, dict):
+                                _new[_k] = _v
+                except Exception:
+                    pass
+                with open(_lp + ".tmp", "w") as _f:
+                    json.dump(_new, _f, ensure_ascii=False)
+                os.replace(_lp + ".tmp", _lp)   # 원자적 교체(제어기가 반쯤 쓴 파일을 읽지 않게)
             except Exception:
                 pass
         temps_now = {r["sensor"]: r["temp"] for r in readings}

@@ -111,3 +111,4 @@ sms_state.json.tmp
 .sms_bot.lock
 # 플러그 무응답 알림 상태
 plug_alert_state.json
+latest.json.tmp
