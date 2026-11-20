@@ -134,7 +134,9 @@ def main(argv):
         s, cur = {"Error": str(e)}, None
     if cur is None:
         log("선풍기 플러그 응답 없음: %s" % s.get("Error"))
+        import plug_alert; plug_alert.check("선풍기", False)
         return 1
+    import plug_alert; plug_alert.check("선풍기", True)
     st = load(P["state"], {}) or {}
     want, why, st2 = decide(now, c, load(P["status"], {}), temps_from(load(P["latest"], {}), now, c["sensor_stale_min"]),
                             load(P["cmd"], {}), st, bool(cur),

@@ -148,7 +148,10 @@ def main(argv):
     except Exception as e:
         s, dps, cur = {"Error": str(e)}, {}, None
     if cur is None:
-        log("보조 히터 플러그 응답 없음: %s" % s.get("Error")); return 1
+        log("보조 히터 플러그 응답 없음: %s" % s.get("Error"))
+        import plug_alert; plug_alert.check("보조 히터", False, "동파 백업·무인 예열 보강이 안 됨")
+        return 1
+    import plug_alert; plug_alert.check("보조 히터", True)
     t1 = floor_temp(load(P["latest"], {}), now, c["sensor_stale_min"])
     want, why = decide(now, c, load(P["state"], {}), load(P["status"], {}), t1, load(P["cmd"], {}), bool(cur))
     if dry:
