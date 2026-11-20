@@ -4,7 +4,8 @@
  엔진: gTTS(온라인, 영구캐시) → espeak 폴백(오프라인/실패). piper는 추후 연구(USE_PIPER).
  온라인(인터넷O): 기상청 예보 + 지금 바깥 → 명령.  오프라인: 바깥·1층·다락 센서 차례 → 명령만.
  - 26°C↑  : "문 여세요"(첫회 전체). 변화 없으면 5분마다 반복, 온도가 내려가기 시작하면(문 열어 반응) 반복 중지
- - 25.5°C↑로 데워졌다가 25°C↓ : "문 닫으세요"(+하락량, 26 도달 불필요). 변화 없으면 5분 반복, 온도가 올라가기 시작하면 중지
+ - 25.5°C↑로 데워졌다가 '닫기선' 아래로 + 15분 1°C↑ 하락 : "문 닫으세요"(+하락량, 26 도달 불필요). 변화 없으면 5분 반복, 온도가 올라가기 시작하면 중지
+   닫기선 = 25°C, 단 난방 설정이 그 근처(끄기 ≥ 24.5)면 '켜기 − 0.5'(히터 정상 사이클의 자연 냉각에 울리지 않게, 11-20 오경보)
  - 급락(15분 2°C↑, 문 상태 아닐 때): "N도 떨어졌습니다, 문 닫으세요" — 5분 반복(총 하락량), 최저점 대비 상승하면 중지
  - 난방진단: 플러그 통신끊김 / 난방정체(설정 아래 30분 안 오름=다이얼 과소)
  - 급상승은 생략(26°C 알림이 대체). 급락만 음성. 모두 comfort·센서 신선할 때만.
@@ -29,6 +30,9 @@ BASE = os.path.expanduser("~/smart-cabin")
 CARD = "plughw:Headphones,0"
 ON_T = 26.0; OFF_T = 25.0; CLOSE_ARM = 25.5; REPEAT = 300; LEAD = 1.0; VOL = "80%"
 CHANGE_EPS = 0.05  # 직전 알림 대비 원하는 방향(여세요=하강)으로 0.1°C↑ 변하면 반복 중지(문 열어 반응 시작)
+# 닫기(문 열어 식음)는 두 조건을 함께: 닫기선 아래 + 15분(DROP_WIN) 하락 ≥ CLOSE_FAST.
+#   자연 냉각은 ~2.5°C/h(15분 0.6) — 11-20 21:10 설정 25/25.5에서 사이클마다 오경보 → 추가.
+CLOSE_MARGIN = 0.5; CLOSE_FAST = 1.0
 # 급락 감지(실측 보정: 자연 최대 ~3°C/h → 15분 2°C=8°C/h로 안전 분리)
 DROP_T = 2.0; DROP_WIN = 900
 # 난방 정체(다이얼 과소): 난방 '켠 뒤' STALL_WIN 지나도 상승 ≤ STALL_RISE면 경고.
@@ -349,6 +353,27 @@ def floor_fresh(d, status):
         return False
 
 
+def close_line(on_th, off_th):
+    """닫기 경고 기준 온도(순수). 난방 설정 밴드가 OFF_T와 겹치면 켜기 − CLOSE_MARGIN, 아니면 OFF_T."""
+    try:
+        if off_th is not None and on_th is not None and float(off_th) >= OFF_T - CLOSE_MARGIN:
+            return min(OFF_T, float(on_th) - CLOSE_MARGIN)
+    except (TypeError, ValueError):
+        pass
+    return OFF_T
+
+
+def drop_15m(fhist, now, t):
+    """DROP_WIN(15분) 전 대비 하락량(순수). 이력이 모자라면 0."""
+    old = [x for x in fhist if now - x[0] >= DROP_WIN]
+    return (old[-1][1] - t) if old else 0.0
+
+
+def close_fire(t, on_th, off_th, fhist, now):
+    """닫기 경고 첫 발화 조건(순수): 닫기선 아래 + 15분 1°C 이상 하락."""
+    return t < close_line(on_th, off_th) and drop_15m(fhist, now, t) >= CLOSE_FAST
+
+
 def loop():
     setvol()
     over = False; close_armed = False; last = 0.0
@@ -418,7 +443,7 @@ def loop():
                     if t >= CLOSE_ARM:
                         close_armed = True; closing = False; peak = t if peak is None else max(peak, t)
                     # ---- 25°C 닫기(열렸다 식음): 변화없으면 5분 반복, 온도 상승 시작하면 중지 ----
-                    if close_armed and not closing and t < OFF_T:
+                    if close_armed and not closing and close_fire(t, st.get("on"), st.get("off"), fhist, now):
                         drop = (peak - t) if peak else 0.0
                         extra = ("%s도 내렸습니다. " % dec1(drop)) if drop >= 1.0 else ""
                         say(full_text(d, t, extra + "문을 닫으세요."))
@@ -436,7 +461,7 @@ def loop():
                 #   반복 발화는 '급락 시작점 대비 총 하락량'(계속 커짐). 낮은 값에 머물면 올라갈 때까지 계속.
                 if not over and not close_armed:
                     old = [x for x in fhist if now - x[0] >= DROP_WIN]
-                    drop = (old[-1][1] - t) if old else 0.0   # 15분 전 대비 하락
+                    drop = drop_15m(fhist, now, t)   # 15분 전 대비 하락
                     if not dropping:
                         if drop >= DROP_T:
                             say("실내 온도가 %s도 떨어졌습니다. 문을 닫으세요." % dec1(drop))
