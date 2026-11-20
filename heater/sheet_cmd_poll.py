@@ -141,6 +141,18 @@ def status_text():
     return " · ".join(parts)
 
 
+def light_status(timeout=10):
+    """다락등 상태 한 조각('다락등2 켜짐') — Tuya 로컬 조회라 '상태' 명령에만 붙인다(실패해도 상태 답은 나감)."""
+    if not os.path.exists(VENV_PY): return None
+    try:
+        r = subprocess.run([VENV_PY, os.path.join(HERE, "light_cmd.py"), "다락등"], capture_output=True, text=True,
+                           timeout=timeout, env=dict(os.environ, PYTHONIOENCODING="utf-8"), cwd=BASE)
+        out = r.stdout.strip().split(" (")[0]
+        return out if r.returncode == 0 and out else "다락등 ?(조회 실패)"
+    except Exception:
+        return "다락등 ?(조회 실패)"
+
+
 FAN_WORDS = {"켜": "on", "켜기": "on", "켬": "on", "on": "on", "꺼": "off", "끄기": "off", "끔": "off", "off": "off",
              "자동": "auto", "auto": "auto"}
 
@@ -271,7 +283,8 @@ def run(cmd_text):
     if not verb:
         return "오류", "알 수 없는 명령 — 난방 / 동파 / 취침 / 도착 HH:MM [내일|날짜] [목표°C] / 도착 취소 / 상태 / 점검 / 기상 / 선풍기 켜|꺼|자동 / 공유 [N시간|N분|끔] / 센서 / 보조 켜|꺼|자동 / 아침 06:30 / 시보 켜|끔 / 다락등 켜|꺼"
     if verb == "상태":
-        return "완료", status_text()
+        lt = light_status()
+        return "완료", status_text() + (" · " + lt if lt else "")
     if verb == "선풍기":
         return fan_cmd(toks)
     if verb == "공유":
