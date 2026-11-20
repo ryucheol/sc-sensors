@@ -1,7 +1,7 @@
 #!/bin/bash
 # farmhut-wan-guard 설치(한 번, sudo): sudo bash ~/smart-cabin/scripts/install_wan_guard.sh
 # 1) /usr/local/sbin/farmhut-wan-guard (root 소유 — 사용자 계정이 고칠 수 없게)
-# 2) /etc/farmhut/wan_allow 항상 허용(Shelly 히터 플러그), /etc/farmhut/wan_quota 한도(Home Mini 50/500MB, Tuya 2개 각 5/30MB) — 없을 때만 생성
+# 2) /etc/farmhut/wan_allow 항상 허용(Shelly 히터 플러그), /etc/farmhut/wan_quota 한도(Home Mini 50/500MB, Tuya 3개 각 5/30MB) — 없을 때만 생성
 # 3) /etc/sudoers.d/farmhut-wan: 사용자(ryuch)가 이 스크립트만 비밀번호 없이(공유 명령·cron tick)
 # 4) farmhut-wan-guard.service: 부팅 때 차단 적용
 set -euo pipefail
@@ -25,6 +25,7 @@ if [ ! -f /etc/farmhut/wan_quota ]; then
 7c:d9:5c:0f:57:a4  50  500  # HomeMini
 e4:ae:e4:fa:ee:bd  5   30   # Tuya_Fan (클라우드 연결 유지·앱 예비 리모컨)
 d8:fc:92:29:b7:58  5   30   # Tuya_SecondaryHeater
+20:f1:b2:39:9f:af  5   30   # Tuya_AtticLight (Google Home 음성·앱 제어)
 EOF
 fi
 chmod 0644 /etc/farmhut/wan_quota

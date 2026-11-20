@@ -32,6 +32,7 @@ ALIASES = {
     "보조": "보조", "보조히터": "보조", "aux": "보조",
     "아침": "아침", "wake": "아침",
     "시보": "시보", "chime": "시보",
+    "다락등": "전등", "다락등2": "전등", "다락불": "전등", "전등": "전등", "light": "전등",
 }
 CHIME_FILE = os.path.join(BASE, "chime.json")   # alert_sound.py 시보 켜짐/꺼짐(파일 없으면 켜짐)
 
@@ -266,9 +267,9 @@ def run(cmd_text):
     toks = [t.rstrip("에,.") for t in cmd_text.replace("　", " ").split() if t.strip()]
     verb = None
     for i, t in enumerate(toks):
-        if t.lower() in ALIASES: verb = ALIASES[t.lower()]; toks.pop(i); break
+        if t.lower() in ALIASES: verb = ALIASES[t.lower()]; word = toks.pop(i); break
     if not verb:
-        return "오류", "알 수 없는 명령 — 난방 / 동파 / 취침 / 도착 HH:MM [내일|날짜] [목표°C] / 도착 취소 / 상태 / 점검 / 기상 / 선풍기 켜|꺼|자동 / 공유 [N시간|N분|끔] / 센서 / 보조 켜|꺼|자동 / 아침 06:30 / 시보 켜|끔"
+        return "오류", "알 수 없는 명령 — 난방 / 동파 / 취침 / 도착 HH:MM [내일|날짜] [목표°C] / 도착 취소 / 상태 / 점검 / 기상 / 선풍기 켜|꺼|자동 / 공유 [N시간|N분|끔] / 센서 / 보조 켜|꺼|자동 / 아침 06:30 / 시보 켜|끔 / 다락등 켜|꺼"
     if verb == "상태":
         return "완료", status_text()
     if verb == "선풍기":
@@ -281,6 +282,11 @@ def run(cmd_text):
         return aux_cmd(toks)
     if verb == "시보":
         return chime_cmd(toks)
+    if verb == "전등":   # Tuya 스위치 모듈(로컬) — tuya-venv에서 light_cmd.py
+        if not os.path.exists(VENV_PY): return "오류", "tuya-venv 없음"
+        r = subprocess.run([VENV_PY, os.path.join(HERE, "light_cmd.py"), word] + toks, capture_output=True, text=True,
+                           timeout=30, env=dict(os.environ, PYTHONIOENCODING="utf-8"), cwd=BASE)
+        return ("완료" if r.returncode == 0 else "오류"), (r.stdout + r.stderr).strip()[-400:]
     if verb == "아침":
         import wake_heat as wh
         w = wh.load_wake()

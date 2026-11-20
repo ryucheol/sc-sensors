@@ -13,6 +13,7 @@ dhcp-host=90:70:69:67:a7:24,10.42.0.105,shelly-heater
 dhcp-host=e4:ae:e4:fa:ee:bd,10.42.0.185,tuya-fan
 dhcp-host=d8:fc:92:29:b7:58,10.42.0.71,tuya-aux
 dhcp-host=7c:d9:5c:0f:57:a4,10.42.0.97,homemini
+dhcp-host=20:f1:b2:39:9f:af,10.42.0.85,tuya-attic-light
 EOF
 chmod 0644 "$D/farmhut-static.conf"
 nmcli con up farmhut-lan >/dev/null
