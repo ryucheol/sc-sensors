@@ -98,6 +98,57 @@ def preheat_started(st):
     return None
 
 
+# 가열 여유율 = 히터 출력 ÷ (열손실 UA × (목표 − 바깥)). 1이면 겨우 유지, 1 미만이면 목표 도달 불가.
+#   UA는 열모델 중간 피팅값(docs/THERMAL_MODEL.ko.md §10, 11-20: 1층 UA1 59 W/K). 재피팅하면 여기 갱신.
+UA_W_PER_K = 60.0
+AUX_W = 470.0   # 보조 히터 실측(켜져 있으면 출력에 더함)
+
+
+def heat_margin(p_w, ua, target, tout):
+    """(여유율, 도달 가능 최고 °C) — 순수. 목표가 바깥보다 높지 않거나 값이 없으면 None."""
+    if not p_w or not ua or target is None or tout is None or target - tout <= 0:
+        return None
+    return p_w / (ua * (target - tout)), tout + p_w / ua
+
+
+def outdoor_now(max_age_h=2.0):
+    """(바깥 °C, 출처) — 부여 기상대(kma_obs.csv, 2시간 이내)를 우선, 없으면 바깥 센서(건물 열을 받아 ~1.5°C 높음)."""
+    try:
+        with open(os.path.join(BASE, "kma_obs.csv"), encoding="utf-8") as f:
+            last = f.read().strip().splitlines()[-1].split(",")
+        age = (time.time() - datetime.datetime.strptime(last[0], "%Y-%m-%d %H:%M").timestamp()) / 3600.0
+        if age <= max_age_h and last[1] not in ("", None):
+            return float(last[1]), "부여"
+    except Exception:
+        pass
+    try:
+        v = json.load(open(os.path.join(BASE, "latest.json"))).get("바닥외부") or {}
+        if v.get("temp") is not None:
+            return float(v["temp"]), "센서"
+    except Exception:
+        pass
+    return None, None
+
+
+def margin_text(st, s):
+    """'가열여유 1.13(최고 28°C, 부여 −1°C)' 또는 None."""
+    try:
+        cfg = json.load(open(os.path.join(BASE, "heater_config.json")))
+        p_w = s.get("stage_w") or (cfg.get("preheat") or {}).get("heater_watts")
+    except Exception:
+        p_w = s.get("stage_w")
+    try:
+        if json.load(open(os.path.join(BASE, "aux_status.json"))).get("on"): p_w = (p_w or 0) + AUX_W
+    except Exception: pass
+    if st.get("on") is None or st.get("off") is None: return None
+    target = (float(st["on"]) + float(st["off"])) / 2.0
+    tout, src = outdoor_now()
+    m = heat_margin(p_w, UA_W_PER_K, target, tout)
+    if not m: return None
+    r, tmax = m
+    return "%s가열여유 %.2f(최고 %.0f°C, %s %.1f°C)" % ("⚠ " if r < 1.0 else "", r, tmax, src, tout)
+
+
 def status_text():
     """현재 상태 한 줄(상태 명령·각 명령 결과 뒤에 붙임)."""
     try: s = json.load(open(os.path.join(BASE, "heater_status.json")))
@@ -111,6 +162,8 @@ def status_text():
     if s.get("stage"): rel += "(%d단 %sW)" % (s["stage"], s.get("stage_w"))
     parts.append(rel)
     if s.get("today_kwh") is not None: parts.append("오늘 %.1fkWh" % s["today_kwh"])
+    mt = margin_text(st, s)
+    if mt: parts.append(mt)
     try:
         fs = json.load(open(os.path.join(BASE, "fan_status.json")))
         parts.append("선풍기 %s" % ("ON" if fs.get("on") else "OFF"))

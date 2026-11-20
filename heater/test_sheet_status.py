@@ -16,6 +16,17 @@ class PreheatStarted(unittest.TestCase):
         self.assertIsNone(scp.preheat_started(None))
 
 
+class Margin(unittest.TestCase):
+    def test_numbers(self):   # 11-20 밤: 1760 W, UA 60, 목표 25, 바깥 −1 → 1.13, 최고 28
+        r, tmax = scp.heat_margin(1760, 60, 25.0, -1.0)
+        self.assertAlmostEqual(r, 1.128, places=2); self.assertAlmostEqual(tmax, 28.3, places=1)
+
+    def test_none_cases(self):
+        self.assertIsNone(scp.heat_margin(1760, 60, 5.0, 8.0))   # 바깥이 더 따뜻
+        self.assertIsNone(scp.heat_margin(None, 60, 25, 0))
+        self.assertIsNone(scp.heat_margin(1760, 60, 25, None))
+
+
 class StatusText(unittest.TestCase):
     def setUp(self):
         self.d = tempfile.mkdtemp(); self.old = scp.BASE; scp.BASE = self.d
