@@ -149,6 +149,21 @@ def margin_text(st, s):
     return "%s가열여유 %.2f(최고 %.0f°C, %s %.1f°C)" % ("⚠ " if r < 1.0 else "", r, tmax, src, tout)
 
 
+def co2_text(now=None, max_age_min=30):
+    """'CO2 850ppm' (Qingping 마지막 값, 30분 이내) / 오래되면 'CO2 ?(마지막 HH:MM)' / 파일 없으면 None."""
+    try:
+        q = json.load(open(os.path.join(BASE, "qingping_latest.json")))
+    except Exception:
+        return None
+    now = now or time.time()
+    if q.get("co2") is None:
+        return None
+    if now - q.get("ts", 0) > max_age_min * 60:
+        return "CO2 ?(마지막 %s)" % time.strftime("%m-%d %H:%M", time.localtime(q.get("ts", 0)))
+    c = int(q["co2"])
+    return "CO2 %dppm%s" % (c, " ⚠환기" if c >= 1500 else "")
+
+
 def status_text():
     """현재 상태 한 줄(상태 명령·각 명령 결과 뒤에 붙임)."""
     try: s = json.load(open(os.path.join(BASE, "heater_status.json")))
@@ -164,6 +179,8 @@ def status_text():
     if s.get("today_kwh") is not None: parts.append("오늘 %.1fkWh" % s["today_kwh"])
     mt = margin_text(st, s)
     if mt: parts.append(mt)
+    ct = co2_text()
+    if ct: parts.append(ct)
     try:
         fs = json.load(open(os.path.join(BASE, "fan_status.json")))
         parts.append("선풍기 %s" % ("ON" if fs.get("on") else "OFF"))

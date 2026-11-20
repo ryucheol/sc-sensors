@@ -519,6 +519,22 @@ def heater_row(st, hs, backstop_h, now):
     return {"sensor": "히터", "temp": txt, "hum": relay, "volt": res, "time_ms": int(now * 1000)}
 
 
+def qingping_row(q, now, max_age_s=1800):
+    """'농막_현재' Qingping 행(순수): temp·hum은 Qingping 온습도, volt 칸 = CO2 ppm. 30분 넘게 오래되면 None."""
+    if not q or q.get("co2") is None or now - q.get("ts", 0) > max_age_s:
+        return None
+    return {"sensor": "CO2(Qingping)", "temp": q.get("temp"), "hum": q.get("hum"), "volt": q.get("co2"),
+            "time_ms": int(q["ts"] * 1000)}
+
+
+def _qingping_row_now():
+    try:
+        q = json.load(open(os.path.join(os.path.dirname(HEATER_STATE), "qingping_latest.json")))
+    except Exception:
+        return None
+    return qingping_row(q, time.time())
+
+
 def _heater_row_now():
     d = os.path.dirname(HEATER_STATE)
     try:
@@ -606,8 +622,8 @@ async def current_uploader(cfg, latest, dirty):
         if readings and await asyncio.to_thread(online):   # 오프라인이면 아예 시도 안 함(현재값은 큐 안 함)
             try:
                 net = await asyncio.to_thread(net_info)
-                hr = _heater_row_now()
-                res = post_current(readings + ([hr] if hr else []), net)
+                extra = [r for r in (_heater_row_now(), _qingping_row_now()) if r]
+                res = post_current(readings + extra, net)
                 log(f"[현재] {res.get('updated')}개 갱신 ({net.get('ssid','')} {net.get('ip','')})")
                 last_post, last_temps = time.time(), temps_now
             except Exception as e:

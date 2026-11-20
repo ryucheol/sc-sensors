@@ -117,3 +117,7 @@ uplink_log.csv.pruned
 # 시보 켜짐/꺼짐(명령 '시보 끔')
 chime.json
 uplink_bytes.json
+qingping_token.json
+qingping_log.csv
+qingping_latest.json
+qingping.log
