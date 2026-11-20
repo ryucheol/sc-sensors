@@ -8,7 +8,7 @@
  - 급락(15분 2°C↑, 문 상태 아닐 때): "N도 떨어졌습니다, 문 닫으세요" — 5분 반복(총 하락량), 최저점 대비 상승하면 중지
  - 난방진단: 플러그 통신끊김 / 난방정체(설정 아래 30분 안 오름=다이얼 과소)
  - 급상승은 생략(26°C 알림이 대체). 급락만 음성. 모두 comfort·센서 신선할 때만.
- - 시보: 재실(comfort)·07~22시에 20분마다 "오후 세 시 이십 분입니다. 실내 N도." (블루투스 스피커 30분 자동꺼짐 방지 겸)
+ - 시보: 재실(comfort)·07~22시에 정각·30분마다 "오후 세 시 삼십 분입니다. 실내 N도."
  CLI: alert_sound.py say "문장"  /  chime(시보 즉시 시험)  /  demo
  유닛은 /usr/bin/python3로 실행돼도 아래 re-exec 심이 piper-venv 파이썬으로 재진입."""
 import os, sys
@@ -38,9 +38,9 @@ STALL_WIN = 1800; STALL_RISE = 0.2; STALL_MARGIN = 0.3; STALL_REPEAT = 900
 # 신선도 가드
 FRESH_SENSOR = 180; FRESH_STATUS = 150; FAULT_REPEAT = 900
 # 시보(재실 comfort 모드에서만): CHIME_EVERY분 간격(정각 기준) "오후 세 시 이십 분입니다. 실내 N도."
-#   블루투스 스피커가 30분 무음이면 꺼지므로 간격 < 30분(20분 → 여유 10분). 0이면 끔.
+#   Home Mini(캐스트)는 무음 자동꺼짐이 없어 30분(정각·30분). 옛 블루투스 스피커 시절엔 20분이었음. 0이면 끔.
 #   CHIME_START~CHIME_END시(끝 포함 시간대)만. 취침(sleep)·동파(frost) 모드에선 말하지 않음.
-CHIME_EVERY = 20; CHIME_START = 7; CHIME_END = 22
+CHIME_EVERY = 30; CHIME_START = 7; CHIME_END = 22
 FORECAST = os.path.join(BASE, "forecast.json"); LATEST = os.path.join(BASE, "latest.json")
 STATE = os.path.join(BASE, "heater_state.json"); STATUS = os.path.join(BASE, "heater_status.json")
 CACHE = os.path.join(BASE, "tts_cache")  # gTTS 영구 캐시(문구당 1회 다운로드 → 오프라인 재사용)

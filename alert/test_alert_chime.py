@@ -31,12 +31,15 @@ class Slot(unittest.TestCase):
         self.assertIsNone(a.chime_slot(D(2026, 11, 14, 23, 0), "comfort"))
 
     def test_slots_every_20(self):
-        s = [a.chime_slot(D(2026, 11, 14, 9, m), "comfort") for m in (0, 19, 20, 39, 40, 59)]
+        s = [a.chime_slot(D(2026, 11, 14, 9, m), "comfort", every=20) for m in (0, 19, 20, 39, 40, 59)]
         self.assertEqual(s[0], s[1]); self.assertEqual(s[2], s[3]); self.assertEqual(s[4], s[5])
         self.assertEqual(len(set(s)), 3)
 
-    def test_gap_under_speaker_idle(self):
-        self.assertLess(a.CHIME_EVERY, 30)                 # 스피커 30분 무음 자동꺼짐보다 짧아야
+    def test_default_on_hour_and_half(self):              # 기본: 정각·30분
+        self.assertEqual(a.CHIME_EVERY, 30)
+        s = [a.chime_slot(D(2026, 11, 14, 9, m), "comfort") for m in (0, 29, 30, 59)]
+        self.assertEqual(s[0], s[1]); self.assertEqual(s[2], s[3]); self.assertEqual(len(set(s)), 2)
+        self.assertEqual(a.chime_texts(D(2026, 11, 14, 15, 47), None), ["오후 세 시 삼십 분입니다."])
 
     def test_disabled(self):
         self.assertIsNone(a.chime_slot(D(2026, 11, 14, 9, 5), "comfort", every=0))
@@ -44,7 +47,7 @@ class Slot(unittest.TestCase):
 
 class Texts(unittest.TestCase):
     def test_rounds_to_slot_and_temp(self):
-        self.assertEqual(a.chime_texts(D(2026, 11, 14, 15, 27), 21.5),
+        self.assertEqual(a.chime_texts(D(2026, 11, 14, 15, 27), 21.5, every=20),
                          ["오후 세 시 이십 분입니다.", "실내 이십일 점 오도."])
 
     def test_no_temp_when_stale(self):
