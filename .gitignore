@@ -112,3 +112,5 @@ sms_state.json.tmp
 # 플러그 무응답 알림 상태
 plug_alert_state.json
 latest.json.tmp
+uplink_log.csv
+uplink_log.csv.pruned
