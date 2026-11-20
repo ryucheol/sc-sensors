@@ -31,7 +31,26 @@ ALIASES = {
     "센서": "센서", "온도": "센서", "습도": "센서", "sensors": "센서", "sensor": "센서",
     "보조": "보조", "보조히터": "보조", "aux": "보조",
     "아침": "아침", "wake": "아침",
+    "시보": "시보", "chime": "시보",
 }
+CHIME_FILE = os.path.join(BASE, "chime.json")   # alert_sound.py 시보 켜짐/꺼짐(파일 없으면 켜짐)
+
+
+def chime_cmd(toks, path=None):
+    """시보 / 시보 켜 / 시보 끔 → (status, 문구)."""
+    path = path or CHIME_FILE
+    try: on = bool(json.load(open(path)).get("on", True))
+    except Exception: on = True
+    a = toks[0] if toks else ""
+    if a in ("켜", "켜기", "켬", "on", "ON"): new = True
+    elif a in ("꺼", "끔", "끄기", "off", "OFF"): new = False
+    elif a in ("", "상태"): new = None
+    else: return "오류", "시보 / 시보 켜 / 시보 끔"
+    if new is not None:
+        with open(path + ".tmp", "w") as f: json.dump({"on": new, "ts": time.strftime("%Y-%m-%d %H:%M:%S")}, f)
+        os.replace(path + ".tmp", path); on = new
+    return "완료", "시보 %s — 난방 모드 07~22시 정각·30분에 Home Mini로 시각·실내온도%s" % (
+        "켜짐" if on else "꺼짐", "" if on else " (지금은 말하지 않음, 경보는 그대로)")
 
 
 def log(msg):
@@ -249,7 +268,7 @@ def run(cmd_text):
     for i, t in enumerate(toks):
         if t.lower() in ALIASES: verb = ALIASES[t.lower()]; toks.pop(i); break
     if not verb:
-        return "오류", "알 수 없는 명령 — 난방 / 동파 / 취침 / 도착 HH:MM [내일|날짜] [목표°C] / 도착 취소 / 상태 / 점검 / 기상 / 선풍기 켜|꺼|자동 / 공유 [N시간|N분|끔] / 센서 / 보조 켜|꺼|자동 / 아침 06:30"
+        return "오류", "알 수 없는 명령 — 난방 / 동파 / 취침 / 도착 HH:MM [내일|날짜] [목표°C] / 도착 취소 / 상태 / 점검 / 기상 / 선풍기 켜|꺼|자동 / 공유 [N시간|N분|끔] / 센서 / 보조 켜|꺼|자동 / 아침 06:30 / 시보 켜|끔"
     if verb == "상태":
         return "완료", status_text()
     if verb == "선풍기":
@@ -260,6 +279,8 @@ def run(cmd_text):
         return "완료", sensors_text()
     if verb == "보조":
         return aux_cmd(toks)
+    if verb == "시보":
+        return chime_cmd(toks)
     if verb == "아침":
         import wake_heat as wh
         w = wh.load_wake()

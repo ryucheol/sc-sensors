@@ -45,6 +45,27 @@ class Slot(unittest.TestCase):
         self.assertIsNone(a.chime_slot(D(2026, 11, 14, 9, 5), "comfort", every=0))
 
 
+class Toggle(unittest.TestCase):
+    def test_enabled_file(self):
+        import tempfile, json as j, os as o
+        d = tempfile.mkdtemp(); p = o.path.join(d, "chime.json")
+        self.assertTrue(a.chime_enabled(p))                       # 파일 없으면 켜짐
+        j.dump({"on": False}, open(p, "w")); self.assertFalse(a.chime_enabled(p))
+        j.dump({"on": True}, open(p, "w")); self.assertTrue(a.chime_enabled(p))
+        open(p, "w").write("깨짐"); self.assertTrue(a.chime_enabled(p))   # 깨지면 켜짐
+
+    def test_command(self):
+        import tempfile, os as o
+        sys.path.insert(0, o.path.join(o.path.dirname(o.path.abspath(__file__)), "..", "heater"))
+        import sheet_cmd_poll as scp
+        p = o.path.join(tempfile.mkdtemp(), "chime.json")
+        self.assertIn("켜짐", scp.chime_cmd([], p)[1])
+        self.assertIn("꺼짐", scp.chime_cmd(["끔"], p)[1]); self.assertFalse(a.chime_enabled(p))
+        self.assertIn("꺼짐", scp.chime_cmd(["상태"], p)[1])
+        self.assertIn("켜짐", scp.chime_cmd(["켜"], p)[1]); self.assertTrue(a.chime_enabled(p))
+        self.assertEqual(scp.chime_cmd(["뭐"], p)[0], "오류")
+
+
 class Texts(unittest.TestCase):
     def test_rounds_to_slot_and_temp(self):
         self.assertEqual(a.chime_texts(D(2026, 11, 14, 15, 27), 21.5, every=20),

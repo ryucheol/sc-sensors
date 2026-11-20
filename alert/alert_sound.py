@@ -40,6 +40,7 @@ FRESH_SENSOR = 180; FRESH_STATUS = 150; FAULT_REPEAT = 900
 # 시보(재실 comfort 모드에서만): CHIME_EVERY분 간격(정각 기준) "오후 세 시 이십 분입니다. 실내 N도."
 #   Home Mini(캐스트)는 무음 자동꺼짐이 없어 30분(정각·30분). 옛 블루투스 스피커 시절엔 20분이었음. 0이면 끔.
 #   CHIME_START~CHIME_END시(끝 포함 시간대)만. 취침(sleep)·동파(frost) 모드에선 말하지 않음.
+CHIME_FILE = os.path.join(os.path.expanduser("~/smart-cabin"), "chime.json")   # {"on": false} → 시보 끔(명령 '시보 끔')
 CHIME_EVERY = 30; CHIME_START = 7; CHIME_END = 22
 FORECAST = os.path.join(BASE, "forecast.json"); LATEST = os.path.join(BASE, "latest.json")
 STATE = os.path.join(BASE, "heater_state.json"); STATUS = os.path.join(BASE, "heater_status.json")
@@ -131,6 +132,14 @@ def chime_slot(dt, mode, every=None, start=None, end=None):
     if not every or mode != "comfort" or not (start <= dt.hour <= end):
         return None
     return dt.strftime("%Y%m%d%H") + "%02d" % (dt.minute // every * every)
+
+
+def chime_enabled(path=None):
+    """시보 켜짐 여부(파일 없거나 깨지면 켜짐)."""
+    try:
+        return bool(json.load(open(path or CHIME_FILE)).get("on", True))
+    except Exception:
+        return True
 
 
 def chime_texts(dt, t_in, every=None):
@@ -370,6 +379,8 @@ def loop():
                 adv_last = None
             # (D) 시보: 재실 모드·낮 시간대에 CHIME_EVERY분마다 1회(블루투스 스피커 자동 꺼짐 방지 겸)
             slot = chime_slot(datetime.datetime.now(), st.get("mode"))
+            if slot and slot != chime_last and not chime_enabled():
+                chime_last = slot                     # 꺼 둔 동안의 슬롯은 넘김(켜도 지난 슬롯을 몰아서 말하지 않음)
             if slot and slot != chime_last:
                 for s in chime_texts(datetime.datetime.now(), t if fresh else None):
                     say(s)
