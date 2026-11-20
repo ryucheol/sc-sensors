@@ -486,6 +486,56 @@ def _heater_mode():
         return None
 
 
+MODE_KO = {"comfort": "🔥 난방", "sleep": "🌙 취침", "frost": "❄ 동파 방지"}
+SRC_KO = {"arrival": "도착 예열", "preheat": "도착 예열", "backstop": "백스톱 자동 복귀", "noshow": "미도착 자동 복귀"}
+
+
+def heater_row(st, hs, backstop_h, now):
+    """'농막_현재'에 올릴 히터 행(순수) — 대시보드 '지금 모드·다음 예약·백스톱'이 이 행을 읽는다.
+    temp=모드 문구, hum=릴레이, volt=도착 예약. 시간별 요약(1시간 늦음)·시트 명령 탭(텔레그램 명령 빠짐) 대신."""
+    if not st or not st.get("mode"):
+        return None
+    hm = lambda t: time.strftime("%m-%d %H:%M", time.localtime(t))
+    m = st["mode"]
+    txt = "%s %g/%g" % (MODE_KO.get(m, m), st.get("on", 0), st.get("off", 0))
+    if st.get("since"):
+        txt += " · %s부터" % hm(st["since"])
+    if st.get("source") in SRC_KO:
+        txt += " (%s)" % SRC_KO[st["source"]]
+    if m in ("comfort", "sleep") and st.get("source") == "cmd" and st.get("last_cmd_ts") and backstop_h:
+        txt += " · 백스톱 %s" % hm(st["last_cmd_ts"] + backstop_h * 3600)
+    hs = hs or {}
+    if hs.get("relay"):
+        relay = "ON %.0fW" % (hs.get("watt") or hs.get("stage_w") or 0)
+    else:
+        relay = "OFF"
+    arr = st.get("arrival") or {}
+    res = ""
+    if arr.get("ts"):
+        res = "%s %s°C" % (hm(arr["ts"]), arr.get("target", "?"))
+        start = hs.get("arrival_start_pred") or hs.get("arrival_start_est")
+        if start:
+            res += " · 예상 시작 %s" % hm(start)
+    return {"sensor": "히터", "temp": txt, "hum": relay, "volt": res, "time_ms": int(now * 1000)}
+
+
+def _heater_row_now():
+    d = os.path.dirname(HEATER_STATE)
+    try:
+        st = json.load(open(HEATER_STATE))
+    except Exception:
+        return None
+    try:
+        hs = json.load(open(os.path.join(d, "heater_status.json")))
+    except Exception:
+        hs = {}
+    try:
+        bh = json.load(open(os.path.join(d, "heater_config.json"))).get("backstop_comfort_hours")
+    except Exception:
+        bh = None
+    return heater_row(st, hs, bh, time.time())
+
+
 def should_post(mode, now, last_ts, last_temps, temps):
     """'농막_현재' 업로드 여부(순수). 재실(난방·취침)이면 항상(쿨다운은 호출부), 무인(동파)이면
     UNATTENDED_INTERVAL 지났거나 큰 변화·저온일 때만. temps/last_temps: {센서: °C}."""
@@ -556,7 +606,8 @@ async def current_uploader(cfg, latest, dirty):
         if readings and await asyncio.to_thread(online):   # 오프라인이면 아예 시도 안 함(현재값은 큐 안 함)
             try:
                 net = await asyncio.to_thread(net_info)
-                res = post_current(readings, net)
+                hr = _heater_row_now()
+                res = post_current(readings + ([hr] if hr else []), net)
                 log(f"[현재] {res.get('updated')}개 갱신 ({net.get('ssid','')} {net.get('ip','')})")
                 last_post, last_temps = time.time(), temps_now
             except Exception as e:
