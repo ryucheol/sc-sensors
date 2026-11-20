@@ -32,7 +32,7 @@
     "ua_w_per_k": 47,
     "heater_watts": 1740,
     "margin": 1.1,
-    "max_lead_hours": 10
+    "max_lead_hours": 12
   },
   "arrival_noshow_hours": 3,
   "redundancy": {

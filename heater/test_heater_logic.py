@@ -172,6 +172,46 @@ class PredictArrival(unittest.TestCase):
     def test_no_arrival(self):
         self.assertEqual(hc.predict_arrival_start(CFG, {}, 20, self.NOW, [], 0, 1770), (None, None, None))
 
+class PreheatLearn(unittest.TestCase):
+    def test_factor(self):
+        self.assertEqual(hc.learned_factor({}), 1.0)
+        self.assertAlmostEqual(hc.learned_factor({"preheat_k": [1.3]}), 1.3)
+        self.assertAlmostEqual(hc.learned_factor({"preheat_k": [1.0, 1.4, 1.2]}), 1.2)
+        self.assertEqual(hc.learned_factor({"preheat_k": [3.0]}), hc.LEARN_MAX)
+        self.assertEqual(hc.learned_factor({"preheat_k": [0.3]}), hc.LEARN_MIN)
+
+    def _cfg(self):
+        return json.load(open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "heater_config.json")))
+
+    def test_learn_on_reach(self):
+        cfg = self._cfg(); t0 = 1_800_000_000
+        st = {"mode": "comfort", "source": "arrival", "on": 23.5, "off": 24,
+              "preheat_run": {"start": t0, "lead_h": 8.0, "t_in": 8, "target": 23.5, "arr_ts": t0 + 8 * 3600, "capped": False}}
+        dtn = datetime.datetime.fromtimestamp(t0 + 10 * 3600)
+        ch, logs = hc.schedule_step(cfg, st, 23.6, 1.0, dtn, t0 + 10 * 3600)
+        self.assertNotIn("preheat_run", st)
+        self.assertEqual(st["preheat_k"], [1.25])
+        self.assertTrue(any("비율 1.25" in m for m in logs))
+
+    def test_capped_not_learned_and_mode_change_drops(self):
+        cfg = self._cfg(); t0 = 1_800_000_000
+        st = {"mode": "comfort", "source": "arrival", "on": 23.5, "off": 24,
+              "preheat_run": {"start": t0, "lead_h": 14.0, "t_in": 7, "target": 23.5, "arr_ts": t0 + 14 * 3600, "capped": True}}
+        hc.schedule_step(cfg, st, 23.6, 1.0, datetime.datetime.fromtimestamp(t0 + 15 * 3600), t0 + 15 * 3600)
+        self.assertNotIn("preheat_k", st)
+        st2 = {"mode": "comfort", "source": "cmd", "on": 25, "off": 25.5, "preheat_run": {"start": t0, "lead_h": 5, "target": 23.5, "arr_ts": t0}}
+        ch, logs = hc.schedule_step(cfg, st2, 20.0, 1.0, datetime.datetime.fromtimestamp(t0 + 3600), t0 + 3600)
+        self.assertNotIn("preheat_run", st2)
+
+    def test_learned_factor_lengthens_lead(self):
+        cfg = self._cfg(); now = 1_800_000_000
+        st = {"arrival": {"ts": now + 20 * 3600, "target": 23.5}}
+        s0, l0 = hc.arrival_plan(cfg, st, 15.0, 5.0, 2240)
+        st["preheat_k"] = [1.3]
+        s1, l1 = hc.arrival_plan(cfg, st, 15.0, 5.0, 2240)
+        self.assertGreater(l1, l0)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
 

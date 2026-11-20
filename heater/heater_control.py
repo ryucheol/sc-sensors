@@ -176,11 +176,26 @@ def default_state(cfg):
     return {"mode":"frost","on":f["on"],"off":f["off"],"source":"default",
             "since":now(),"last_cmd_ts":0,"relay":None}
 
+LEARN_KEEP = 5            # 최근 예열 몇 번을 볼지
+LEARN_MIN, LEARN_MAX = 0.8, 1.6   # 학습 계수 범위(한 번의 이상한 예열로 크게 흔들리지 않게)
+
+
+def learned_factor(st):
+    """최근 예열들의 '실제 걸린 시간 ÷ 예측 선행시간' 중앙값(순수). 기록 없으면 1.0.
+    상한에 걸려 잘린 예열은 예측이 잘린 값이라 학습에서 뺀다(preheat_k에 넣지 않음)."""
+    ks = [k for k in (st.get("preheat_k") or [])[-LEARN_KEEP:] if isinstance(k, (int, float))]
+    if not ks:
+        return 1.0
+    ks = sorted(ks); m = ks[len(ks) // 2] if len(ks) % 2 else (ks[len(ks) // 2 - 1] + ks[len(ks) // 2]) / 2
+    return max(LEARN_MIN, min(LEARN_MAX, m))
+
+
 def arrival_plan(cfg, st, t_in, t_out_fc, P=None):
     """도착 예약(st["arrival"]={"ts","target"})의 시작 시각(epoch)과 선행시간(h). 예약 없으면 (None, None). 순수."""
     arr = st.get("arrival")
     if not arr or not arr.get("ts"): return None, None
     cfg2 = dict(cfg); pre = dict(cfg["preheat"]); pre["target_temp"] = arr.get("target", cfg["comfort"]["on"]); cfg2["preheat"] = pre
+    pre["margin"] = pre["margin"] * learned_factor(st)   # 지난 예열들이 늦었으면 더 일찍, 일렀으면 덜 일찍
     lead = preheat_lead_hours(cfg2, t_in, t_out_fc, P)
     return arr["ts"] - lead * 3600.0, lead
 
@@ -233,6 +248,8 @@ def schedule_step(cfg, st, t_in, t_out, dtn, tnow, P=None, t_out_fc=None):
             if tnow >= start_ts:
                 c = cfg["comfort"]; on = arr.get("target", c["on"]); off = on + (c["off"] - c["on"])
                 st.update(mode="comfort", on=on, off=off, source="arrival", since=tnow); changed = True
+                st["preheat_run"] = {"start": tnow, "lead_h": round(lead, 2), "t_in": t_in, "target": on, "arr_ts": arr["ts"],
+                                     "capped": lead >= p["max_lead_hours"] - 1e-6}
                 logs.append("도착 예약 난방 시작: 도착 %s 목표 %s°C, 내부 %s°C 예보외기 %s°C P=%sW, 선행 %.1fh → 난방 %s/%s"
                             % (time.strftime("%m-%d %H:%M", time.localtime(arr["ts"])), on, t_in,
                                t_out_fc if t_out_fc is not None else t_out, int(P) if P else cfg["preheat"]["heater_watts"], lead, on, off))
@@ -241,6 +258,27 @@ def schedule_step(cfg, st, t_in, t_out, dtn, tnow, P=None, t_out_fc=None):
             logs.append("도착 예약 노쇼(%dh 내 난방 명령 없음) → 동파 복귀, 예약 해제" % noshow_h)
         elif tnow > arr["ts"] + noshow_h * 3600:
             st.pop("arrival", None); changed = True   # 이미 다른 명령으로 모드가 바뀜 → 예약만 정리
+    run = st.get("preheat_run")
+    if run:
+        if st.get("source") != "arrival" or st.get("mode") != "comfort":
+            st.pop("preheat_run", None); changed = True       # 도중에 사람이 모드를 바꿈 → 이번 예열은 학습 안 함
+            logs.append("예열 학습 생략: 목표 도달 전에 모드가 바뀜")
+        elif t_in is not None and t_in >= run["target"]:
+            actual_h = (tnow - run["start"]) / 3600.0
+            late_min = (tnow - run["arr_ts"]) / 60.0
+            msg = "예열 목표 도달: %.1fh 걸림(예측 %.1fh%s), 도착 시각 대비 %+.0f분" % (
+                actual_h, run["lead_h"], ", 상한에 걸림" if run.get("capped") else "", late_min)
+            if not run.get("capped") and run["lead_h"] > 0.3:
+                k = actual_h / run["lead_h"]
+                st["preheat_k"] = ((st.get("preheat_k") or []) + [round(k, 3)])[-LEARN_KEEP:]
+                msg += " → 비율 %.2f 기록, 다음 여유 계수 %.2f배" % (k, learned_factor(st))
+            elif run.get("capped") and late_min > 0:
+                msg += " → 상한(max_lead_hours) 때문에 늦음: 상한을 늘리거나 보조 히터 확인"
+            st.pop("preheat_run", None); changed = True
+            logs.append(msg)
+        elif tnow > run["arr_ts"] + 6 * 3600:
+            st.pop("preheat_run", None); changed = True       # 도착 6시간 지나도 못 닿음(이상) → 정리
+            logs.append("예열 학습 생략: 도착 6시간 뒤에도 목표 미도달")
     if p.get("enabled") and dtn.weekday() == p["weekday"]:
         target = dtn.replace(hour=p["target_hour"], minute=p["target_min"], second=0, microsecond=0)
         if dtn < target and st["mode"] == "frost":
