@@ -115,6 +115,7 @@ smart-cabin/
 | `weather/forecast_fetch.py` / `weather/kma_obs_fetch.py` | 기상청 단기예보(매시 10분) / ASOS 관측(매시 15분) | cron |
 | `weather/kma_sync.py` | 기상청 단기예보 81행·부여 관측 → 시트 `동지집_예보`·`부여_시간별`(1단계). 테스트 `cd weather && python3 -m unittest test_kma_sync` — [설계](docs/KMA_SHEET_PUSH.ko.md) | timer 매시 12·42분 + 연결 시 |
 | `gateway/sheet_summary.py` | Pi 1분 기록(`thermal_log.csv`)의 시간 요약(히터 kWh·가동 분·평균 온습도) → 시트 `농막_시간요약`, 끝난 날의 1분 원자료(gzip) → 드라이브 `농막_원자료`. 밀리면 이어서 보냄. 테스트 `cd gateway && python3 -m unittest test_sheet_summary` | cron 매시 5분 |
+| `gateway/fill_hourly_gaps.py` | 시간별 기록(.db `hist_q`·`avg_q`)에 빠진 시간(게이트웨이 재시작 등)을 `thermal_log.csv` 1분 값으로 채움 → 다음 정시에 게이트웨이가 시트(`농막_시간별`·`농막_평균`)로 올림. 최근 2일, 30분치 미만·값이 굳은 시간은 건너뜀. 로그 `fill_gaps.log`. 테스트 `python3 -m unittest gateway/test_fill_hourly_gaps.py` | cron 매시 30분 |
 | `heater/fan_control.py` | 선풍기(Tuya 'Fan') 자동: 성층 해소(난방·여름 재실)·더위(재실 28 °C)·수동 `선풍기 켜|꺼|자동`. 테스트 `cd heater && python3 -m unittest test_fan_control` | cron 매분(tuya-venv) |
 | `notify/lte_watch.py` | LTE 자가 복구: eth1로 인터넷 확인, 15분 실패면 동글 재시작(30분 간격·하루 8회)·텔레그램. 테스트 `cd notify && python3 -m unittest test_lte_watch` | cron 5분 |
 | `scripts/farmhut-wan-guard` | Ryufarm 기기 → LTE 차단(nftables): Shelly 상시, Home Mini·Tuya 하루/한 달 한도, `공유` 명령으로 잠깐 열기. 설치 `sudo bash scripts/install_wan_guard.sh`, 매분 `notify/wan_tick.sh` | 부팅 서비스 + cron 매분 |
