@@ -101,6 +101,71 @@ class Evaluate(unittest.TestCase):
         self.assertEqual(cw.ncfg(cfg)["overheat_c"]["다락"], 32.0)   # 나머지 기본값 유지
 
 
+class Condense(unittest.TestCase):
+    def lt(self, out_t, t1, h1, t2=24.0, h2=35.0):
+        ms = (NOW - 60) * 1000
+        return {"내부1층": {"temp": t1, "hum": h1, "time_ms": ms}, "다락": {"temp": t2, "hum": h2, "time_ms": ms},
+                "바닥외부": {"temp": out_t, "hum": 85, "time_ms": ms}}
+
+    def test_dew_point(self):
+        self.assertAlmostEqual(cw.dew_point(24.7, 48.4), 13.0, delta=0.3)
+        self.assertAlmostEqual(cw.dew_point(23.7, 36.0), 7.8, delta=0.3)
+        self.assertIsNone(cw.dew_point(20, 0))
+
+    def test_1121_morning_fires(self):   # 06:54 1층 21.6°C 61% · 다락 24.5°C 48%, 바깥 −1.4
+        d = ev(lt=self.lt(-1.4, 21.6, 61.0, 24.5, 48.0))
+        self.assertTrue(d["condense"][0]); self.assertIn("1층", d["condense"][1]); self.assertIn("대처", d["condense"][1])
+
+    def test_normal_quiet_and_warm_outside_quiet(self):
+        self.assertFalse(ev(lt=self.lt(-1.0, 23.7, 36.0))["condense"][0])     # 평소 이슬점 ~8
+        self.assertFalse(ev(lt=self.lt(3.0, 21.6, 61.0))["condense"][0])      # 바깥 영상
+
+    def test_hysteresis(self):
+        lt = self.lt(-1.0, 23.0, 39.0, 23.0, 39.0)   # 이슬점 ~8.4 → 기준 10 아래
+        self.assertFalse(ev(lt=lt)["condense"][0])
+        lt2 = self.lt(-1.0, 23.0, 44.0, 23.0, 44.0)  # 이슬점 ~10.2(켜짐) → 9.6이면 켜진 채 유지
+        self.assertTrue(ev(lt=lt2)["condense"][0])
+        lt3 = self.lt(-1.0, 23.0, 42.5, 23.0, 42.5)  # ~9.6
+        d_off = cw.evaluate(NOW, CFG, {}, status(), lt3, None, NOW, prev={})
+        d_on = cw.evaluate(NOW, CFG, {}, status(), lt3, None, NOW, prev={"condense": {"on": True}})
+        self.assertFalse(d_off["condense"][0]); self.assertTrue(d_on["condense"][0])
+
+
+class Dry(unittest.TestCase):
+    def lt(self, h1):
+        ms = (NOW - 60) * 1000
+        return {"내부1층": {"temp": 24.3, "hum": h1, "time_ms": ms}, "다락": {"temp": 25.0, "hum": 30, "time_ms": ms},
+                "바닥외부": {"temp": 2.0, "hum": 80, "time_ms": ms}}
+
+    def d(self, h1, mode="comfort", prev=None):
+        return cw.evaluate(NOW, CFG, {}, status(mode=mode), self.lt(h1), None, NOW, prev=prev or {})["dry"]
+
+    def test_needs_30min(self):
+        self.assertFalse(self.d(28.8, prev={"dry_below_since": NOW - 600})[0])
+        self.assertTrue(self.d(28.8, prev={"dry_below_since": NOW - 1900})[0])
+        self.assertFalse(self.d(28.8)[0])                      # 아직 시작 시각 없음
+
+    def test_only_comfort(self):
+        self.assertFalse(self.d(20.0, mode="sleep", prev={"dry_below_since": NOW - 9999})[0])
+        self.assertFalse(self.d(20.0, mode="frost", prev={"dry_below_since": NOW - 9999})[0])
+
+    def test_hysteresis(self):
+        on = {"dry": {"on": True}}
+        self.assertTrue(self.d(31.5, prev=on)[0])              # 33 미만이면 유지
+        self.assertFalse(self.d(33.5, prev=on)[0])
+
+    def test_since(self):
+        self.assertEqual(cw.dry_since(None, 29, "comfort", 100, 30), 100)
+        self.assertEqual(cw.dry_since(50, 29, "comfort", 100, 30), 50)
+        self.assertIsNone(cw.dry_since(50, 31, "comfort", 100, 30))
+        self.assertIsNone(cw.dry_since(50, 25, "sleep", 100, 30))
+
+    def test_sleep_off_sends_nothing(self):
+        ws = {"dry": {"on": True, "last": NOW - 60}}
+        sent = cw.step(NOW, {"dry": (False, "", "")}, ws, cw.ncfg({}), lambda m: None)
+        self.assertEqual(sent, []); self.assertFalse(ws["dry"]["on"])
+
+
 class Step(unittest.TestCase):
     def setUp(self):
         self.sent = []; self.ws = {}; self.N = cw.ncfg(CFG)

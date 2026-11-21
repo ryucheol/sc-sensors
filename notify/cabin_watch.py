@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""농막 감시 → 텔레그램: 과열 · 히터 오류 · 동파 위험(실측·예보). 설계·설정: docs/TELEGRAM.ko.md §4
+"""농막 감시 → 텔레그램: 과열 · 히터 오류 · 동파 위험(실측·예보) · 결로 주의 · 건조(난방 모드만). 설계·설정: docs/TELEGRAM.ko.md §4
 
 히터 제어기(heater_control.py)와 음성 경보(alert_sound.py)는 건드리지 않고, 그들이 남기는 파일만 읽는다.
   heater_status.json(제어기 스냅샷) · heater_state.json(모드·임계) · latest.json(센서) · forecast.json(단기예보)
@@ -44,12 +44,28 @@ DEFAULTS = {
     # 예보 + 지금 히터 단(W)로 계산한 실내 도달 온도가 frost.on + 이 값 미만이면 '위험'(히터 단 올리기)
     "forecast_margin_c": 2.0,
     "forecast_max_age_h": 12,          # 이보다 오래된 forecast.json은 쓰지 않음
+    # 결로 주의: 바깥(바닥외부 센서) ≤ condense_outdoor_c 이고 실내(1층·다락) 이슬점 최고 ≥ condense_dewpoint_c.
+    #   풀림은 이슬점이 기준 − condense_hyst_c 아래로 내려가야(들락날락 방지). 11-21 07시 다락 이슬점 12.9°C에서
+    #   다락 이중창 바깥창에 서리 1/3(아침 조리·물 끓임 수증기). 평소 이슬점은 7~9°C.
+    "condense_outdoor_c": 0.0,
+    "condense_dewpoint_c": 10.0,
+    "condense_hyst_c": 1.0,
+    # 건조: 난방(comfort) 모드에서만. 1층 습도 < dry_rh 가 dry_min 분 넘게 이어지면, dry_recover 이상이면 해제.
+    #   취침·동파 모드에선 보내지 않음(사용자 11-21). 겨울 목표 35~40%(밤 영하면 40% 넘기지 않기 — 결로).
+    "dry_rh": 30.0,
+    "dry_recover": 33.0,
+    "dry_min": 30,
     # 다시 알리는 간격(분)
     "remind_min": {"overheat": 30, "frost_stuck": 60, "low_indoor": 60, "heater_fault": 180,
-                   "plug_comm": 180, "controller_down": 180, "sensor_lost": 360, "forecast_frost": 720},
+                   "plug_comm": 180, "controller_down": 180, "sensor_lost": 360, "forecast_frost": 720,
+                   "condense": 120, "dry": 180},
 }
 ALARMS = ("overheat", "frost_stuck", "low_indoor", "heater_fault", "plug_comm",
-          "controller_down", "sensor_lost", "forecast_frost")
+          "controller_down", "sensor_lost", "forecast_frost", "condense", "dry")
+DRY_TIPS = ("대처: 주전자 약불로 잠깐 끓이기 · 실내에 빨래 널기 · 물그릇 두기 (목표 35~40%, 바깥 영하인 밤엔 40% 넘기지 않기 — 결로)")
+
+CONDENSE_TIPS = ("대처: ① 창을 5~10분 조금 열어 환기(다락 창 포함) ② 물 끓이기·조리는 뚜껑 덮고, 주전자 가습은 잠시 끄기 "
+                 "③ 선풍기 켜서 공기 섞기 ④ 이중창 안쪽 창 꼭 닫기 ⑤ 서리·물기는 녹으면 창틀까지 닦기")
 
 
 def load(path, default=None):
@@ -95,6 +111,22 @@ def _sensor(latest, name, now, stale_min):
 def _f1(x): return "%.1f" % x
 
 
+def dew_point(t, rh):
+    """이슬점 °C (Magnus 식, 순수). rh ≤ 0이면 None."""
+    import math
+    if t is None or rh is None or rh <= 0: return None
+    g = math.log(rh / 100.0) + 17.62 * t / (243.12 + t)
+    return 243.12 * g / (17.62 - g)
+
+
+def _sensor_th(latest, name, now, stale_min):
+    """→ (온도, 습도) 신선할 때만, 아니면 (None, None)."""
+    r = (latest or {}).get(name) or {}
+    t, h, ms = r.get("temp"), r.get("hum"), r.get("time_ms")
+    if t is None or h is None or ms is None or (now - ms / 1000.0) > stale_min * 60: return None, None
+    return float(t), float(h)
+
+
 MODE_KR = {"frost": "동파", "comfort": "난방", "sleep": "취침"}
 
 
@@ -110,7 +142,7 @@ def forecast_min(fc, now, hours):
     return best[0], time.strftime("%m/%d %H시", time.localtime(best[1] / 1000))
 
 
-def evaluate(now, cfg, state, status, latest, fc, fc_mtime=None):
+def evaluate(now, cfg, state, status, latest, fc, fc_mtime=None, prev=None):
     """순수 판단 → {경보키: (켜짐?, 켜짐 문구, 복귀 문구)}. 판단할 자료가 없으면 그 키는 빠진다(상태 유지)."""
     cfg = cfg or {}; N = ncfg(cfg); state = state or {}
     out = {}
@@ -198,7 +230,47 @@ def evaluate(now, cfg, state, status, latest, fc, fc_mtime=None):
             msg += " · 모드 %s" % mode_kr
             if mode != "frost": msg += " (떠날 때 동파 모드 확인)"
             out["forecast_frost"] = (active, msg, "✅ 동파 위험 예보 해제: %d시간 예보 최저 %s°C" % (N["forecast_hours"], _f1(tmin)))
+
+    # ── 결로 주의(바깥 영하 + 실내 이슬점 높음) ──
+    to, _ = _sensor_th(latest, "바닥외부", now, stale_min)
+    dps = []
+    for name in ("내부1층", "다락"):
+        t, h = _sensor_th(latest, name, now, stale_min)
+        dp = dew_point(t, h)
+        if dp is not None: dps.append((dp, name, t, h))
+    if to is not None and dps:
+        dp, name, t, h = max(dps)
+        was_on = bool(((prev or {}).get("condense") or {}).get("on"))
+        th = N["condense_dewpoint_c"] - (N["condense_hyst_c"] if was_on else 0.0)
+        active = to <= N["condense_outdoor_c"] and dp >= th
+        out["condense"] = (active,
+                           "💧 결로 주의: %s 이슬점 %s°C (%s°C·%.0f%%), 바깥 %s°C — 창 유리가 이보다 차가우면 물방울·서리. %s"
+                           % (name, _f1(dp), _f1(t), h, _f1(to), CONDENSE_TIPS),
+                           "✅ 결로 주의 해제: 실내 이슬점 최고 %s°C(%s), 바깥 %s°C" % (_f1(dp), name, _f1(to)))
+
+    # ── 건조(난방 모드만, 1층 습도 30분 넘게 30% 미만) ──
+    t1, h1 = _sensor_th(latest, floor, now, stale_min)
+    if mode != "comfort":
+        out["dry"] = (False, "", "")          # 취침·동파: 조용히 끔(해제 문구 없음)
+    elif h1 is not None:
+        p = prev or {}
+        was_on = bool((p.get("dry") or {}).get("on"))
+        since = p.get("dry_below_since")
+        if was_on:
+            active = h1 < N["dry_recover"]
+        else:
+            active = h1 < N["dry_rh"] and since is not None and now - since >= N["dry_min"] * 60
+        out["dry"] = (active,
+                      "🏜 실내 건조: %s 습도 %.0f%% (%s°C) — 30%% 아래가 %d분 넘게 계속. %s"
+                      % (floor, h1, _f1(t1), N["dry_min"], DRY_TIPS),
+                      "✅ 건조 해소: %s 습도 %.0f%%" % (floor, h1))
     return out
+
+
+def dry_since(prev_since, h1, mode, now, rh):
+    """건조 지속 시작 시각 갱신(순수): 난방 모드에서 rh 미만이면 처음 본 시각 유지, 아니면 None."""
+    if mode != "comfort" or h1 is None or h1 >= rh: return None
+    return prev_since or now
 
 
 def _heater_txt(status):
@@ -221,7 +293,7 @@ def step(now, decisions, wstate, N, send):
             send(prefix + msg); sent.append(prefix + msg)
             s["on"] = True; s["last"] = now
         elif not active and s["on"]:
-            send(rec); sent.append(rec)
+            if rec: send(rec); sent.append(rec)
             s["on"] = False; s["last"] = now
     return sent
 
@@ -245,13 +317,19 @@ def run_once(dry=False, now=None):
     cfg, state, status, latest, fc, fc_mtime = gather()
     N = ncfg(cfg)
     if not N.get("enabled", True): return []
-    dec = evaluate(now, cfg, state, status, latest, fc, fc_mtime)
+    ws = load(P["watch"], {}) or {}
+    dec = evaluate(now, cfg, state, status, latest, fc, fc_mtime, prev=ws)
     if dry:
         for k in ALARMS:
             if k in dec: print("%-16s %s  %s" % (k, "켜짐" if dec[k][0] else "-", dec[k][1] if dec[k][0] else ""))
         return []
-    ws = load(P["watch"], {}) or {}
+    mode = (status or {}).get("mode") or (state or {}).get("mode")
+    _, h1 = _sensor_th(latest, cfg.get("sensor", "내부1층"), now, cfg.get("stale_temp_min", 45))
+    ds = dry_since(ws.get("dry_below_since"), h1, mode, now, N["dry_rh"])
+    changed = ds != ws.get("dry_below_since")
+    ws["dry_below_since"] = ds
     sent = step(now, dec, ws, N, lambda m: tg.send(m))
+    if changed and not sent: save_state(ws)
     if sent:
         save_state(ws)
         for m in sent: log("보냄: " + m)
