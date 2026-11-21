@@ -4,6 +4,7 @@
  엔진: gTTS(온라인, 영구캐시) → espeak 폴백(오프라인/실패). piper는 추후 연구(USE_PIPER).
  온라인(인터넷O): 기상청 예보 + 지금 바깥 → 명령.  오프라인: 바깥·1층·다락 센서 차례 → 명령만.
  - 26°C↑  : "문 여세요"(첫회 전체). 변화 없으면 5분마다 반복, 온도가 내려가기 시작하면(문 열어 반응) 반복 중지
+   겨울 햇빛(바깥 < 10°C + 히터 꺼짐): 28°C↑에서 "덥다면 다락 창을 잠깐 여세요", 30분 반복 — 공짜 열을 버리지 않게(11-21)
  - 25.5°C↑로 데워졌다가 '닫기선' 아래로 + 15분 1°C↑ 하락 : "문 닫으세요"(+하락량, 26 도달 불필요). 변화 없으면 5분 반복, 온도가 올라가기 시작하면 중지
    닫기선 = 25°C, 단 난방 설정이 그 근처(끄기 ≥ 24.5)면 '켜기 − 0.5'(히터 정상 사이클의 자연 냉각에 울리지 않게, 11-20 오경보)
  - 급락(15분 2°C↑, 문 상태 아닐 때): "N도 떨어졌습니다, 문 닫으세요" — 5분 반복(총 하락량), 최저점 대비 상승하면 중지
@@ -33,6 +34,9 @@ CHANGE_EPS = 0.05  # 직전 알림 대비 원하는 방향(여세요=하강)으�
 # 닫기(문 열어 식음)는 두 조건을 함께: 닫기선 아래 + 15분(DROP_WIN) 하락 ≥ CLOSE_FAST.
 #   자연 냉각은 ~2.5°C/h(15분 0.6) — 11-20 21:10 설정 25/25.5에서 사이클마다 오경보 → 추가.
 CLOSE_MARGIN = 0.5; CLOSE_FAST = 1.0
+# 겨울 햇빛 과열: 바깥 < WINTER_OUT_C 이고 히터 꺼짐이면 열기 경고를 WINTER_ON_T·WINTER_REPEAT·부드러운 문구로.
+#   11-21 맑은 날 히터 없이 1층 26.4°C(바깥 3°C) — 문 열면 저장될 햇빛 열을 버리고 저녁 히터만 일찍 켜짐(1°C ≈ 0.67 kWh).
+WINTER_OUT_C = 10.0; WINTER_ON_T = 28.0; WINTER_REPEAT = 1800
 # 급락 감지(실측 보정: 자연 최대 ~3°C/h → 15분 2°C=8°C/h로 안전 분리)
 DROP_T = 2.0; DROP_WIN = 900
 # 난방 정체(다이얼 과소): 난방 '켠 뒤' STALL_WIN 지나도 상승 ≤ STALL_RISE면 경고.
@@ -46,6 +50,11 @@ FRESH_SENSOR = 180; FRESH_STATUS = 150; FAULT_REPEAT = 900
 #   CHIME_START~CHIME_END시(끝 포함 시간대)만. 취침(sleep)·동파(frost) 모드에선 말하지 않음.
 CHIME_FILE = os.path.join(os.path.expanduser("~/smart-cabin"), "chime.json")   # {"on": false} → 시보 끔(명령 '시보 끔')
 CHIME_EVERY = 30; CHIME_START = 7; CHIME_END = 22
+# 시보 미리 시작(초): 캐스트는 기기 찾기 ~5 s + 재생 준비로 소리가 ~10 s 늦게 나온다(11-21 실측: 찾기 5.0 s).
+#   예전엔 20 s 루프가 정각을 '지난 뒤' 알아채서 평균 +10 s가 더해져 ~15 s 늦었음(사용자 11-21).
+#   이제 정각 lead초 전에 깨어나 말하기 시작 → 첫 소리가 정각 근처. chime.json {"lead_s": N}으로 조정.
+CHIME_LEAD_S = 10
+LOOP_S = 20
 FORECAST = os.path.join(BASE, "forecast.json"); LATEST = os.path.join(BASE, "latest.json")
 STATE = os.path.join(BASE, "heater_state.json"); STATUS = os.path.join(BASE, "heater_status.json")
 CACHE = os.path.join(BASE, "tts_cache")  # gTTS 영구 캐시(문구당 1회 다운로드 → 오프라인 재사용)
@@ -136,6 +145,27 @@ def chime_slot(dt, mode, every=None, start=None, end=None):
     if not every or mode != "comfort" or not (start <= dt.hour <= end):
         return None
     return dt.strftime("%Y%m%d%H") + "%02d" % (dt.minute // every * every)
+
+
+def chime_plan(now_dt, mode, lead_s, horizon_s, every=None):
+    """다가오는 시보(순수): 다음 정각·30분 경계까지 남은 시간이 horizon_s+lead_s 이내면
+    (슬롯 키, 경계 시각 dt, 기다릴 초=경계−lead−지금(0 이상)), 아니면 None."""
+    every = CHIME_EVERY if every is None else every
+    if not every: return None
+    base = now_dt.replace(second=0, microsecond=0, minute=now_dt.minute // every * every)
+    nb = base + datetime.timedelta(minutes=every)
+    left = (nb - now_dt).total_seconds()
+    slot = chime_slot(nb, mode, every)
+    if slot is None or left > horizon_s + lead_s:
+        return None
+    return slot, nb, max(0.0, left - lead_s)
+
+
+def chime_lead(path=None):
+    try:
+        return float(json.load(open(path or CHIME_FILE)).get("lead_s", CHIME_LEAD_S))
+    except Exception:
+        return float(CHIME_LEAD_S)
 
 
 def chime_enabled(path=None):
@@ -331,6 +361,13 @@ def say_local(text):
         pass
 
 
+def open_rule(t_out, relay_on):
+    """열기 경고 규칙(순수) → (기준°C, 반복초, 첫 문구, 반복 문구). 겨울 햇빛(바깥 < 10, 히터 꺼짐)이면 28°C·30분·부드럽게."""
+    if t_out is not None and t_out < WINTER_OUT_C and relay_on is False:
+        return WINTER_ON_T, WINTER_REPEAT, "덥다면 다락 창을 잠깐 여세요.", "덥다면 다락 창을 잠깐 여세요."
+    return ON_T, REPEAT, "문을 여세요.", "문을 여세요."
+
+
 def read_status():
     try:
         s = json.load(open(STATUS))
@@ -403,6 +440,13 @@ def loop():
             elif not adv:
                 adv_last = None
             # (D) 시보: 재실 모드·낮 시간대에 CHIME_EVERY분마다 1회(블루투스 스피커 자동 꺼짐 방지 겸)
+            #     다음 경계가 이번 대기(LOOP_S) 안에 오면 lead초 전까지 자고 미리 말하기 시작(캐스트 지연 보정)
+            plan = chime_plan(datetime.datetime.now(), st.get("mode"), chime_lead(), LOOP_S + 2)
+            if plan and plan[0] != chime_last and chime_enabled():
+                time.sleep(plan[2])
+                for s in chime_texts(plan[1], t if fresh else None):
+                    say(s)
+                chime_last = plan[0]; logline("시보 %s 실내%.1f fresh=%s (미리 %.0fs)" % (plan[0], t, fresh, chime_lead()))
             slot = chime_slot(datetime.datetime.now(), st.get("mode"))
             if slot and slot != chime_last and not chime_enabled():
                 chime_last = slot                     # 꺼 둔 동안의 슬롯은 넘김(켜도 지난 슬롯을 몰아서 말하지 않음)
@@ -427,15 +471,18 @@ def loop():
 
             if comfort and fresh:
                 # ---- 26°C 환기(열기): 변화없으면 5분 반복, 온도 하강 시작하면 중지 ----
-                if t >= ON_T:
+                #      겨울 햇빛(바깥 < 10 + 히터 꺼짐)이면 28°C·30분 반복·부드러운 문구(open_rule)
+                on_t, rep_s, ph1, ph2 = open_rule(tempf(d, "바닥외부"),
+                                                  (bool(status.get("relay")) if stat_fresh else None))
+                if t >= on_t:
                     if not over:
-                        say(full_text(d, t, "문을 여세요.")); over = True; repeating = True; last = now; alert_temp = t
-                        logline("열기 발화(첫) 실내%.1f" % t)
+                        say(full_text(d, t, ph1)); over = True; repeating = True; last = now; alert_temp = t
+                        logline("열기 발화(첫) 실내%.1f 기준%.0f" % (t, on_t))
                     elif repeating:
                         if t <= alert_temp - CHANGE_EPS:        # 하강 시작(문 열어 반응) → 반복 중지
                             repeating = False; logline("열기 반복중지(하강시작) 실내%.1f" % t)
-                        elif now - last >= REPEAT:              # 변화 없으면 5분마다 상기
-                            say("실내 %s도. 문을 여세요." % dec1(t)); last = now; alert_temp = t
+                        elif now - last >= rep_s:               # 변화 없으면 5분(겨울 햇빛 30분)마다 상기
+                            say("실내 %s도. %s" % (dec1(t), ph2)); last = now; alert_temp = t
                             logline("열기 반복 실내%.1f" % t)
                     close_armed = True; closing = False; peak = t if peak is None else max(peak, t)
                 else:
@@ -511,7 +558,7 @@ def loop():
             prev_comfort = comfort
         except Exception:
             pass
-        time.sleep(20)
+        time.sleep(LOOP_S)
 
 
 if __name__ == "__main__":
