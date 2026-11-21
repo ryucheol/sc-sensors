@@ -46,7 +46,12 @@ def serve(directory):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("text"); ap.add_argument("--volume", type=float, default=0.6); ap.add_argument("--repeat", type=int, default=1)
+    ap.add_argument("--if-idle", action="store_true",
+                    help="다른 앱(유튜브 뮤직 등)이 재생 중이면 끼어들지 않고 종료코드 3(시보용)")
     a = ap.parse_args()
+    # 부모(alert_sound)가 시간 초과로 끝낼 때도 finally에서 볼륨을 되돌리게(11-21: 0.6으로 남는 버그)
+    import signal
+    signal.signal(signal.SIGTERM, lambda *_: (_ for _ in ()).throw(SystemExit(4)))
     wav = tts(a.text)
     import pychromecast
     casts, browser = pychromecast.get_chromecasts(timeout=10)
@@ -55,6 +60,14 @@ def main():
         print("대상이 하나로 정해지지 않음 — 재생 안 함:", [(c.cast_info.friendly_name, c.cast_info.model_name) for c in casts])
         browser.stop_discovery(); return 1
     c = tgt[0]; c.wait(timeout=15)
+    app = c.status.display_name
+    if app not in (None, "", "Backdrop", "Default Media Receiver", "Bluetooth Audio"):
+        if a.if_idle:
+            print("사용 중(%s) — 끼어들지 않음" % app)
+            browser.stop_discovery(); return 3
+        # 경보: 캐스트 앱(유튜브 뮤직 등)은 재생 명령을 덮어써도 곧 멈춤(11-21 PAUSED/IDLE 실측) → 앱을 끄고 재생
+        print("%s 중 → 끄고 캐스트(경보)" % app)
+        c.quit_app(); time.sleep(3)
     if c.status.display_name == "Bluetooth Audio":
         # 블루투스로 연결된 기기가 있으면 캐스트 재생 명령을 받아도 파일을 안 가져간다(실측) → BT 앱을 끄고 재생
         print("Bluetooth Audio 앱 중 → 끄고 캐스트")
@@ -68,10 +81,11 @@ def main():
             mc.play_media("http://%s:%d/%s" % (HOST, PORT, os.path.basename(wav)), "audio/wav")
             mc.block_until_active(timeout=20)
             t0 = time.time(); seen = False
-            while time.time() - t0 < 60:
+            while time.time() - t0 < 30:               # 부모 시간 초과(75 s)보다 충분히 짧게 → finally 보장
                 time.sleep(0.5); s = mc.status.player_state
                 if s in ("PLAYING", "BUFFERING"): seen = True
-                if seen and s == "IDLE": break
+                if seen and s in ("IDLE", "PAUSED"): break
+                if not seen and time.time() - t0 > 12: break
             if not seen:
                 print("재생 시작 안 됨(%s) — 실패" % mc.status.player_state); return 2
             print("%s 재생 %d/%d (%s, 볼륨 %.2f)" % (time.strftime("%H:%M:%S"), i + 1, a.repeat, NAME, a.volume))

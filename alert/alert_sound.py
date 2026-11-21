@@ -320,19 +320,27 @@ def route(now, output, fail_until, cast_available):
     return "local" if now < fail_until else "cast"
 
 
-def _cast(text):
-    r = subprocess.run([CAST_PY, CAST_SCRIPT, text, "--volume", CAST_VOLUME],
+class CastBusy(Exception):
+    """Home Mini가 다른 앱(유튜브 뮤직 등) 재생 중이라 시보를 건너뜀."""
+
+
+def _cast(text, if_idle=False):
+    r = subprocess.run([CAST_PY, CAST_SCRIPT, text, "--volume", CAST_VOLUME] + (["--if-idle"] if if_idle else []),
                        timeout=CAST_TIMEOUT, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+    if r.returncode == 3:
+        raise CastBusy((r.stdout or b"").decode("utf-8", "replace").strip())
     if r.returncode != 0:
         raise RuntimeError((r.stdout or b"").decode("utf-8", "replace").strip().splitlines()[-1:] or "rc=%d" % r.returncode)
 
 
-def say(text):
+def say(text, low=False):
     global _cast_fail_until
     now = time.time()
     if route(now, OUTPUT, _cast_fail_until, os.path.exists(CAST_PY) and os.path.exists(CAST_SCRIPT)) == "cast":
         try:
-            _cast(text); return
+            _cast(text, if_idle=low); return
+        except CastBusy as e:
+            logline("시보 생략: %s" % e); return          # 음악 중엔 시보만 건너뜀(잭으로도 안 냄, 백오프 없음)
         except Exception as e:
             _cast_fail_until = now + CAST_BACKOFF
             logline("캐스트 실패 → 잭 스피커로 (%d분간 캐스트 생략): %s" % (CAST_BACKOFF // 60, e))
@@ -445,14 +453,14 @@ def loop():
             if plan and plan[0] != chime_last and chime_enabled():
                 time.sleep(plan[2])
                 for s in chime_texts(plan[1], t if fresh else None):
-                    say(s)
+                    say(s, low=True)
                 chime_last = plan[0]; logline("시보 %s 실내%.1f fresh=%s (미리 %.0fs)" % (plan[0], t, fresh, chime_lead()))
             slot = chime_slot(datetime.datetime.now(), st.get("mode"))
             if slot and slot != chime_last and not chime_enabled():
                 chime_last = slot                     # 꺼 둔 동안의 슬롯은 넘김(켜도 지난 슬롯을 몰아서 말하지 않음)
             if slot and slot != chime_last:
                 for s in chime_texts(datetime.datetime.now(), t if fresh else None):
-                    say(s)
+                    say(s, low=True)
                 chime_last = slot; logline("시보 %s 실내%.1f fresh=%s" % (slot, t, fresh))
             # 이력 적재(신선할 때만)
             if fresh:
