@@ -105,12 +105,29 @@ def alarms_text():
         return "경보 확인 실패: %s" % e
 
 
+_SCP = {"mod": None, "mtime": None}
+
+
+def load_scp():
+    """sheet_cmd_poll 모듈. 봇은 계속 떠 있으므로, git pull로 파일이 바뀌면 다시 읽는다(재시작 없이 반영, 11-22)."""
+    import importlib
+    import sheet_cmd_poll as scp
+    try:
+        mt = os.path.getmtime(scp.__file__)
+    except OSError:
+        mt = None
+    if _SCP["mod"] is not None and mt is not None and _SCP["mtime"] is not None and mt != _SCP["mtime"]:
+        scp = importlib.reload(scp)
+    _SCP.update(mod=scp, mtime=mt)
+    return scp
+
+
 def execute(cmd):
     """명령 실행 → 답장 문구. 히터 명령은 시트 폴러와 같은 잠금 안에서."""
     verb = cmd.split(" ", 1)[0]
     if verb == "도움": return HELP
     if verb == "경보": return alarms_text()
-    import sheet_cmd_poll as scp
+    scp = load_scp()
     with open(CMD_LOCK, "a") as lk:
         fcntl.flock(lk, fcntl.LOCK_EX)
         try:
