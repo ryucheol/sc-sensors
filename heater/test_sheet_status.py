@@ -70,5 +70,22 @@ class SheetPoll(unittest.TestCase):
             self.assertFalse(scp.sheet_allowed(t), t)
 
 
+class AuxText(unittest.TestCase):
+    def test_on_heating(self):
+        self.assertEqual(scp.aux_text({"on": True, "watt": 468.2}, short=True), "보조히터 ON 468W")
+
+    def test_on_no_power(self):   # 릴레이는 켜졌는데 본체 스위치가 꺼진 경우
+        self.assertIn("본체 스위치", scp.aux_text({"on": True, "watt": 0.0}, short=True))
+
+    def test_full(self):
+        t = scp.aux_text({"on": False, "watt": 0, "why": "자동: 동파 모드 평시", "heat_ok": True,
+                          "heat_ok_ts": time.mktime((2026, 11, 22, 1, 20, 0, 0, 0, -1)), "updated": "2026-11-22 07:30:00"})
+        self.assertTrue(t.startswith("보조히터 OFF — 자동"))
+        self.assertIn("자가 점검 정상(11-22 01:20)", t); self.assertIn("11-22 07:30 기준", t)
+
+    def test_empty(self):
+        self.assertEqual(scp.aux_text(None), "보조히터 OFF")
+
+
 if __name__ == "__main__":
     unittest.main()

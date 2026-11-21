@@ -260,7 +260,7 @@ def status_text():
     except Exception: pass
     try:
         as_ = json.load(open(os.path.join(BASE, "aux_status.json")))
-        if as_.get("on"): parts.append("보조히터 ON")
+        if as_.get("on"): parts.append(aux_text(as_, short=True))
     except Exception: pass
     if s.get("arrival"):
         try:
@@ -300,13 +300,32 @@ FAN_WORDS = {"켜": "on", "켜기": "on", "켬": "on", "on": "on", "꺼": "off",
              "자동": "auto", "auto": "auto"}
 
 
+def aux_text(st, short=False, now=None):
+    """aux_status.json → '보조히터 ON 468W' 같은 한 줄(순수). ON인데 전력이 거의 없으면 본체 스위치를 의심한다.
+       short=False면 이유·자가 점검 결과·갱신 시각까지."""
+    st = st or {}
+    on = bool(st.get("on")); w = st.get("watt")
+    txt = "보조히터 %s" % ("ON" if on else "OFF")
+    if on and isinstance(w, (int, float)):
+        txt += " %.0fW" % w + (" — 켜졌는데 전력 없음(본체 스위치 확인)" if w < 50 else "")
+    if short:
+        return txt
+    if st.get("why"): txt += " — %s" % st["why"]
+    ok = st.get("heat_ok"); ok_ts = st.get("heat_ok_ts")
+    if ok is not None:
+        when = datetime.datetime.fromtimestamp(ok_ts).strftime("%m-%d %H:%M") if ok_ts else "?"
+        txt += " · 자가 점검 %s(%s)" % ("정상" if ok else "가열 안 됨", when)
+    if st.get("updated"): txt += " · %s 기준" % str(st["updated"])[5:16]
+    return txt
+
+
 def aux_cmd(toks):
     """보조 켜|꺼|자동 → aux_cmd.json (aux_control.py가 매분 반영). 켜/꺼는 2시간 뒤 자동. 동파 위험(1층 2.5°C 이하)은 '꺼'보다 우선."""
     m = next((FAN_WORDS[t.lower()] for t in toks if t.lower() in FAN_WORDS), None)
     if not m:
         try: st = json.load(open(os.path.join(BASE, "aux_status.json")))
         except Exception: st = {}
-        return "완료", "보조히터 %s — %s (명령: 보조 켜|꺼|자동)" % ("ON" if st.get("on") else "OFF", st.get("why", "?"))
+        return "완료", aux_text(st) + " (명령: 보조 켜|꺼|자동)"
     json.dump({"mode": m, "ts": time.time()}, open(os.path.join(BASE, "aux_cmd.json"), "w"))
     msg = {"on": "보조히터 켜기(2시간 뒤 자동으로 돌아감)", "off": "보조히터 끄기(2시간, 단 동파 위험이면 켬)", "auto": "보조히터 자동"}[m]
     return "완료", msg + " — 반영 최대 1분"
