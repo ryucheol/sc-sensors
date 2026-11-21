@@ -154,7 +154,67 @@ def load_aux_status(path=None):
     try: return json.load(open(path or AUX_STATUS))
     except Exception: return None
 
-def preheat_lead_hours(cfg, t_in, t_out, P=None):
+# ── 2노드 예열 모델(11-22 연구: docs/PREHEAT_MODEL.ko.md) ───────────────────────────
+# 실내 공기(+가까운 표면) Ca ─ Ham ─ 가구·내장재 Cm, 공기→바깥 Hao, 가구→바깥 Hmo.
+# 11-08~22 334시간(1층·바닥외부·히터 kWh)으로 맞춘 값. 가구 온도는 잴 수 없어 1층 실측으로 매분 추정(mass_step).
+PREHEAT2_DEFAULT = {"ca_kwh": 0.31, "cm_kwh": 0.36, "h_ao": 48.0, "h_am": 175.0, "h_mo": 10.0,
+                    "margin": 1.3,          # 추운 날 기록이 적어(11-20·22뿐) 1.1보다 넉넉히. 학습 계수가 곱해진다
+                    "aux_on_gap": 1.0, "aux_off_gap": 0.3,   # 보조: 목표−1 아래 켬, 목표−0.3 이상 끔(aux_control과 같게)
+                    "step_s": 60}
+
+def p2_cfg(cfg):
+    r = dict(PREHEAT2_DEFAULT); r.update((cfg.get("preheat") or {}).get("two_node") or {}); return r
+
+def preheat_model(cfg):
+    """'1node'(기존) / '2node' / 'shadow'(결정은 1node, 2node는 계산·기록만)."""
+    return (cfg.get("preheat") or {}).get("model", "1node")
+
+def mass_step(tm, t_in, t_out, dt_s, p2):
+    """가구 온도 추정 한 걸음(순수): 실측 1층 t_in과 바깥 t_out으로 가구 노드만 적분. tm None이면 t_in에서 시작."""
+    if tm is None: return t_in
+    if t_in is None or dt_s <= 0: return tm
+    to = t_out if t_out is not None else tm
+    cm = p2["cm_kwh"] * 3.6e6
+    n = max(1, int(dt_s // 600) + 1); h = dt_s / n
+    for _ in range(n):
+        tm += (p2["h_am"] * (t_in - tm) - p2["h_mo"] * (tm - to)) / cm * h
+    return tm
+
+def lead2_hours(p2, t_in, t_mass, t_out, p_main, aux_w, target, max_h):
+    """2노드 시뮬레이션(순수): 지금 공기 t_in·가구 t_mass에서 메인 p_main(+보조 aux_w, 실제 켜는 조건대로)을 켜고
+       바깥 t_out(예보 최저)일 때 공기가 target에 닿는 시간(h, 여유 계수 전). max_h 안에 못 닿으면 None."""
+    if t_in >= target: return 0.0
+    ta = float(t_in); tm = float(t_mass if t_mass is not None else t_in); to = 0.0 if t_out is None else float(t_out)
+    ca = p2["ca_kwh"] * 3.6e6; cm = p2["cm_kwh"] * 3.6e6; dt = p2["step_s"]
+    aux_on = aux_w > 0; t = 0.0
+    while t < max_h * 3600.0:
+        if aux_w > 0:
+            if ta < target - p2["aux_on_gap"]: aux_on = True
+            elif ta >= target - p2["aux_off_gap"]: aux_on = False
+        P = (p_main or 0) + (aux_w if aux_on else 0)
+        dta = (P - p2["h_am"] * (ta - tm) - p2["h_ao"] * (ta - to)) / ca
+        dtm = (p2["h_am"] * (ta - tm) - p2["h_mo"] * (tm - to)) / cm
+        ta += dta * dt; tm += dtm * dt; t += dt
+        if ta >= target: return t / 3600.0
+    return None
+
+def preheat_lead_hours2(cfg, t_in, t_out, P=None, t_mass=None, aux_w=0.0, learn=1.0):
+    """2노드 선행시간(h): 시뮬레이션 × margin × 학습 계수, max_lead_hours로 자름. P는 메인+보조 합(aux_w는 그중 보조)."""
+    p = cfg["preheat"]; p2 = p2_cfg(cfg); maxlead = p["max_lead_hours"]
+    if t_in is None: return maxlead
+    tgt = p["target_temp"]
+    if t_in >= tgt: return 0.0
+    P = P or p["heater_watts"]; aux_w = min(aux_w or 0.0, P)
+    h = lead2_hours(p2, t_in, t_mass, t_out, P - aux_w, aux_w, tgt, maxlead)
+    if h is None: return maxlead
+    return max(0.0, min(h * p2["margin"] * learn, maxlead))
+
+def preheat_lead_hours(cfg, t_in, t_out, P=None, t_mass=None, aux_w=0.0, learn=1.0):
+    if preheat_model(cfg) == "2node":
+        return preheat_lead_hours2(cfg, t_in, t_out, P, t_mass, aux_w, learn)
+    return preheat_lead_hours1(cfg, t_in, t_out, P, learn)
+
+def preheat_lead_hours1(cfg, t_in, t_out, P=None, learn=1.0):
     p = cfg["preheat"]
     # 식은 집을 데울 때(11-20 실측): 히터 열의 일부가 벽·가구를 데우는 데 들어가 실내 공기는 '유효 출력' heat_eff×P로,
     # 더 짧은 시정수 heat_tau_hours로 다가간다(1층 8.8→19°C/6h, 바깥 0~1°C: heat_eff 0.62, heat_tau 6.3h).
@@ -162,7 +222,7 @@ def preheat_lead_hours(cfg, t_in, t_out, P=None):
     tgt, ua = p["target_temp"], p["ua_w_per_k"]
     tau = p.get("heat_tau_hours", p["tau_hours"]); eff = p.get("heat_eff", 1.0)
     P = P or p["heater_watts"]   # 실측 단 W가 있으면 그것(1단으로 두면 선행시간·도달가능이 달라진다)
-    margin, maxlead = p["margin"], p["max_lead_hours"]
+    margin, maxlead = p["margin"] * learn, p["max_lead_hours"]
     if t_in is None:        return maxlead          # 온도 모르면 안전하게 최대 선행
     if t_in >= tgt:         return 0.0
     if t_out is None: t_out = 0.0                    # 외기 모르면 0°C 가정(보수적)
@@ -190,13 +250,15 @@ def learned_factor(st):
     return max(LEARN_MIN, min(LEARN_MAX, m))
 
 
-def arrival_plan(cfg, st, t_in, t_out_fc, P=None):
-    """도착 예약(st["arrival"]={"ts","target"})의 시작 시각(epoch)과 선행시간(h). 예약 없으면 (None, None). 순수."""
+def arrival_plan(cfg, st, t_in, t_out_fc, P=None, aux_w=0.0, model=None):
+    """도착 예약(st["arrival"]={"ts","target"})의 시작 시각(epoch)과 선행시간(h). 예약 없으면 (None, None). 순수.
+       st["t_mass"](2노드 가구 온도 추정)이 있으면 2노드가 쓴다. model로 '1node'/'2node'를 강제할 수 있다(그림자 계산용)."""
     arr = st.get("arrival")
     if not arr or not arr.get("ts"): return None, None
     cfg2 = dict(cfg); pre = dict(cfg["preheat"]); pre["target_temp"] = arr.get("target", cfg["comfort"]["on"]); cfg2["preheat"] = pre
-    pre["margin"] = pre["margin"] * learned_factor(st)   # 지난 예열들이 늦었으면 더 일찍, 일렀으면 덜 일찍
-    lead = preheat_lead_hours(cfg2, t_in, t_out_fc, P)
+    if model: pre["model"] = model
+    # 지난 예열들이 늦었으면 더 일찍, 일렀으면 덜 일찍(학습 계수)
+    lead = preheat_lead_hours(cfg2, t_in, t_out_fc, P, st.get("t_mass"), aux_w, learned_factor(st))
     return arr["ts"] - lead * 3600.0, lead
 
 def forecast_series(path=FORECAST):
@@ -207,7 +269,7 @@ def forecast_series(path=FORECAST):
     except Exception:
         return []
 
-def predict_arrival_start(cfg, st, t_in, now_ts, series, t_out_now=None, P=None, step=600):
+def predict_arrival_start(cfg, st, t_in, now_ts, series, t_out_now=None, P=None, step=600, aux_w=0.0):
     """도착 예약의 '예상' 시작 시각(표시용, 순수). 지금 실내 t_in에서 출발해, 시작 전까지 실내가 예보 기온 쪽으로
        열시정수(tau)대로 식고(동파 모드 하한 frost.on은 히터가 지킴) 그 시점의 온도·남은 기간 예보 최저로 선행시간을 다시 구해
        시작 조건이 처음 맞는 시각을 찾는다. 실제 켜기는 매분 실측으로 판단(arrival_plan) — 이 값은 며칠 전 예고용.
@@ -228,14 +290,23 @@ def predict_arrival_start(cfg, st, t_in, now_ts, series, t_out_now=None, P=None,
         if not series or b > series[-1][0]: xs.append(beyond)
         return min(xs) if xs else beyond
     T, s = float(t_in), float(now_ts)
+    two = preheat_model(cfg) == "2node"; p2 = p2_cfg(cfg); M = st.get("t_mass", T)
+    if M is None: M = T
     while s < arr_ts:
-        lead = preheat_lead_hours(cfg2, T, fmin(s, arr_ts), P)
+        lead = preheat_lead_hours(cfg2, T, fmin(s, arr_ts), P, M, aux_w)
         if s >= arr_ts - lead * 3600.0: return s, round(T, 1), lead
-        To = t_at(s); T = max(floor, To + (T - To) * math.exp(-step / tau_s)) if T > floor else T
+        To = t_at(s)
+        if two:   # 2노드: 공기·가구가 함께 식는다(동파 하한은 히터가 지킴)
+            ca = p2["ca_kwh"] * 3.6e6; cm = p2["cm_kwh"] * 3.6e6
+            for _ in range(int(step // 60)):
+                dT = (-p2["h_am"] * (T - M) - p2["h_ao"] * (T - To)) / ca; dM = (p2["h_am"] * (T - M) - p2["h_mo"] * (M - To)) / cm
+                T = max(floor, T + dT * 60); M += dM * 60
+        else:
+            T = max(floor, To + (T - To) * math.exp(-step / tau_s)) if T > floor else T
         s += step
     return arr_ts, round(T, 1), 0.0
 
-def schedule_step(cfg, st, t_in, t_out, dtn, tnow, P=None, t_out_fc=None):
+def schedule_step(cfg, st, t_in, t_out, dtn, tnow, P=None, t_out_fc=None, aux_w=0.0):
     """스케줄 판단(순수): 도착 예약 / 금요일 예열 / 노쇼 복귀 / 안전 백스톱. st를 제자리 수정, (changed, 로그메시지목록) 반환.
        t_out_fc = 지금~도착 사이 예보 최저(없으면 현재 외기)."""
     p = cfg["preheat"]; changed = False; logs = []
@@ -244,12 +315,15 @@ def schedule_step(cfg, st, t_in, t_out, dtn, tnow, P=None, t_out_fc=None):
     if arr and arr.get("ts"):
         noshow_h = cfg.get("arrival_noshow_hours", 3)
         if st["mode"] != "comfort":
-            start_ts, lead = arrival_plan(cfg, st, t_in, t_out_fc if t_out_fc is not None else t_out, P)
+            start_ts, lead = arrival_plan(cfg, st, t_in, t_out_fc if t_out_fc is not None else t_out, P, aux_w)
             if tnow >= start_ts:
                 c = cfg["comfort"]; on = arr.get("target", c["on"]); off = on + (c["off"] - c["on"])
                 st.update(mode="comfort", on=on, off=off, source="arrival", since=tnow); changed = True
                 st["preheat_run"] = {"start": tnow, "lead_h": round(lead, 2), "t_in": t_in, "target": on, "arr_ts": arr["ts"],
-                                     "capped": lead >= p["max_lead_hours"] - 1e-6}
+                                     "capped": lead >= p["max_lead_hours"] - 1e-6, "model": preheat_model(cfg)}
+                if preheat_model(cfg) == "shadow":   # 그림자: 2노드가 냈을 선행시간도 남겨 도달 때 비교
+                    _s2, l2 = arrival_plan(cfg, st, t_in, t_out_fc if t_out_fc is not None else t_out, P, aux_w, "2node")
+                    st["preheat_run"]["lead2_h"] = round(l2, 2)
                 logs.append("도착 예약 난방 시작: 도착 %s 목표 %s°C, 내부 %s°C 예보외기 %s°C P=%sW, 선행 %.1fh → 난방 %s/%s"
                             % (time.strftime("%m-%d %H:%M", time.localtime(arr["ts"])), on, t_in,
                                t_out_fc if t_out_fc is not None else t_out, int(P) if P else cfg["preheat"]["heater_watts"], lead, on, off))
@@ -266,8 +340,12 @@ def schedule_step(cfg, st, t_in, t_out, dtn, tnow, P=None, t_out_fc=None):
         elif t_in is not None and t_in >= run["target"]:
             actual_h = (tnow - run["start"]) / 3600.0
             late_min = (tnow - run["arr_ts"]) / 60.0
-            msg = "예열 목표 도달: %.1fh 걸림(예측 %.1fh%s), 도착 시각 대비 %+.0f분" % (
-                actual_h, run["lead_h"], ", 상한에 걸림" if run.get("capped") else "", late_min)
+            msg = "예열 목표 도달: %.1fh 걸림(예측 %.1fh%s%s), 도착 시각 대비 %+.0f분" % (
+                actual_h, run["lead_h"], ", 상한에 걸림" if run.get("capped") else "",
+                (", 2노드 %.1fh" % run["lead2_h"]) if run.get("lead2_h") is not None else "", late_min)
+            st["preheat_hist"] = ((st.get("preheat_hist") or []) + [{
+                "start": run["start"], "actual_h": round(actual_h, 2), "lead_h": run["lead_h"], "lead2_h": run.get("lead2_h"),
+                "t_in": run.get("t_in"), "target": run["target"], "model": run.get("model")}])[-20:]
             if not run.get("capped") and run["lead_h"] > 0.3:
                 k = actual_h / run["lead_h"]
                 st["preheat_k"] = ((st.get("preheat_k") or []) + [round(k, 3)])[-LEARN_KEEP:]
@@ -282,7 +360,7 @@ def schedule_step(cfg, st, t_in, t_out, dtn, tnow, P=None, t_out_fc=None):
     if p.get("enabled") and dtn.weekday() == p["weekday"]:
         target = dtn.replace(hour=p["target_hour"], minute=p["target_min"], second=0, microsecond=0)
         if dtn < target and st["mode"] == "frost":
-            lead = preheat_lead_hours(cfg, t_in, t_out, P)
+            lead = preheat_lead_hours(cfg, t_in, t_out, P, st.get("t_mass"), aux_w)
             if dtn >= target - datetime.timedelta(hours=lead):
                 c = cfg["comfort"]
                 st.update(mode="comfort", on=c["on"], off=c["off"], source="preheat", since=tnow); changed = True
@@ -463,6 +541,7 @@ def main():
     stage = _ss.get("stage"); stage_w = _ss.get("stage_w")   # 단수(실측 W로 인식, 재시작 시 복원)
     on_since = None; thist = collections.deque(); advice = None; advice_log = 0.0
     wbuf = collections.deque(maxlen=5)   # 단수 인식용: 켜진 지 STAGE_SETTLE_SEC 지난 W 표본
+    t_mass = _ss.get("t_mass"); t_mass_ts = None   # 2노드 가구 온도 추정(첫 주기는 1층 값에서 시작)
     while True:
         poll = 60
         try:
@@ -499,9 +578,18 @@ def main():
             _arr = st.get("arrival") or {}
             _t_fc = forecast_min_temp(hours=max(1.0, (_arr["ts"] - now()) / 3600.0)) if _arr.get("ts") else None
             p_pre = preheat_power(cfg, stage_w, load_aux_status())   # 메인 + (응답하는) 보조 히터
-            changed, slogs = schedule_step(cfg, st, t_floor_est, t_out, datetime.datetime.now(), now(), p_pre, _t_fc)
-            arr_start, arr_lead = arrival_plan(cfg, st, t_floor_est, _t_fc if _t_fc is not None else t_out, p_pre) if st.get("arrival") else (None, None)
-            arr_pred = (predict_arrival_start(cfg, st, t_floor_est, now(), forecast_series(), t_out, p_pre)
+            aux_pre = max(0.0, p_pre - (stage_w or cfg["preheat"]["heater_watts"]))
+            # 2노드 가구 온도 추정: 1층 실측을 따라 매분 적분(1층이 죽으면 멈춤). 재시작해도 status에서 이어감
+            _tm_now = now()
+            if not stale:
+                t_mass = mass_step(t_mass, t_in, t_out, (_tm_now - t_mass_ts) if t_mass_ts else 0.0, p2_cfg(cfg))
+                t_mass_ts = _tm_now
+            st["t_mass"] = round(t_mass, 2) if t_mass is not None else None
+            changed, slogs = schedule_step(cfg, st, t_floor_est, t_out, datetime.datetime.now(), now(), p_pre, _t_fc, aux_pre)
+            arr_start, arr_lead = arrival_plan(cfg, st, t_floor_est, _t_fc if _t_fc is not None else t_out, p_pre, aux_pre) if st.get("arrival") else (None, None)
+            arr_lead2 = (arrival_plan(cfg, st, t_floor_est, _t_fc if _t_fc is not None else t_out, p_pre, aux_pre, "2node")[1]
+                         if st.get("arrival") and preheat_model(cfg) != "2node" else None)
+            arr_pred = (predict_arrival_start(cfg, st, t_floor_est, now(), forecast_series(), t_out, p_pre, aux_w=aux_pre)
                         if st.get("arrival") and st.get("mode") != "comfort" else (None, None, None))
             for m in slogs: log(m)
             if changed: save_atomic(STATE, st)
@@ -692,6 +780,8 @@ def main():
                     "stage": stage, "stage_w": stage_w, "on_minutes": on_min,
                     "advice": advice, "advice_say": advice_speech(advice) if advice else None,
                     "arrival": st.get("arrival"), "arrival_start_est": arr_start, "arrival_lead_h": arr_lead,
+                    "t_mass": round(t_mass, 2) if t_mass is not None else None, "preheat_model": preheat_model(cfg),
+                    "arrival_lead2_h": round(arr_lead2, 2) if arr_lead2 is not None else None,
                     "arrival_start_pred": arr_pred[0], "arrival_tin_pred": arr_pred[1], "arrival_lead_pred_h": arr_pred[2],
                     "manual": ({"state": st["manual"]["state"], "left_min": max(0, int((st["manual"]["until"] - now()) / 60))}
                                if st.get("manual") else None)})

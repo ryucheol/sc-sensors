@@ -97,14 +97,20 @@ def arrival_cmd(args):
         latest = json.load(open(os.path.join(BASE, "latest.json")))
         t_in = latest.get(cfg["sensor"], {}).get("temp"); t_out = latest.get(cfg["preheat"].get("outdoor_sensor", ""), {}).get("temp")
         t_fc = hc.forecast_min_temp(hours=max(1.0, (dt.timestamp() - time.time()) / 3600.0))
-        try: P = json.load(open(os.path.join(BASE, "heater_status.json"))).get("stage_w")
-        except Exception: P = None
-        P = hc.preheat_power(cfg, P, hc.load_aux_status(os.path.join(BASE, "aux_status.json")))   # 메인 + 보조
-        start, lead = hc.arrival_plan(cfg, st, t_in, t_fc if t_fc is not None else t_out, P)
+        try: hs = json.load(open(os.path.join(BASE, "heater_status.json")))
+        except Exception: hs = {}
+        P0 = hs.get("stage_w")
+        if hs.get("t_mass") is not None: st["t_mass"] = hs["t_mass"]   # 2노드 가구 온도 추정(제어기가 매분 갱신)
+        P = hc.preheat_power(cfg, P0, hc.load_aux_status(os.path.join(BASE, "aux_status.json")))   # 메인 + 보조
+        aux_w = max(0.0, P - (P0 or cfg["preheat"]["heater_watts"]))
+        start, lead = hc.arrival_plan(cfg, st, t_in, t_fc if t_fc is not None else t_out, P, aux_w)
         print("도착 예약: %s 에 %g°C — 현재 내부 %s°C, 예보 최저 %s°C, 히터 %sW 기준 선행 %.1fh → 예상 시작 %s%s"
               % (dt.strftime("%m-%d(%a) %H:%M").replace("Mon","월").replace("Tue","화").replace("Wed","수").replace("Thu","목").replace("Fri","금").replace("Sat","토").replace("Sun","일"), target, t_in, "?" if t_fc is None else t_fc, int(P) if P else cfg["preheat"]["heater_watts"],
                  lead, time.strftime("%m-%d %H:%M", time.localtime(start)), " (이미 시작 조건)" if start <= time.time() else ""))
-        ps, pt, pl = hc.predict_arrival_start(cfg, st, t_in, time.time(), hc.forecast_series(), t_out, P)
+        if hc.preheat_model(cfg) != "2node":   # 그림자·비교: 2노드 모델이면 몇 시에 시작했을지
+            s2, l2 = hc.arrival_plan(cfg, st, t_in, t_fc if t_fc is not None else t_out, P, aux_w, "2node")
+            print("↳ (비교) 2노드 모델이면 선행 %.1fh → 시작 %s" % (l2, time.strftime("%m-%d %H:%M", time.localtime(s2))))
+        ps, pt, pl = hc.predict_arrival_start(cfg, st, t_in, time.time(), hc.forecast_series(), t_out, P, aux_w=aux_w)
         if ps and abs(ps - start) > 600:
             print("↳ 그때까지 실내가 예보대로 식는 것을 반영하면: 예상 시작 %s (그때 실내 약 %s°C, 선행 %.1fh)"
                   % (time.strftime("%m-%d %H:%M", time.localtime(ps)), pt, pl))
