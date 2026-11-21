@@ -53,5 +53,22 @@ class StatusText(unittest.TestCase):
         self.assertIn("예상시작", scp.status_text())
 
 
+class SheetPoll(unittest.TestCase):
+    def test_due(self):
+        self.assertTrue(scp.due_now("comfort", 4, "wlan0"))
+        self.assertFalse(scp.due_now("comfort", 5, "wlan0"))
+        self.assertTrue(scp.due_now("sleep", 0, "wlan0"))
+        self.assertFalse(scp.due_now("comfort", 4, "eth1"))     # LTE만이면 매시 7분
+        self.assertTrue(scp.due_now("comfort", 7, "eth1"))
+        self.assertFalse(scp.due_now("frost", 4, "wlan0"))      # 무인: 매시 7분
+        self.assertTrue(scp.due_now("frost", 7, None))
+
+    def test_allowed(self):
+        for t in ("도착 16:00", "난방 25", "동파", "취침", "선풍기 켜", "조리 40분", "환기 끝", "다락등 켜", "상태", "보조 꺼"):
+            self.assertTrue(scp.sheet_allowed(t), t)
+        for t in ("공유 2시간", "점검", "기상", "", "아무말"):
+            self.assertFalse(scp.sheet_allowed(t), t)
+
+
 if __name__ == "__main__":
     unittest.main()

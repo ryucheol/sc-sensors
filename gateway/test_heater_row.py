@@ -23,6 +23,18 @@ class HeaterRow(unittest.TestCase):
         self.assertEqual(r["hum"], "ON 1812W")
         self.assertEqual(r["volt"], "11-21 10:00 23.5°C · 예상 시작 11-21 00:00")
 
+    def test_fan(self):
+        t0 = time.mktime((2026, 11, 21, 13, 47, 0, 0, 0, -1))
+        up = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(t0))
+        st = {"mode": "comfort", "on": 23, "off": 23.5}
+        r = g.heater_row(st, {"relay": False}, 36, t0 + 60, {"updated": up, "on": True, "why": "자동: 다락−1층 1.7°C"})
+        self.assertEqual(r["hum"], "OFF · 선풍기 ON")
+        r = g.heater_row(st, {"relay": False}, 36, t0 + 60, {"updated": up, "on": False, "why": "수동 끄기(4시간)"})
+        self.assertEqual(r["hum"], "OFF · 선풍기 OFF(수동)")
+        r = g.heater_row(st, {"relay": False}, 36, t0 + 3600, {"updated": up, "on": True})
+        self.assertEqual(r["hum"], "OFF · 선풍기 ?")
+        self.assertEqual(g.heater_row(st, {"relay": False}, 36, t0)["hum"], "OFF")
+
     def test_empty(self):
         self.assertIsNone(g.heater_row({}, {}, 36, 0))
 

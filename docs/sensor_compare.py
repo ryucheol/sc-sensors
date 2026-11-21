@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """1층 샤오미(pvvx, 동창틀) ↔ Qingping(테이블) 온도 차이 분석 — 열모델용 센서 오차 보정.
 
-배경(11-21): 샤오미는 동창틀에 붙어 맑은 아침 08~11시 햇빛에 +0.5~1.1°C, 밤엔 찬 유리 옆이라 −0.5°C.
+배경(11-21): Qingping은 11-20 도착~11-21 08:05 가방 속 → 비교는 11-21 08:20부터. 샤오미는 동창틀에 붙어 맑은 아침 08~11시 햇빛에 +0.5~1.1°C, 밤엔 찬 유리 옆이라 −0.5°C.
 안쪽 벽도 오차가 있어(사용자) 옮기지 않고, 1주일(11-21~28) 나란히 기록해 오차를 조건별로 재고 모델에 넣는다.
 Qingping은 몸집이 커 빠른 변화엔 늦으므로(시정수 수십 분) '천천히 변할 때'만 기준으로 쓴다.
 
@@ -44,7 +44,7 @@ def pairs(thermal, q, kma, t0, t1):
     out = []
     for r in thermal:
         k = r["ts"][:16]
-        if not (t0 <= k[:10] <= t1) or k not in q or not r.get("t1"):
+        if not (t0 <= k[:len(t0)] and k[:10] <= t1) or k not in q or not r.get("t1"):
             continue
         prev = (D.datetime.strptime(k, "%Y-%m-%d %H:%M") - D.timedelta(minutes=10)).strftime("%Y-%m-%d %H:%M")
         dq = (q[k] - q[prev]) if prev in q else None
@@ -66,7 +66,7 @@ def summarize(rows, label):
 
 
 def main(argv):
-    t0 = argv[1] if len(argv) > 1 else "2026-11-21"
+    t0 = argv[1] if len(argv) > 1 else "2026-11-21 08:20"
     t1 = argv[2] if len(argv) > 2 else "2099-12-31"
     thermal = list(csv.DictReader(open(os.path.join(BASE, "thermal_log.csv"), encoding="utf-8")))
     q = load_q(os.path.join(BASE, "qingping_log.csv"))

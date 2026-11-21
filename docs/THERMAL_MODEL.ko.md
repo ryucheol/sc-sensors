@@ -114,7 +114,7 @@ T1 내부1층, T2 다락, To 바닥외부(외기), u 히터 ON(0/1), P 실측 W,
 C1·dT1/dt = P − UA1·(T1−To) − (G12 + Gfan·fan)·(T1−T2) + a·I + Qocc·occ
 C2·dT2/dt = (G12 + Gfan·fan)·(T1−T2) − UA2·(T2−To) + a2·I
 ```
-실행(Pi엔 scipy 없음 → PC에서): `scp pi:smart-cabin/{thermal_log.csv,kma_obs.csv} .` 후 `python docs/thermal_fit.py . --holdout 2026-11-18`.
+실행(Pi엔 scipy 없음 → PC에서): `scp pi:smart-cabin/{thermal_log.csv,kma_obs.csv,events.csv} .` 후 `python docs/thermal_fit.py . --holdout 2026-11-18`.
 
 | 파라미터 | 값 ± 표준오차 | 비고 |
 |---|---|---|

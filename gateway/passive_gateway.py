@@ -490,7 +490,20 @@ MODE_KO = {"comfort": "🔥 난방", "sleep": "🌙 취침", "frost": "❄ 동�
 SRC_KO = {"arrival": "도착 예열", "preheat": "도착 예열", "backstop": "백스톱 자동 복귀", "noshow": "미도착 자동 복귀"}
 
 
-def heater_row(st, hs, backstop_h, now):
+def fan_text(fs, now, stale_s=600):
+    """'선풍기 ON' / '선풍기 OFF(수동)' / '선풍기 ?' (순수). fs = fan_status.json."""
+    if not fs or fs.get("on") is None:
+        return None
+    try:
+        age = now - time.mktime(time.strptime(fs["updated"], "%Y-%m-%d %H:%M:%S"))
+    except Exception:
+        age = 0
+    if age > stale_s:
+        return "선풍기 ?"
+    return "선풍기 %s%s" % ("ON" if fs["on"] else "OFF", "(수동)" if str(fs.get("why", "")).startswith("수동") else "")
+
+
+def heater_row(st, hs, backstop_h, now, fan=None):
     """'농막_현재'에 올릴 히터 행(순수) — 대시보드 '지금 모드·다음 예약·백스톱'이 이 행을 읽는다.
     temp=모드 문구, hum=릴레이, volt=도착 예약. 시간별 요약(1시간 늦음)·시트 명령 탭(텔레그램 명령 빠짐) 대신."""
     if not st or not st.get("mode"):
@@ -516,6 +529,9 @@ def heater_row(st, hs, backstop_h, now):
         start = hs.get("arrival_start_pred") or hs.get("arrival_start_est")
         if start:
             res += " · 예상 시작 %s" % hm(start)
+    ft = fan_text(fan, now)
+    if ft:
+        relay += " · " + ft
     return {"sensor": "히터", "temp": txt, "hum": relay, "volt": res, "time_ms": int(now * 1000)}
 
 
@@ -549,7 +565,11 @@ def _heater_row_now():
         bh = json.load(open(os.path.join(d, "heater_config.json"))).get("backstop_comfort_hours")
     except Exception:
         bh = None
-    return heater_row(st, hs, bh, time.time())
+    try:
+        fs = json.load(open(os.path.join(d, "fan_status.json")))
+    except Exception:
+        fs = None
+    return heater_row(st, hs, bh, time.time(), fs)
 
 
 def should_post(mode, now, last_ts, last_temps, temps):

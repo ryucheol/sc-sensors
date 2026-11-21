@@ -23,6 +23,19 @@ LO = [0.1, 0.05, 1, 1, 1, 0, 0, 0, 0]
 HI = [10, 10, 200, 200, 1000, 20, 1000, 1000, 20]
 # 측정 안 된 열원이 있던 구간(보조 히터를 Pi가 모르는 콘센트에서 켬 등) — 끝 뒤 1시간까지 뺀다
 EXCLUDE = [("2026-11-15 20:20", "2026-11-15 22:40")]
+EVENT_PAD_MIN = 30   # events.csv(조리·환기 명령 기록) 구간 끝 뒤로 이만큼 더 뺌(열·공기가 정상으로 돌아오는 시간)
+
+
+def events_exclude(folder):
+    """folder/events.csv(Pi '조리'·'환기' 명령 기록) → [(start, end+pad)] 'YYYY-MM-DD HH:MM'. 없으면 []."""
+    import csv as _csv, datetime as _dt, os as _os
+    p = _os.path.join(folder, "events.csv")
+    out = []
+    if not _os.path.exists(p): return out
+    for r in _csv.DictReader(open(p, encoding="utf-8")):
+        e = _dt.datetime.strptime(r["end"], "%Y-%m-%d %H:%M") + _dt.timedelta(minutes=EVENT_PAD_MIN)
+        out.append((r["start"], e.strftime("%Y-%m-%d %H:%M")))
+    return out
 
 
 def load(folder, exclude):
@@ -121,7 +134,7 @@ def main():
     ap.add_argument("--h", type=int, default=6, help="학습 선행 스텝(10분 단위, 6=1시간)")
     ap.add_argument("--exclude", nargs="*", default=None, help="'시작,끝' 형식 추가 제외 구간")
     a = ap.parse_args()
-    exc = EXCLUDE + [tuple(s.split(",")) for s in (a.exclude or [])]
+    exc = EXCLUDE + events_exclude(a.folder) + [tuple(s.split(",")) for s in (a.exclude or [])]
     g, ok = load(a.folder, exc)
     m = Model(g, ok)
     hold = pd.Timestamp(a.holdout); test = m.idx >= hold; train = ~test

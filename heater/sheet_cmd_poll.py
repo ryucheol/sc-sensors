@@ -9,7 +9,7 @@
 입력 후 CMD_TTL_H 시간이 지난 행은 실행하지 않고 '만료'로 표시(Pi가 오래 오프라인이었던 경우 보호).
 설정: gateway.env 의 GW_WEBAPP_URL(없으면 게이트웨이 기본 URL)·FARMHUT_SECRET.
 """
-import os, sys, json, time, subprocess, urllib.request, socket, datetime
+import re, csv, os, sys, json, time, subprocess, urllib.request, socket, datetime
 
 HERE = os.path.dirname(os.path.realpath(__file__))
 BASE = os.path.dirname(HERE)
@@ -33,7 +33,80 @@ ALIASES = {
     "아침": "아침", "wake": "아침",
     "시보": "시보", "chime": "시보",
     "다락등": "전등", "다락등2": "전등", "다락불": "전등", "전등": "전등", "light": "전등",
+    "조리": "조리", "요리": "조리", "cook": "조리",
+    "환기": "환기", "문열기": "환기", "vent": "환기",
 }
+EVENTS_FILE = os.path.join(BASE, "events.csv")   # 열모델에서 뺄 '잴 수 없는 열' 구간: start,end,kind,note
+EVENT_DEFAULT_MIN = {"조리": 60, "환기": 20}
+_HM = re.compile(r"^(\d{1,2}):(\d{2})$")
+
+
+def _hm_today(s, now):
+    m = _HM.match(s)
+    if not m: return None
+    d = datetime.datetime.fromtimestamp(now).replace(hour=int(m.group(1)), minute=int(m.group(2)), second=0, microsecond=0)
+    return d.timestamp()
+
+
+def event_plan(kind, toks, now, rows):
+    """조리·환기 명령 해석(순수) → ("add", start, end) / ("end", 행 번호, now) / ("show", None, None) / ("err", 문구, None).
+    rows = [(start, end, kind, note)] (epoch). 예: 조리 / 조리 40분 / 조리 끝 / 조리 11:50~13:00 / 환기 12:30 12:50"""
+    t = " ".join(toks).replace("~", " ").replace("-", " ").split()
+    if not t:
+        return "add", now, now + EVENT_DEFAULT_MIN[kind] * 60
+    if t[0] in ("끝", "끔", "닫음", "종료", "end", "off"):
+        open_ = [i for i, r in enumerate(rows) if r[2] == kind and r[0] <= now <= r[1]]
+        return ("end", open_[-1], now) if open_ else ("err", "진행 중인 %s 기록이 없습니다" % kind, None)
+    if t[0] in ("상태", "목록", "list"):
+        return "show", None, None
+    m = re.match(r"^(\d{1,3})\s*분$", t[0]) or (re.match(r"^(\d{1,3})$", t[0]) if len(t) == 1 or t[1] == "분" else None)
+    if m:
+        return "add", now, now + int(m.group(1)) * 60
+    if len(t) >= 2:
+        a, b = _hm_today(t[0], now), _hm_today(t[1], now)
+        if a is not None and b is not None:
+            if b <= a: return "err", "끝 시각이 시작보다 앞섭니다", None
+            if a > now + 60: return "err", "미래 시각은 안 됩니다(지금부터면 '%s 40분')" % kind, None
+            return "add", a, b
+    return "err", "%s / %s 40분 / %s 끝 / %s 11:50~13:00" % (kind, kind, kind, kind), None
+
+
+def load_events(path=None):
+    rows = []
+    try:
+        for r in csv.reader(open(path or EVENTS_FILE, encoding="utf-8")):
+            if not r or r[0] == "start": continue
+            f = lambda s: datetime.datetime.strptime(s, "%Y-%m-%d %H:%M").timestamp()
+            rows.append((f(r[0]), f(r[1]), r[2], r[3] if len(r) > 3 else ""))
+    except OSError:
+        pass
+    return rows
+
+
+def save_events(rows, path=None):
+    path = path or EVENTS_FILE
+    fmt = lambda x: time.strftime("%Y-%m-%d %H:%M", time.localtime(x))
+    with open(path + ".tmp", "w", encoding="utf-8", newline="") as f:
+        w = csv.writer(f); w.writerow(["start", "end", "kind", "note"])
+        for r in sorted(rows): w.writerow([fmt(r[0]), fmt(r[1]), r[2], r[3]])
+    os.replace(path + ".tmp", path)
+
+
+def event_cmd(kind, toks, now=None, path=None):
+    now = now or time.time()
+    rows = load_events(path)
+    act, a, b = event_plan(kind, toks, now, rows)
+    hm = lambda x: time.strftime("%H:%M", time.localtime(x))
+    if act == "err": return "오류", a
+    if act == "show":
+        recent = [r for r in rows if r[1] >= now - 3 * 86400]
+        return "완료", ("최근 3일 기록: " + ", ".join("%s %s~%s" % (r[2], time.strftime("%m-%d %H:%M", time.localtime(r[0])), hm(r[1])) for r in recent)) if recent else "최근 3일 기록 없음"
+    if act == "end":
+        r = rows[a]; rows[a] = (r[0], b, r[2], r[3]); save_events(rows, path)
+        return "완료", "%s 기록 끝: %s~%s (열모델 학습에서 이 구간과 뒤 30분을 뺍니다)" % (kind, hm(r[0]), hm(b))
+    rows.append((a, b, kind, "명령")); save_events(rows, path)
+    tail = " — 끝나면 '%s 끝'" % kind if b > now else ""
+    return "완료", "%s 기록: %s~%s%s (열모델 학습에서 이 구간과 뒤 30분을 뺍니다)" % (kind, hm(a), hm(b), tail)
 CHIME_FILE = os.path.join(BASE, "chime.json")   # alert_sound.py 시보 켜짐/꺼짐(파일 없으면 켜짐)
 
 
@@ -365,6 +438,8 @@ def run(cmd_text):
         return aux_cmd(toks)
     if verb == "시보":
         return chime_cmd(toks)
+    if verb in ("조리", "환기"):
+        return event_cmd(verb, toks)
     if verb == "전등":   # Tuya 스위치 모듈(로컬) — tuya-venv에서 light_cmd.py
         if not os.path.exists(VENV_PY): return "오류", "tuya-venv 없음"
         r = subprocess.run([VENV_PY, os.path.join(HERE, "light_cmd.py"), word] + toks, capture_output=True, text=True,
@@ -397,24 +472,41 @@ def run(cmd_text):
     return "완료", (out + "\n" + status_text())[-800:]
 
 
-POLL_MINUTE = 7   # 시트 명령·캘린더 도착은 매시 7분에 한 번만 확인(LTE 절약 — 급한 명령은 텔레그램이 즉시, 사용자 11-16 결정)
+POLL_MINUTE = 7   # 기본: 매시 7분에 한 번(LTE 절약, 사용자 11-16 결정)
+FAST_EVERY = 2    # 재실(난방·취침) + Wi-Fi 동글 경로면 2분마다 — Claude 음성 대화가 시트에 명령을 적음(사용자 11-21)
+# 시트에서 받는 명령: 도착(캘린더 중계) + 음성 대화용 제어. 공유(데이터)·점검(오래 걸림)·기상은 텔레그램으로만.
+SHEET_VERBS = {"도착", "난방", "동파", "취침", "선풍기", "보조", "조리", "환기", "전등", "시보", "아침", "상태", "센서"}
 
 
-def due_now(mode, minute):
-    """이번 분에 시트를 확인할지(순수). 모드와 무관하게 매시 POLL_MINUTE분."""
+def uplink_dev():
+    """인터넷 기본 경로 장치('wlan0'=Wi-Fi 동글, 'eth1'=LTE) 또는 None."""
+    try:
+        out = subprocess.run(["ip", "route", "get", "1.1.1.1"], capture_output=True, text=True, timeout=3).stdout
+        t = out.split()
+        return t[t.index("dev") + 1] if "dev" in t else None
+    except Exception:
+        return None
+
+
+def due_now(mode, minute, dev=None):
+    """이번 분에 시트를 확인할지(순수). 재실(comfort·sleep)이고 Wi-Fi 경로면 FAST_EVERY분마다, 아니면 매시 POLL_MINUTE분."""
+    if mode in ("comfort", "sleep") and dev == "wlan0":
+        return minute % FAST_EVERY == 0
     return minute == POLL_MINUTE
 
 
 def sheet_allowed(text):
-    """시트 명령 탭은 캘린더 도착 중계 전용(사용자 11-16 결정) — 도착/도착 취소만 실행(순수)."""
+    """시트 명령 탭에서 실행할 명령인지(순수): SHEET_VERBS만(공유·점검·기상 제외)."""
     t = text.replace("\u3000", " ").split()
-    return bool(t) and ALIASES.get(t[0].lower()) == "도착"
+    return bool(t) and ALIASES.get(t[0].lower()) in SHEET_VERBS
 
 
 def main():
     try: _mode = json.load(open(os.path.join(BASE, "heater_state.json"))).get("mode")
     except Exception: _mode = None
-    if not due_now(_mode, time.localtime().tm_min): return
+    m = time.localtime().tm_min
+    if not (m == POLL_MINUTE or (_mode in ("comfort", "sleep") and m % FAST_EVERY == 0)): return   # ip 호출 줄이기
+    if not due_now(_mode, m, uplink_dev()): return
     url, secret = load_env()
     if not url: log("WEBAPP_URL 없음"); return
     if not online(): return
@@ -433,7 +525,7 @@ def main():
         if age_h > CMD_TTL_H:
             status, result = "만료", "입력 후 %.0f시간 지나 실행하지 않음(Pi 오프라인?) — 필요하면 다시 입력" % age_h
         elif not sheet_allowed(text):
-            status, result = "무시", "시트는 캘린더 도착 중계만 함(도착·도착 취소). 다른 명령은 텔레그램 봇으로"
+            status, result = "무시", "시트에서 안 받는 명령(공유·점검·기상 등) — 텔레그램 봇으로"
         else:
             try: status, result = run(text)
             except subprocess.TimeoutExpired: status, result = "오류", "시간 초과"
