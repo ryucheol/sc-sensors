@@ -8,13 +8,15 @@
      모든 모드, 수동 '끄기'보다도 우선(동파가 소음보다 중요).
   2) 수동: '보조 켜|꺼|자동' (manual_hold_h 시간 유지 후 자동).
   3) 무인 예열 보강: 도착 예약으로 시작된 난방(source=arrival)에서 1층이 목표−boost_gap_c(1.0) 미만이면 켬,
-     목표−0.3 이상이면 끔 → 사람이 오기 전 빨리 데움.
+     목표−boost_off_gap_c(0.0) 이상이면 끔 → 사람이 오기 전 빨리 데움. (11-22: 목표−0.3에서 끄면 영하에선 메인 혼자
+     손실을 겨우 넘겨 마지막 0.3°C에 몇 시간 — 2노드 계산 13.1h vs 끝까지 켜면 7.3h. 무인이라 소음 무관 → 목표까지)
   4) 메인 고장 백업: 동파 모드인데 메인 플러그가 켜져 있으나 가열 안 됨(heater_ok=false)·통신 끊김이면 1층 < frost_off_c 동안 켬.
   그 밖(재실 난방·취침, 동파 평시)엔 끔.
-자가 점검(11-20): 도착 예약이 있고 아직 예열 전(동파 모드)이며 도착까지 selftest_before_h(12) 안이면, 그 예약에 한 번
+자가 점검(11-20): 도착 예약이 있고 아직 예열 전(동파 모드)이며 도착까지 selftest_before_h(14) 안이면, 그 예약에 한 번
          selftest_s(20)초 켜서 전력을 잰다(재실·수동 끄기 중엔 안 함). 켜진 동안의 실측도 반영(≥ok_w 정상, <bad_w가 2분 → 안 됨).
          결과 heat_ok(True/False/None)를 aux_status.json에 쓰고, 메인 제어기는 heat_ok=False면 예열 계산에서 보조를 뺀다
-         (본체 스위치만 꺼 두고 떠나도 늦게 데워지지 않게).
+         (본체 스위치만 꺼 두고 떠나도 늦게 데워지지 않게). 14h = 예열 최대 선행 12h보다 앞서야 예열 시작 전에 점검된다
+         (11-22: 12h였을 때 01:30 예열 시작과 겹쳐 점검이 건너뛰어지고, 11-20의 '가열 안 됨'이 남아 보조가 계산에서 빠짐).
 데드맨: 켜 둔 동안 Tuya 카운트다운(DP9)을 30분으로 5분마다 다시 걸어, Pi가 죽으면 30분 뒤 스스로 꺼짐
          (Pi 없을 때의 동파는 Shelly 가드가 메인 히터로 맡는다).
 설정: heater_config.json "aux": {"enabled":true,"frost_on_c":2.5,"frost_off_c":4.0,"boost_gap_c":1.0,
@@ -30,9 +32,9 @@ P = {k: os.path.join(BASE, v) for k, v in {
     "cfg": "heater_config.json", "keys": "tuya_keys.json", "state": "heater_state.json", "status": "heater_status.json",
     "latest": "latest.json", "cmd": "aux_cmd.json", "mine": "aux_state.json", "out": "aux_status.json",
     "log": "aux.log", "presence": "presence_state.json"}.items()}
-DEFAULTS = {"enabled": True, "frost_on_c": 2.5, "frost_off_c": 4.0, "boost_gap_c": 1.0, "manual_hold_h": 2,
+DEFAULTS = {"enabled": True, "frost_on_c": 2.5, "frost_off_c": 4.0, "boost_gap_c": 1.0, "boost_off_gap_c": 0.0, "manual_hold_h": 2,
             "deadman_s": 1800, "sensor_stale_min": 15,
-            "selftest_before_h": 12, "selftest_s": 20, "ok_w": 100, "bad_w": 50, "bad_after_s": 120}
+            "selftest_before_h": 14, "selftest_s": 20, "ok_w": 100, "bad_w": 50, "bad_after_s": 120}
 
 
 def load(path, default=None):
@@ -79,7 +81,7 @@ def decide(now, c, state, status, t1, cmd, cur_on):
     # 3) 무인 예열 보강
     if mode == "comfort" and src == "arrival" and t1 is not None:
         target = state.get("on", 23)
-        on = t1 < target - 0.3 if cur_on else t1 < target - c["boost_gap_c"]
+        on = t1 < target - c["boost_off_gap_c"] if cur_on else t1 < target - c["boost_gap_c"]
         return on, "예열 보강(무인): 1층 %.1f°C, 목표 %.1f" % (t1, target)
     # 4) 메인 고장 백업(동파 모드)
     if mode == "frost" and t1 is not None and t1 < c["frost_off_c"] + 1:

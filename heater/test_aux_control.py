@@ -32,8 +32,9 @@ class Decide(unittest.TestCase):
     def test_arrival_boost_band(self):
         self.assertTrue(ac.decide(N, C, ARRIVAL, OK, 20.0, {}, False)[0])
         self.assertFalse(ac.decide(N, C, ARRIVAL, OK, 22.8, {}, False)[0])     # 목표−1 이상이면 안 켬
-        self.assertTrue(ac.decide(N, C, ARRIVAL, OK, 22.8, {}, True)[0])       # 켜진 뒤 목표−0.3까지
-        self.assertFalse(ac.decide(N, C, ARRIVAL, OK, 23.3, {}, True)[0])
+        self.assertTrue(ac.decide(N, C, ARRIVAL, OK, 22.8, {}, True)[0])       # 켜진 뒤 목표까지(11-22: 목표−0.3에서 끄면 꼬리가 몇 시간)
+        self.assertTrue(ac.decide(N, C, ARRIVAL, OK, 23.3, {}, True)[0])
+        self.assertFalse(ac.decide(N, C, ARRIVAL, OK, 23.5, {}, True)[0])
 
     def test_main_fault_backup_in_frost(self):
         bad = {"relay": True, "heater_ok": False}

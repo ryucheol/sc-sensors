@@ -13,15 +13,21 @@ def cfg_with(model, **pre):
 
 
 class Lead2(unittest.TestCase):
-    def test_reproduces_past_preheats(self):   # 실제: 11-20 10.7h, 11-21 아침 2.1h, 11-22 약 6.5h(25°C, 보조 켬)
-        self.assertAlmostEqual(hc.lead2_hours(P2, 8.3, 8.0, 0.3, 1820, 0, 23, 14), 10.4, delta=0.5)
-        self.assertAlmostEqual(hc.lead2_hours(P2, 19.7, 18.8, -1.5, 1780, 0, 23, 14), 3.6, delta=0.5)
-        self.assertAlmostEqual(hc.lead2_hours(P2, 14.1, 15.8, -1.3, 1835, 477, 25, 14), 6.7, delta=0.5)
+    def test_reproduces_past_preheats(self):   # 실제: 11-20 10.7h, 11-21 아침 2.1h, 11-22 약 6.5h(25°C, 보조 켬) — 여유 전에도 실제 이상(안전 쪽)
+        for args, actual in (((8.3, 7.9, 0.3, 1820, 0, 23), 10.7), ((19.7, 18.3, -1.5, 1780, 0, 23), 2.1),
+                             ((14.1, 15.2, -1.3, 1835, 477, 25), 6.5)):
+            h = hc.lead2_hours(dict(P2, aux_off_gap=0.3), *args, 14)   # 그때 실제 규칙(보조 목표−0.3에서 끔)
+            self.assertGreaterEqual(h, actual * 0.95); self.assertLess(h, actual * 2.2)
 
     def test_warm_furniture_is_faster(self):   # 같은 공기 온도라도 가구가 따뜻하면 빨리 닿는다
         cold = hc.lead2_hours(P2, 15, 10, 0, 1800, 0, 23, 14)
         warm = hc.lead2_hours(P2, 15, 20, 0, 1800, 0, 23, 14)
         self.assertLess(warm, cold)
+
+    def test_aux_to_target_shortens_tail(self):   # 영하에선 보조를 목표까지 켜야 마지막 구간이 짧다
+        late = hc.lead2_hours(dict(P2, aux_off_gap=0.3), 13.6, 15, -4, 1818, 470, 25, 14)
+        full = hc.lead2_hours(dict(P2, aux_off_gap=0.0), 13.6, 15, -4, 1818, 470, 25, 14)
+        self.assertLess(full, late - 3)
 
     def test_aux_shortens(self):
         self.assertLess(hc.lead2_hours(P2, 10, 10, -2, 1800, 470, 23, 14), hc.lead2_hours(P2, 10, 10, -2, 1800, 0, 23, 14))
@@ -32,15 +38,30 @@ class Lead2(unittest.TestCase):
 
 
 class MassStep(unittest.TestCase):
-    def test_converges_to_balance(self):   # 1층 20, 바깥 0 → 가구 평형 175·20/(175+10) ≈ 18.9
+    def test_converges_to_balance(self):   # 1층 20, 바깥 0 → 가구 평형 h_am·20/(h_am+h_mo)
         tm = 10.0
-        for _ in range(600): tm = hc.mass_step(tm, 20.0, 0.0, 60, P2)
-        self.assertAlmostEqual(tm, 18.9, delta=0.1)
+        for _ in range(900): tm = hc.mass_step(tm, 20.0, 0.0, 60, P2)
+        self.assertAlmostEqual(tm, P2["h_am"] * 20 / (P2["h_am"] + P2["h_mo"]), delta=0.05)
 
     def test_start_and_missing(self):
         self.assertEqual(hc.mass_step(None, 12.0, 0, 60, P2), 12.0)
         self.assertEqual(hc.mass_step(15.0, None, 0, 60, P2), 15.0)
         self.assertEqual(hc.mass_step(15.0, 12.0, 0, 0, P2), 15.0)
+
+
+class AuxBadExpiry(unittest.TestCase):   # 11-22: 11-20의 '가열 안 됨'이 남아 보조가 빠졌던 문제
+    def _st(self, age_s, now):
+        import datetime as dt
+        return {"updated": dt.datetime.fromtimestamp(now - 30).strftime("%Y-%m-%d %H:%M:%S"),
+                "heat_ok": False, "heat_ok_ts": now - age_s}
+
+    def test_fresh_bad_excludes_old_bad_includes(self):
+        import time
+        now = time.time()
+        self.assertEqual(hc.preheat_power(CFG, 1818, self._st(3600, now), now), 1818)
+        self.assertEqual(hc.preheat_power(CFG, 1818, self._st(2 * 86400, now), now), 1818 + 470)
+        no_ts = self._st(0, now); no_ts.pop("heat_ok_ts")
+        self.assertEqual(hc.preheat_power(CFG, 1818, no_ts, now), 1818)   # 시각 모르면 보수적으로 제외
 
 
 class Selection(unittest.TestCase):

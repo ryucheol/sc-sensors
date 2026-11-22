@@ -33,14 +33,14 @@
     "heater_watts": 1740,
     "margin": 1.1,
     "max_lead_hours": 12,
-    "model": "shadow",
+    "model": "2node",
     "two_node": {
-      "ca_kwh": 0.31,
-      "cm_kwh": 0.36,
-      "h_ao": 48,
-      "h_am": 175,
-      "h_mo": 10,
-      "margin": 1.3
+      "ca_kwh": 0.32,
+      "cm_kwh": 0.37,
+      "h_ao": 45,
+      "h_am": 192,
+      "h_mo": 16,
+      "margin": 1.1
     }
   },
   "arrival_noshow_hours": 3,

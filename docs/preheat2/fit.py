@@ -2,7 +2,7 @@ import numpy as np, sys
 from scipy.optimize import least_squares
 D=np.loadtxt('hourly.txt'); kwh,T1,T2,Tf=D.T; Ts,cl=np.loadtxt('stn.txt').T; N=len(D)
 hour=(9+np.arange(N))%24; day=(9+np.arange(N))//24; nd=day.max()+1
-P=kwh*1000.0; Ta=T1
+P=(kwh+np.loadtxt('aux.txt'))*1000.0; Ta=T1   # 메인 + 보조(11-22 01:30~ 477W)
 sol=np.where((hour>=7)&(hour<=17), np.sin(np.pi*(hour-6.5)/11.0).clip(0), 0.0)
 END=int(sys.argv[1]); tag=sys.argv[2]
 def sim(p,n):

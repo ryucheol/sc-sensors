@@ -7,6 +7,7 @@ import heater_control as hc
 CFG = json.load(open(os.path.join(os.path.dirname(os.path.dirname(os.path.realpath(__file__))), "heater_config.json"), encoding="utf-8"))
 # 운영 설정에서 금요일 예열을 꺼도(11-14) 예열 로직 자체는 시험한다 → 테스트는 켠 상태로 고정
 CFG["preheat"]["enabled"] = True
+CFG["preheat"]["model"] = "1node"   # 이 파일은 1노드 로직을 시험(2노드는 test_preheat2)
 FRI = datetime.datetime(2026, 11, 6)   # 금요일(weekday 4)
 assert FRI.weekday() == 4
 
@@ -181,7 +182,8 @@ class PreheatLearn(unittest.TestCase):
         self.assertEqual(hc.learned_factor({"preheat_k": [0.3]}), hc.LEARN_MIN)
 
     def _cfg(self):
-        return json.load(open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "heater_config.json")))
+        c = json.load(open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "heater_config.json")))
+        c["preheat"]["model"] = "1node"; return c
 
     def test_learn_on_reach(self):
         cfg = self._cfg(); t0 = 1_800_000_000
@@ -210,6 +212,15 @@ class PreheatLearn(unittest.TestCase):
         st["preheat_k"] = [1.3]
         s1, l1 = hc.arrival_plan(cfg, st, 15.0, 5.0, 2240)
         self.assertGreater(l1, l0)
+
+    def test_learned_factor_per_model(self):   # 2노드는 preheat_k2만 본다
+        cfg = self._cfg(); cfg["preheat"]["model"] = "2node"; now = 1_800_000_000
+        st = {"arrival": {"ts": now + 20 * 3600, "target": 23.5}, "t_mass": 14.0}
+        _, l0 = hc.arrival_plan(cfg, st, 12.0, 0.0, 1800)
+        st["preheat_k"] = [1.5]
+        self.assertEqual(hc.arrival_plan(cfg, st, 12.0, 0.0, 1800)[1], l0)
+        st["preheat_k2"] = [1.3]
+        self.assertGreater(hc.arrival_plan(cfg, st, 12.0, 0.0, 1800)[1], l0)
 
 
 if __name__ == "__main__":

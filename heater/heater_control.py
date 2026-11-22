@@ -134,6 +134,14 @@ def advice_speech(adv):
 
 AUX_STATUS = os.path.join(BASE, "aux_status.json")
 
+AUX_BAD_EXPIRE_S = 24 * 3600   # '가열 안 됨'은 하루만 믿는다(11-22: 11-20에 원전원 끈 채 남은 기록이 다음 예약의 보조를 빼버림)
+
+def aux_heat_bad_fresh(aux_status, now_ts=None, expire_s=AUX_BAD_EXPIRE_S):
+    """보조 '가열 안 됨' 기록이 아직 유효한지(순수). 시각이 없으면 유효로 본다(보수적)."""
+    ts = (aux_status or {}).get("heat_ok_ts")
+    if not isinstance(ts, (int, float)): return True
+    return (now_ts or time.time()) - ts < expire_s
+
 def preheat_power(cfg, stage_w, aux_status=None, now_ts=None, fresh_s=900):
     """도착 예열 선행시간 계산용 출력(W, 순수). 메인 단 W(없으면 preheat.heater_watts)에, 보조 히터가 예열 보강에
        쓰이는 경우(aux.enabled·aux.preheat_boost, 보조 플러그가 최근 fresh_s 안에 응답) 보조 W(aux.watts, 기본 470)를 더한다.
@@ -142,8 +150,8 @@ def preheat_power(cfg, stage_w, aux_status=None, now_ts=None, fresh_s=900):
     a = cfg.get("aux") or {}
     if not a.get("enabled", True) or not a.get("preheat_boost", True) or not aux_status:
         return base
-    if aux_status.get("heat_ok") is False:   # 자가 점검·실측에서 가열 안 됨(본체 스위치 꺼짐 등) → 빼고 계산
-        return base
+    if aux_status.get("heat_ok") is False and aux_heat_bad_fresh(aux_status, now_ts):
+        return base   # 자가 점검·실측에서 가열 안 됨(본체 스위치 꺼짐 등) → 빼고 계산. 하루 지나면 '모름'으로 보고 넣는다
     try:
         age = (now_ts or time.time()) - datetime.datetime.strptime(aux_status["updated"], "%Y-%m-%d %H:%M:%S").timestamp()
     except Exception:
@@ -156,10 +164,11 @@ def load_aux_status(path=None):
 
 # ── 2노드 예열 모델(11-22 연구: docs/PREHEAT_MODEL.ko.md) ───────────────────────────
 # 실내 공기(+가까운 표면) Ca ─ Ham ─ 가구·내장재 Cm, 공기→바깥 Hao, 가구→바깥 Hmo.
-# 11-08~22 334시간(1층·바닥외부·히터 kWh)으로 맞춘 값. 가구 온도는 잴 수 없어 1층 실측으로 매분 추정(mass_step).
-PREHEAT2_DEFAULT = {"ca_kwh": 0.31, "cm_kwh": 0.36, "h_ao": 48.0, "h_am": 175.0, "h_mo": 10.0,
-                    "margin": 1.3,          # 추운 날 기록이 적어(11-20·22뿐) 1.1보다 넉넉히. 학습 계수가 곱해진다
-                    "aux_on_gap": 1.0, "aux_off_gap": 0.3,   # 보조: 목표−1 아래 켬, 목표−0.3 이상 끔(aux_control과 같게)
+# 11-08~22 334시간(1층·바닥외부·메인 kWh + 11-22 보조 477W)으로 맞춘 값 — 바깥 손실 합 ≈ 60 W/K(유지 전력 분석 55~60과 일치).
+# 가구 온도는 잴 수 없어 1층 실측으로 매분 추정(mass_step).
+PREHEAT2_DEFAULT = {"ca_kwh": 0.32, "cm_kwh": 0.37, "h_ao": 45.0, "h_am": 192.0, "h_mo": 16.0,
+                    "margin": 1.1,          # 지난 예열 6번 모두 여유 전 예측 ≥ 실제(안전 쪽). 2노드 학습 계수(preheat_k2)가 곱해진다
+                    "aux_on_gap": 1.0, "aux_off_gap": 0.0,   # 보조: 목표−1 아래 켬, 목표에서 끔(aux_control boost_gap_c·boost_off_gap_c와 같게)
                     "step_s": 60}
 
 def p2_cfg(cfg):
@@ -240,10 +249,14 @@ LEARN_KEEP = 5            # 최근 예열 몇 번을 볼지
 LEARN_MIN, LEARN_MAX = 0.8, 1.6   # 학습 계수 범위(한 번의 이상한 예열로 크게 흔들리지 않게)
 
 
-def learned_factor(st):
+def learn_key(model):
+    """모델별 학습 기록 키: 1노드 preheat_k, 2노드 preheat_k2(1노드 비율은 2노드에 맞지 않아 따로 쌓는다)."""
+    return "preheat_k2" if model == "2node" else "preheat_k"
+
+def learned_factor(st, model=None):
     """최근 예열들의 '실제 걸린 시간 ÷ 예측 선행시간' 중앙값(순수). 기록 없으면 1.0.
     상한에 걸려 잘린 예열은 예측이 잘린 값이라 학습에서 뺀다(preheat_k에 넣지 않음)."""
-    ks = [k for k in (st.get("preheat_k") or [])[-LEARN_KEEP:] if isinstance(k, (int, float))]
+    ks = [k for k in (st.get(learn_key(model)) or [])[-LEARN_KEEP:] if isinstance(k, (int, float))]
     if not ks:
         return 1.0
     ks = sorted(ks); m = ks[len(ks) // 2] if len(ks) % 2 else (ks[len(ks) // 2 - 1] + ks[len(ks) // 2]) / 2
@@ -257,8 +270,9 @@ def arrival_plan(cfg, st, t_in, t_out_fc, P=None, aux_w=0.0, model=None):
     if not arr or not arr.get("ts"): return None, None
     cfg2 = dict(cfg); pre = dict(cfg["preheat"]); pre["target_temp"] = arr.get("target", cfg["comfort"]["on"]); cfg2["preheat"] = pre
     if model: pre["model"] = model
-    # 지난 예열들이 늦었으면 더 일찍, 일렀으면 덜 일찍(학습 계수)
-    lead = preheat_lead_hours(cfg2, t_in, t_out_fc, P, st.get("t_mass"), aux_w, learned_factor(st))
+    # 지난 예열들이 늦었으면 더 일찍, 일렀으면 덜 일찍(학습 계수, 모델별)
+    lead = preheat_lead_hours(cfg2, t_in, t_out_fc, P, st.get("t_mass"), aux_w,
+                              learned_factor(st, "2node" if pre.get("model") == "2node" else "1node"))
     return arr["ts"] - lead * 3600.0, lead
 
 def forecast_series(path=FORECAST):
@@ -323,7 +337,7 @@ def schedule_step(cfg, st, t_in, t_out, dtn, tnow, P=None, t_out_fc=None, aux_w=
                                      "capped": lead >= p["max_lead_hours"] - 1e-6, "model": preheat_model(cfg)}
                 if preheat_model(cfg) == "shadow":   # 그림자: 2노드가 냈을 선행시간도 남겨 도달 때 비교
                     _s2, l2 = arrival_plan(cfg, st, t_in, t_out_fc if t_out_fc is not None else t_out, P, aux_w, "2node")
-                    st["preheat_run"]["lead2_h"] = round(l2, 2)
+                    st["preheat_run"]["lead2_h"] = round(l2, 2); st["preheat_run"]["capped2"] = l2 >= p["max_lead_hours"] - 1e-6
                 logs.append("도착 예약 난방 시작: 도착 %s 목표 %s°C, 내부 %s°C 예보외기 %s°C P=%sW, 선행 %.1fh → 난방 %s/%s"
                             % (time.strftime("%m-%d %H:%M", time.localtime(arr["ts"])), on, t_in,
                                t_out_fc if t_out_fc is not None else t_out, int(P) if P else cfg["preheat"]["heater_watts"], lead, on, off))
@@ -346,10 +360,13 @@ def schedule_step(cfg, st, t_in, t_out, dtn, tnow, P=None, t_out_fc=None, aux_w=
             st["preheat_hist"] = ((st.get("preheat_hist") or []) + [{
                 "start": run["start"], "actual_h": round(actual_h, 2), "lead_h": run["lead_h"], "lead2_h": run.get("lead2_h"),
                 "t_in": run.get("t_in"), "target": run["target"], "model": run.get("model")}])[-20:]
+            rmodel = "2node" if run.get("model") == "2node" else "1node"
             if not run.get("capped") and run["lead_h"] > 0.3:
-                k = actual_h / run["lead_h"]
-                st["preheat_k"] = ((st.get("preheat_k") or []) + [round(k, 3)])[-LEARN_KEEP:]
-                msg += " → 비율 %.2f 기록, 다음 여유 계수 %.2f배" % (k, learned_factor(st))
+                k = actual_h / run["lead_h"]; key = learn_key(rmodel)
+                st[key] = ((st.get(key) or []) + [round(k, 3)])[-LEARN_KEEP:]
+                msg += " → 비율 %.2f 기록, 다음 여유 계수 %.2f배" % (k, learned_factor(st, rmodel))
+            if run.get("lead2_h") and rmodel != "2node" and not run.get("capped2"):   # 그림자: 2노드 비율도 쌓아 둔다
+                st["preheat_k2"] = ((st.get("preheat_k2") or []) + [round(actual_h / run["lead2_h"], 3)])[-LEARN_KEEP:]
             elif run.get("capped") and late_min > 0:
                 msg += " → 상한(max_lead_hours) 때문에 늦음: 상한을 늘리거나 보조 히터 확인"
             st.pop("preheat_run", None); changed = True
@@ -542,6 +559,7 @@ def main():
     on_since = None; thist = collections.deque(); advice = None; advice_log = 0.0
     wbuf = collections.deque(maxlen=5)   # 단수 인식용: 켜진 지 STAGE_SETTLE_SEC 지난 W 표본
     t_mass = _ss.get("t_mass"); t_mass_ts = None   # 2노드 가구 온도 추정(첫 주기는 1층 값에서 시작)
+    aux_warn_ts = 0.0
     while True:
         poll = 60
         try:
@@ -577,8 +595,14 @@ def main():
             # ── 스케줄: 금요일 적응형 예열 / 노쇼 복귀 / 안전 백스톱 ──
             _arr = st.get("arrival") or {}
             _t_fc = forecast_min_temp(hours=max(1.0, (_arr["ts"] - now()) / 3600.0)) if _arr.get("ts") else None
-            p_pre = preheat_power(cfg, stage_w, load_aux_status())   # 메인 + (응답하는) 보조 히터
+            _aux_st = load_aux_status()
+            p_pre = preheat_power(cfg, stage_w, _aux_st)   # 메인 + (응답하는) 보조 히터
             aux_pre = max(0.0, p_pre - (stage_w or cfg["preheat"]["heater_watts"]))
+            if st.get("arrival") and aux_pre == 0 and now() - aux_warn_ts > 3 * 3600:
+                aux_warn_ts = now()
+                log("⚠ 도착 예열 계산에서 보조 히터 제외 — %s" % (
+                    "보조 '가열 안 됨' 기록(본체 스위치 확인)" if (_aux_st or {}).get("heat_ok") is False
+                    else "보조 플러그 상태 없음·오래됨"))
             # 2노드 가구 온도 추정: 1층 실측을 따라 매분 적분(1층이 죽으면 멈춤). 재시작해도 status에서 이어감
             _tm_now = now()
             if not stale:
