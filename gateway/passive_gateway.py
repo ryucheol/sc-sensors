@@ -51,9 +51,6 @@ HUMI_DEADBAND = float(os.environ.get("GW_HUMI_DEADBAND", 1.0))          # 습도
 MONITOR = os.environ.get("GW_MONITOR", "0").lower() in ("1", "true", "yes", "on")
 PRESENCE_SSID = os.environ.get("GW_PRESENCE_SSID", "Ryuspot")   # 이 SSID(폰 핫스팟·들고 다니는 Wi-Fi 동글)에 붙으면 재실. 쉼표로 여러 개, 빈 문자열이면 재실 기록 끔
 PRESENCE_SSIDS = {s.strip() for s in PRESENCE_SSID.split(",") if s.strip()}
-# 폰이 농막 Wi-Fi(Ryufarm, Pi가 공유기)에 붙어 있으면 재실 — MAC은 공개 저장소에 쓰지 않고 gateway.env에만(쉼표로 여러 개).
-# 11-22: 휴대용 Wi-Fi 동글을 농막 AP에 상주시키면서 SSID만으론 사람 유무를 알 수 없게 됨 → 폰 MAC으로 보완.
-PRESENCE_MACS = {m.strip().lower() for m in os.environ.get("GW_PRESENCE_MACS", "").split(",") if m.strip()}
 PRESENCE_ABSENT_MIN = float(os.environ.get("GW_PRESENCE_ABSENT_MIN", 240))  # 동파 명령 없이 핫스팟만 사라진 경우 이 분이 지나면 출발(추정)로 기록   # 모니터(읽기전용): 수신 로그만, 서버 업로드·센서 연결 없음
 SCAN_TIMEOUT = 15.0
 IDLE_TIMEOUT = 10.0
@@ -226,38 +223,6 @@ def post_hist(readings):
 
 def post_batt(readings):
     return _post({"secret": SECRET, "mode": "batt", "readings": readings})
-
-
-LIVE_NEIGH = ("REACHABLE", "DELAY", "PROBE")
-
-
-def neigh_hits(text, macs):
-    """`ip neigh show` 출력 → macs 중 표에 있는 것의 [(ip, 상태)] (순수)."""
-    out = []
-    for line in (text or "").splitlines():
-        t = line.split()
-        if "lladdr" not in t: continue
-        mac = t[t.index("lladdr") + 1].lower() if t.index("lladdr") + 1 < len(t) else ""
-        if mac in macs: out.append((t[0], t[-1]))
-    return out
-
-
-def lan_seen(macs):
-    """폰(MAC)이 지금 농막 LAN에 있는지: 이웃 표에서 살아 있는 상태이거나, 오래된 항목이면 ping 1번으로 확인."""
-    if not macs: return False
-    try:
-        hits = neigh_hits(subprocess.run(["ip", "neigh", "show"], capture_output=True, text=True, timeout=4).stdout, macs)
-    except Exception:
-        return False
-    for ip, state in hits:
-        if state in LIVE_NEIGH: return True
-        if state in ("STALE",):
-            try:
-                if subprocess.run(["ping", "-c", "1", "-W", "1", ip], capture_output=True, timeout=4).returncode == 0:
-                    return True
-            except Exception:
-                pass
-    return False
 
 
 def post_presence(events):
@@ -932,11 +897,11 @@ def _pres_send(db):
 
 
 async def presence_task(latest, db):
-    """재실 자동기록. 도착 = 폰 핫스팟(PRESENCE_SSID) 등장 · 폰(GW_PRESENCE_MACS)이 농막 Wi-Fi에 붙음 · 난방/취침 명령.
+    """재실 자동기록. 도착 = 폰 핫스팟(PRESENCE_SSID) 등장 또는 난방/취침 명령.
        출발 = 동파 명령(명령 시각으로 기록). 동파 명령 없이 핫스팟만 PRESENCE_ABSENT_MIN 이상 사라지면 마지막 접속 시각으로 출발(추정).
        출발 뒤 핫스팟이 아직 켜져 있어도(짐 싸는 동안) 재도착으로 기록하지 않는다 — 핫스팟이 한 번 사라진 뒤의 등장만 도착(await_absence).
        검증: 저널의 핫스팟 업로드 구간이 수동 재실기록(11-01 13:00~11-02 08:57, 11-06 19:25~)과 분 단위로 일치."""
-    if not (PRESENCE_SSIDS or PRESENCE_MACS) or db is None: return
+    if not PRESENCE_SSID or db is None: return
     st = {"present": False, "since_ms": 0, "last_seen_ms": 0, "last_cmd_since": 0.0, "await_absence": False}
     try: st.update(json.load(open(PRESENCE_STATE)))
     except Exception: pass
@@ -951,7 +916,7 @@ async def presence_task(latest, db):
         try:
             now_ms = int(time.time() * 1000)
             ssid = (await asyncio.to_thread(net_info)).get("ssid", "")
-            hotspot = (ssid in PRESENCE_SSIDS) or (await asyncio.to_thread(lan_seen, PRESENCE_MACS))   # 핫스팟 또는 폰이 LAN에
+            hotspot = (ssid in PRESENCE_SSIDS)
             hs = {}
             try: hs = json.load(open(HEATER_STATE))
             except Exception: pass
