@@ -207,6 +207,89 @@ def lead2_hours(p2, t_in, t_mass, t_out, p_main, aux_w, target, max_h):
         if ta >= target: return t / 3600.0
     return None
 
+# ── 일사 반영(그림자, 11-22) ─────────────────────────────────────────────────────
+# 맑은 날 1층 일사 이득(W) — 11-22(무인, 맑음) 2노드 역산: 08시 0.4 · 09시 1.1 · 10~12시 1.6~1.7 · 13시 1.4 kW.
+# 오후 꼬리는 11-21 참고. (시, W) 선형 보간, 해 진 뒤 0. 동창 68°·남창 158°라 정오 전후가 넓게 높다.
+SOLAR_CLEAR_W = [(7.3, 0.0), (8.5, 450.0), (9.5, 1100.0), (10.5, 1550.0), (11.5, 1650.0), (12.5, 1550.0),
+                 (13.5, 1350.0), (14.5, 1100.0), (15.5, 600.0), (16.5, 200.0), (17.3, 0.0)]
+SKY_FACTOR = {1: 1.0, 2: 0.75, 3: 0.5, 4: 0.15}   # 기상청 SKY 1맑음 3구름많음 4흐림. 비·눈(pty>0)은 0.1
+SOLAR_CFG_DEFAULT = {"scale": 0.8,        # 역산 곡선을 20% 깎아 씀(늦게 켜는 쪽 실수가 더 나쁨)
+                     "slack_min": 15,     # 도착 15분 전까지 목표 도달
+                     "step_s": 120, "cand_min": 10,
+                     "cool_mult": 1.5}  # 히터 끈 동안 바깥 손실 배수: 11-21 밤 1층이 2노드보다 3°C 빨리 식음(열이 다락으로) → 이르게 켜는 쪽
+
+def solar_clear_w(hour):
+    """맑은 날 일사 이득(W, 순수). hour = 지역시각(소수 시)."""
+    pts = SOLAR_CLEAR_W
+    if hour <= pts[0][0] or hour >= pts[-1][0]: return 0.0
+    for (h0, w0), (h1, w1) in zip(pts, pts[1:]):
+        if h0 <= hour <= h1:
+            return w0 + (w1 - w0) * (hour - h0) / (h1 - h0)
+    return 0.0
+
+def fc_at(hourly, ts):
+    """forecast.json hourly에서 ts(epoch초)에 가장 가까운(±90분) 시간 예보 dict, 없으면 None(순수)."""
+    best = None
+    for h in hourly or []:
+        if "ms" not in h: continue
+        d = abs(h["ms"] / 1000.0 - ts)
+        if d <= 5400 and (best is None or d < best[0]): best = (d, h)
+    return best[1] if best else None
+
+def solar_w(ts, hourly, scale=1.0):
+    """ts 시각 예상 일사 이득(W, 순수): 맑은 날 곡선 × 예보 하늘 계수 × scale. 예보가 없으면 0(보수적)."""
+    lt = time.localtime(ts); hr = lt.tm_hour + lt.tm_min / 60.0
+    clear = solar_clear_w(hr)
+    if clear <= 0: return 0.0
+    h = fc_at(hourly, ts)
+    if not h: return 0.0
+    f = 0.1 if (h.get("pty") or 0) > 0 else SKY_FACTOR.get(h.get("sky"), 0.0)
+    return clear * f * scale
+
+def solar_start(p2, t_in, t_mass, now_ts, arr_ts, target, p_main, aux_w, hourly, t_out_default, max_h, scfg=None):
+    """일사 반영 2노드: 도착 arr_ts−slack까지 target에 닿는 '가장 늦은' 히터 시작 시각(epoch, 순수).
+       지금(now_ts) 공기 t_in·가구 t_mass에서 출발, 시작 전엔 히터 끔(식음 + 일사), 시작 뒤 메인(+보조, 켜는 조건대로).
+       바깥 = 예보 시간별 기온(없으면 t_out_default). 시작 후보는 cand_min분 간격, 가장 이른 후보는 max(now, arr−max_h).
+       아무 후보로도 못 닿으면 가장 이른 후보를 돌려준다. 반환 (시작 epoch, 그 시작으로 도착 때 예상 공기°C)."""
+    c = dict(SOLAR_CFG_DEFAULT); c.update(scfg or {})
+    goal_ts = arr_ts - c["slack_min"] * 60.0
+    if t_in is None or goal_ts <= now_ts: return now_ts, t_in
+    ca = p2["ca_kwh"] * 3.6e6; cm = p2["cm_kwh"] * 3.6e6; dt = float(c["step_s"])
+    # 시간 격자별 바깥·일사를 한 번만 계산
+    grid = []; t = now_ts
+    while t < goal_ts:
+        h = fc_at(hourly, t)
+        to = float(h["tmp"]) if h and h.get("tmp") is not None else (0.0 if t_out_default is None else float(t_out_default))
+        grid.append((t, to, solar_w(t, hourly, c["scale"]))); t += dt
+    tm0 = float(t_mass if t_mass is not None else t_in)
+
+    def run(start):
+        ta = float(t_in); tm = tm0; aux_on = False
+        for t, to, sw in grid:
+            P = 0.0
+            if t >= start:
+                if aux_w > 0:
+                    if ta < target - p2["aux_on_gap"]: aux_on = True
+                    elif ta >= target - p2["aux_off_gap"]: aux_on = False
+                P = (p_main or 0) + (aux_w if aux_on else 0)
+            hao = p2["h_ao"] * (c["cool_mult"] if t < start else 1.0)
+            dta = (P + sw - p2["h_am"] * (ta - tm) - hao * (ta - to)) / ca
+            dtm = (p2["h_am"] * (ta - tm) - p2["h_mo"] * (tm - to)) / cm
+            ta += dta * dt; tm += dtm * dt
+            if t >= start and ta >= target: return True, ta
+        return False, ta
+
+    earliest = max(now_ts, arr_ts - max_h * 3600.0)
+    cand = goal_ts; step = c["cand_min"] * 60.0
+    last = None
+    while cand >= earliest:
+        ok, ta = run(cand)
+        if ok: return cand, round(ta, 1)
+        last = (cand, ta); cand -= step
+    ok, ta = run(earliest)
+    return earliest, round(ta, 1)
+
+
 def preheat_lead_hours2(cfg, t_in, t_out, P=None, t_mass=None, aux_w=0.0, learn=1.0):
     """2노드 선행시간(h): 시뮬레이션 × margin × 학습 계수, max_lead_hours로 자름. P는 메인+보조 합(aux_w는 그중 보조)."""
     p = cfg["preheat"]; p2 = p2_cfg(cfg); maxlead = p["max_lead_hours"]
@@ -357,9 +440,14 @@ def schedule_step(cfg, st, t_in, t_out, dtn, tnow, P=None, t_out_fc=None, aux_w=
             msg = "예열 목표 도달: %.1fh 걸림(예측 %.1fh%s%s), 도착 시각 대비 %+.0f분" % (
                 actual_h, run["lead_h"], ", 상한에 걸림" if run.get("capped") else "",
                 (", 2노드 %.1fh" % run["lead2_h"]) if run.get("lead2_h") is not None else "", late_min)
+            if run.get("solar_start"):
+                msg += " · 일사 반영이면 %s 시작(실제 %s, %.1fh 늦게)" % (
+                    time.strftime("%H:%M", time.localtime(run["solar_start"])), time.strftime("%H:%M", time.localtime(run["start"])),
+                    (run["solar_start"] - run["start"]) / 3600.0)
             st["preheat_hist"] = ((st.get("preheat_hist") or []) + [{
                 "start": run["start"], "actual_h": round(actual_h, 2), "lead_h": run["lead_h"], "lead2_h": run.get("lead2_h"),
-                "t_in": run.get("t_in"), "target": run["target"], "model": run.get("model")}])[-20:]
+                "t_in": run.get("t_in"), "target": run["target"], "model": run.get("model"),
+                "solar_start": run.get("solar_start")}])[-20:]
             rmodel = "2node" if run.get("model") == "2node" else "1node"
             if not run.get("capped") and run["lead_h"] > 0.3:
                 k = actual_h / run["lead_h"]; key = learn_key(rmodel)
@@ -560,6 +648,7 @@ def main():
     wbuf = collections.deque(maxlen=5)   # 단수 인식용: 켜진 지 STAGE_SETTLE_SEC 지난 W 표본
     t_mass = _ss.get("t_mass"); t_mass_ts = None   # 2노드 가구 온도 추정(첫 주기는 1층 값에서 시작)
     aux_warn_ts = 0.0
+    sol_cache = (0.0, None, None)   # (계산 시각, 일사 반영 시작 epoch, 그때 도착 예상 공기°C) — 그림자
     while True:
         poll = 60
         try:
@@ -615,6 +704,24 @@ def main():
                          if st.get("arrival") and preheat_model(cfg) != "2node" else None)
             arr_pred = (predict_arrival_start(cfg, st, t_floor_est, now(), forecast_series(), t_out, p_pre, aux_w=aux_pre)
                         if st.get("arrival") and st.get("mode") != "comfort" else (None, None, None))
+            # ── 일사 반영 2노드(그림자): 예열 전 도착 예약이면 10분마다 '가장 늦은 시작'을 계산해 기록만 ──
+            if st.get("arrival") and st.get("mode") != "comfort" and not stale and now() - sol_cache[0] >= 600:
+                try:
+                    _p2 = p2_cfg(cfg); _arr = st["arrival"]
+                    _hr = (json.load(open(FORECAST)).get("hourly") or [])
+                    _ss_ts, _ss_ta = solar_start(_p2, t_floor_est, t_mass, now(), _arr["ts"], _arr.get("target", cfg["comfort"]["on"]),
+                                                 p_pre - aux_pre, aux_pre, _hr, _t_fc if _t_fc is not None else t_out,
+                                                 cfg["preheat"]["max_lead_hours"], (cfg["preheat"].get("solar") or {}))
+                    sol_cache = (now(), _ss_ts, _ss_ta)
+                except Exception as e:
+                    sol_cache = (now(), None, None); log("일사 반영 계산 실패: %s" % e)
+            elif not st.get("arrival"):
+                sol_cache = (0.0, None, None)
+            _run = st.get("preheat_run")
+            if _run and "solar_start" not in _run and sol_cache[1]:
+                _run["solar_start"] = sol_cache[1]; changed = True
+                slogs.append("일사 반영 2노드(그림자): %s 시작이면 도착 때 %.1f°C 예상 — 실제는 지금 시작" % (
+                    time.strftime("%m-%d %H:%M", time.localtime(sol_cache[1])), sol_cache[2] if sol_cache[2] is not None else float("nan")))
             for m in slogs: log(m)
             if changed: save_atomic(STATE, st)
 
@@ -806,6 +913,7 @@ def main():
                     "arrival": st.get("arrival"), "arrival_start_est": arr_start, "arrival_lead_h": arr_lead,
                     "t_mass": round(t_mass, 2) if t_mass is not None else None, "preheat_model": preheat_model(cfg),
                     "arrival_lead2_h": round(arr_lead2, 2) if arr_lead2 is not None else None,
+                    "arrival_solar_start": sol_cache[1], "arrival_solar_tin": sol_cache[2],
                     "arrival_start_pred": arr_pred[0], "arrival_tin_pred": arr_pred[1], "arrival_lead_pred_h": arr_pred[2],
                     "manual": ({"state": st["manual"]["state"], "left_min": max(0, int((st["manual"]["until"] - now()) / 60))}
                                if st.get("manual") else None)})
