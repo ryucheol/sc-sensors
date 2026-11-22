@@ -13,7 +13,7 @@
   4) 메인 고장 백업: 동파 모드인데 메인 플러그가 켜져 있으나 가열 안 됨(heater_ok=false)·통신 끊김이면 1층 < frost_off_c 동안 켬.
   그 밖(재실 난방·취침, 동파 평시)엔 끔.
 자가 점검(11-20): 도착 예약이 있고 아직 예열 전(동파 모드)이며 도착까지 selftest_before_h(14) 안이면, 그 예약에 한 번
-         selftest_s(20)초 켜서 전력을 잰다(재실·수동 끄기 중엔 안 함). 켜진 동안의 실측도 반영(≥ok_w 정상, <bad_w가 2분 → 안 됨).
+         최대 selftest_s(90)초 켜서 전력을 잰다(5초마다, 넘으면 조기 종료)(재실·수동 끄기 중엔 안 함). 켜진 동안의 실측도 반영(≥ok_w 정상, <bad_w가 2분 → 안 됨).
          결과 heat_ok(True/False/None)를 aux_status.json에 쓰고, 메인 제어기는 heat_ok=False면 예열 계산에서 보조를 뺀다
          (본체 스위치만 꺼 두고 떠나도 늦게 데워지지 않게). 14h = 예열 최대 선행 12h보다 앞서야 예열 시작 전에 점검된다
          (11-22: 12h였을 때 01:30 예열 시작과 겹쳐 점검이 건너뛰어지고, 11-20의 '가열 안 됨'이 남아 보조가 계산에서 빠짐).
@@ -34,7 +34,7 @@ P = {k: os.path.join(BASE, v) for k, v in {
     "log": "aux.log", "presence": "presence_state.json"}.items()}
 DEFAULTS = {"enabled": True, "frost_on_c": 2.5, "frost_off_c": 4.0, "boost_gap_c": 1.0, "boost_off_gap_c": 0.0, "manual_hold_h": 2,
             "deadman_s": 1800, "sensor_stale_min": 15,
-            "selftest_before_h": 14, "selftest_s": 20, "ok_w": 100, "bad_w": 50, "bad_after_s": 120}
+            "selftest_before_h": 14, "selftest_s": 90, "ok_w": 100, "bad_w": 50, "bad_after_s": 120}
 
 
 def load(path, default=None):
@@ -177,9 +177,18 @@ def main(argv):
     if not actual and not want and selftest_due(now, c, state, load(P["cmd"], {}), present, mine):
         mine["selftest_for"] = (state.get("arrival") or {}).get("ts")
         try:
-            dev.turn_on(); time.sleep(c["selftest_s"])
-            w_t = ((dev.status() or {}).get("dps") or {}).get("19")
-            w_t = (w_t or 0) / 10.0
+            # Tuya 전력값(DP19)은 켠 뒤 수십 초 늦게 갱신됨(11-22 01:30 20초 측정 0W 오판, 14:19 실측 ~55초 뒤 520W)
+            # → 5초마다 읽어 ok_w 넘으면 바로 끝, 최대 selftest_s초. 최댓값으로 판정
+            dev.turn_on(); t0 = time.time(); w_t = 0.0
+            while time.time() - t0 < c["selftest_s"]:
+                time.sleep(5)
+                try:
+                    v = ((dev.status() or {}).get("dps") or {}).get("19")
+                    w_t = max(w_t, (v or 0) / 10.0)
+                except Exception:
+                    pass
+                if w_t >= c["ok_w"]:
+                    break
             dev.turn_off()
             ok = w_t >= c["ok_w"]
             mine.update(heat_ok=ok, heat_ok_ts=time.time(), selftest_w=w_t)

@@ -365,10 +365,10 @@ def schedule_step(cfg, st, t_in, t_out, dtn, tnow, P=None, t_out_fc=None, aux_w=
                 k = actual_h / run["lead_h"]; key = learn_key(rmodel)
                 st[key] = ((st.get(key) or []) + [round(k, 3)])[-LEARN_KEEP:]
                 msg += " → 비율 %.2f 기록, 다음 여유 계수 %.2f배" % (k, learned_factor(st, rmodel))
-            if run.get("lead2_h") and rmodel != "2node" and not run.get("capped2"):   # 그림자: 2노드 비율도 쌓아 둔다
-                st["preheat_k2"] = ((st.get("preheat_k2") or []) + [round(actual_h / run["lead2_h"], 3)])[-LEARN_KEEP:]
             elif run.get("capped") and late_min > 0:
                 msg += " → 상한(max_lead_hours) 때문에 늦음: 상한을 늘리거나 보조 히터 확인"
+            if run.get("lead2_h") and rmodel != "2node" and not run.get("capped2"):   # 그림자: 2노드 비율도 쌓아 둔다
+                st["preheat_k2"] = ((st.get("preheat_k2") or []) + [round(actual_h / run["lead2_h"], 3)])[-LEARN_KEEP:]
             st.pop("preheat_run", None); changed = True
             logs.append(msg)
         elif tnow > run["arr_ts"] + 6 * 3600:

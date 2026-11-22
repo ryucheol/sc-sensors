@@ -43,6 +43,22 @@ def serve(directory):
     return srv
 
 
+def app_playing(c, wait=4.0):
+    """캐스트 앱이 실제로 재생(PLAYING·BUFFERING) 중인지. 상태를 못 읽으면 재생 중으로 봄(끼어들지 않게)."""
+    try:
+        mc = c.media_controller
+        mc.update_status()
+        t0 = time.time()
+        while time.time() - t0 < wait and mc.status.player_state in (None, "UNKNOWN"):
+            time.sleep(0.3)
+        st = mc.status.player_state
+        print("앱 재생 상태:", st)
+        return st not in ("PAUSED", "IDLE")
+    except Exception as e:
+        print("재생 상태 확인 실패:", e)
+        return True
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("text"); ap.add_argument("--volume", type=float, default=0.6); ap.add_argument("--repeat", type=int, default=1)
@@ -62,9 +78,10 @@ def main():
     c = tgt[0]; c.wait(timeout=15)
     app = c.status.display_name
     if app not in (None, "", "Backdrop", "Default Media Receiver", "Bluetooth Audio"):
-        if a.if_idle:
-            print("사용 중(%s) — 끼어들지 않음" % app)
+        if a.if_idle and app_playing(c):
+            print("사용 중(%s, 재생 중) — 끼어들지 않음" % app)
             browser.stop_discovery(); return 3
+        # 일시정지·정지 상태로 앱만 떠 있으면(11-21 17:00 PAUSED 실측) 시보도 끄고 재생
         # 경보: 캐스트 앱(유튜브 뮤직 등)은 재생 명령을 덮어써도 곧 멈춤(11-21 PAUSED/IDLE 실측) → 앱을 끄고 재생
         print("%s 중 → 끄고 캐스트(경보)" % app)
         c.quit_app(); time.sleep(3)

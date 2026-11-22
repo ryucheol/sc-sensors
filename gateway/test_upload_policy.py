@@ -31,10 +31,11 @@ class CmdPoll(unittest.TestCase):
         self.assertFalse(s.due_now("comfort", 3))
         self.assertFalse(s.due_now("frost", 0))
 
-    def test_sheet_only_arrival(self):
+    def test_sheet_allowed(self):   # 11-21: 음성 대화용으로 제어 명령도 허용(SHEET_VERBS), 공유·점검·기상은 제외
         self.assertTrue(s.sheet_allowed("도착 2026-11-20 19:00 23.5"))
         self.assertTrue(s.sheet_allowed("도착 취소"))
-        self.assertFalse(s.sheet_allowed("난방 25"))
+        self.assertTrue(s.sheet_allowed("난방 25"))
+        self.assertFalse(s.sheet_allowed("점검"))
         self.assertFalse(s.sheet_allowed("공유 2시간"))
         self.assertFalse(s.sheet_allowed(""))
 
