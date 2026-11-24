@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- 맥에서 5분마다 시계 화면 갱신. <PYTHON3>, <REPO> 를 실제 경로로 바꿔 ~/Library/LaunchAgents/ 에 복사 후
+     launchctl load ~/Library/LaunchAgents/kr.ryufarm.smartclock.plist -->
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>kr.ryufarm.smartclock</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string><PYTHON3></string>
+    <string><REPO>/smartclock/smartclock_push.py</string>
+    <string>--farm-url</string>
+  </array>
+  <key>WorkingDirectory</key><string><REPO>/smartclock</string>
+  <key>StartInterval</key><integer>300</integer>
+  <key>RunAtLoad</key><true/>
+  <key>StandardOutPath</key><string><REPO>/smartclock/logs/push.log</string>
+  <key>StandardErrorPath</key><string><REPO>/smartclock/logs/push.log</string>
+</dict>
+</plist>
