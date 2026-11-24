@@ -4,7 +4,7 @@
 Pi에서는 gspread의 ws.get_values() 결과를, 맥에서는 그 JSON 덤프를 넘기면 된다.
 """
 import re
-from datetime import datetime
+from datetime import datetime, timedelta
 from PIL import Image, ImageDraw, ImageFont
 
 # 한글 글꼴 후보: (경로, 굵은 index, 보통 index). 맥 → Pi(fonts-noto-cjk / fonts-nanum) 순.
@@ -49,7 +49,7 @@ def parse(rows):
     upd = next((r[4] for r in rows[1:4] if len(r) > 4 and r[4]), "")
     m = re.search(r"(\d{4})-(\d\d)-(\d\d)\(.\)\s*(\d\d):(\d\d)", upd)
     return {
-        "rooms": [room("1층", "내부1층"), room("다락", "다락"), room("바깥", "바닥외부")],
+        "rooms": [room("다락", "다락"), room("1층", "내부1층"), room("바깥", "바닥외부")],   # 위→아래: 건물 높이 순
         "heater_mode": re.sub(r"^\W+|\s*\d+/\d+.*$", "", h[1]).strip() if len(h) > 1 else "",
         "heater_on": len(h) > 2 and h[2].strip().upper().startswith("ON"),
         "arrival": re.sub(r"\s*·.*$", "", h[3]).replace(".0°C", "°C") if len(h) > 3 else "",
@@ -68,7 +68,56 @@ def temp_color(t):
     return ORANGE
 
 
-def render(d, now=None):
+HIST_LABELS = {"내부1층": "1층", "다락": "다락", "바닥외부": "바깥"}
+HIST_HOURS = 24
+
+
+def hist_from_rows(rows, now=None):
+    """'최근5일_시간별' 행(머리 2줄 포함 가능) → {"1층": [(datetime, 온도), ...], ...}.
+    시각 칸 형식 '11/24(화) 00시'. 연도는 now 기준(12월→1월 넘어가면 작년으로)."""
+    now = now or datetime.now()
+    cols = {}
+    out = {v: [] for v in HIST_LABELS.values()}
+    for r in rows:
+        if not r:
+            continue
+        if str(r[0]).strip() == "시각":
+            cols = {i: HIST_LABELS[c.strip()] for i, c in enumerate(r[:4]) if c.strip() in HIST_LABELS}
+            continue
+        m = re.match(r"(\d+)/(\d+)\(.\)\s*(\d+)시", str(r[0]))
+        if not (m and cols):
+            continue
+        mo, dd, hh = map(int, m.groups())
+        ts = datetime(now.year, mo, dd, hh)
+        if ts > now + timedelta(days=1):
+            ts = ts.replace(year=now.year - 1)
+        for i, lab in cols.items():
+            t = _num(r[i]) if i < len(r) else None
+            if t is not None:
+                out[lab].append((ts, t))
+    return out
+
+
+def _spark(g, pts, box, color, now, hours=HIST_HOURS):
+    """box=(x0,y0,x1,y1) 안에 최근 hours 시간 꺾은선. x는 시각 비례, y는 자체 최소~최대(최소 폭 2°C)."""
+    x0, y0, x1, y1 = box
+    start = now - timedelta(hours=hours)
+    pts = [(ts, t) for ts, t in pts if start <= ts <= now + timedelta(minutes=10)]
+    if len(pts) < 2 or x1 - x0 < 16:
+        return
+    lo, hi = min(t for _, t in pts), max(t for _, t in pts)
+    if hi - lo < 2:
+        mid = (hi + lo) / 2
+        lo, hi = mid - 1, mid + 1
+    span = hours * 3600
+    xy = [(x0 + (x1 - x0) * min(1, max(0, (ts - start).total_seconds() / span)),
+           y1 - (y1 - y0) * (t - lo) / (hi - lo)) for ts, t in pts]
+    g.line(xy, fill=color, width=2, joint="curve")
+    ex, ey = xy[-1]
+    g.ellipse([ex - 2.5, ey - 2.5, ex + 2.5, ey + 2.5], fill=color)
+
+
+def render(d, now=None, hist=None, hours=HIST_HOURS):
     now = now or datetime.now()
     img = Image.new("RGB", (S, S), BG)
     g = ImageDraw.Draw(img)
@@ -83,10 +132,21 @@ def render(d, now=None):
 
     # 세 곳 온도·습도 카드
     y = 38
+    # 온도는 습도 바로 왼쪽에 붙인다(습도 칸 폭은 '88%' 기준 고정)
+    temp_r = S - 18 - g.textlength("88%", font=_f(15, bold=False)) - 5
+    tfmt = lambda t: "--" if t is None else f"{t:.1f}°"
+    # 그래프 칸은 세 카드 모두 같은 폭(가장 긴 온도 글자 기준) → 시간축이 위아래로 맞아 비교 가능
+    spark_r = temp_r - max(g.textlength(tfmt(t), font=_f(30)) for _, t, _ in d["rooms"]) - 8
     for label, t, rh in d["rooms"]:
         g.rounded_rectangle([8, y, S - 8, y + 39], radius=8, fill=CARD)
         g.text((20, y + 20), label, font=_f(18), fill=SUB, anchor="lm")
-        g.text((168, y + 20), "--" if t is None else f"{t:.1f}°", font=_f(30), fill=temp_color(t), anchor="rm")
+        ttxt = tfmt(t)
+        g.text((temp_r, y + 20), ttxt, font=_f(30), fill=temp_color(t), anchor="rm")
+        if hist and hist.get(label):   # 라벨과 온도 사이 빈칸에 최근 hours시간 꺾은선
+            pts = list(hist[label])
+            if t is not None and d["updated"]:
+                pts.append((d["updated"], t))
+            _spark(g, sorted(pts), (58, y + 9, spark_r, y + 31), temp_color(t), now, hours)
         g.text((S - 18, y + 24), "" if rh is None else f"{rh:.0f}%", font=_f(15, bold=False), fill=SUB, anchor="rm")
         y += 44
 
