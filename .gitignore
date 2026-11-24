@@ -130,3 +130,4 @@ smartclock/logs/
 smartclock/.smartclock_state.json
 smartclock/sc_*.jpg
 smartclock/*.png
+smartclock/.smartclock_hist.json

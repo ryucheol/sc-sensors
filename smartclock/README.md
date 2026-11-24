@@ -8,7 +8,7 @@
 Pi(농막) ──쓰기──> 구글 시트 '농막_현재' ──doGet ?q=now──> 맥 smartclock_push.py ──/photo/upload──> 시계
 ```
 
-화면: 1층·다락·바깥 온도/습도, 히터 ON/OFF·모드, 텃밭 예상 최저·서리, 도착 예약, CO2(1000/2000ppm 색 구분),
+화면: 1층·다락·바깥 온도/습도와 **최근 24시간 온도 꺾은선**(라벨과 온도 사이), 히터 ON/OFF·모드, 텃밭 예상 최저·서리, 도착 예약, CO2(1000/2000ppm 색 구분),
 오른쪽 위 "HH:MM 측정"(30분 넘게 기록이 없으면 빨간 "지연").
 
 ## 파일
@@ -16,6 +16,7 @@ Pi(농막) ──쓰기──> 구글 시트 '농막_현재' ──doGet ?q=now�
 | 파일 | 내용 |
 |---|---|
 | `smartclock_push.py` | 그림 생성 → 업로드 → 이전 `sc_*` 삭제 → 슬라이드쇼 체크. 최소 5분 간격, 그림이 같으면 생략 |
+| (그래프) | 웹앱이 시간별 기록을 주면 그것을, 아니면 5분마다 받은 값을 `.smartclock_hist.json`에 쌓아 사용 |
 | `farm_screen.py` | `농막_현재` 행 리스트 → 240×240 화면 (1열 라벨로 찾음, Pi의 gspread `get_values()` 결과도 그대로 사용 가능) |
 | `farm_webapp.json.example` | `secrets/farm_webapp.json` 형식 (웹앱 URL + 토큰) |
 | `kr.ryufarm.smartclock.plist.example` | 맥 launchd 5분 작업 |
@@ -23,7 +24,7 @@ Pi(농막) ──쓰기──> 구글 시트 '농막_현재' ──doGet ?q=now�
 ## 설치 (맥)
 
 1. `pip3 install pillow`
-2. 시트 Apps Script(`sheets/Code.gs` v15 이상)에서 **프로젝트 설정 → 스크립트 속성**에 `CLOCK_TOKEN` 추가(임의의 긴 문자열),
+2. 시트 Apps Script(`sheets/Code.gs` v16 이상 — `?q=now`가 현재값과 `최근5일_시간별`을 함께 줌)에서 **프로젝트 설정 → 스크립트 속성**에 `CLOCK_TOKEN` 추가(임의의 긴 문자열),
    **배포 관리 → 기존 웹앱 → 새 버전**으로 배포.
 3. `mkdir -m 700 secrets` 후 `farm_webapp.json.example`을 `secrets/farm_webapp.json`으로 복사해 URL·토큰 입력.
 4. 시험: `python3 smartclock_push.py --farm-url --force` → `python3 smartclock_push.py --list`

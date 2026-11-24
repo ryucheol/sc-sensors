@@ -91,6 +91,28 @@ def to_jpeg(img, quality=85):
     return buf.getvalue()
 
 
+# ---------- 온도 기록(그래프용) ----------
+HIST = Path(__file__).with_name(".smartclock_hist.json")
+
+
+def local_hist(d, keep_h=26):
+    """웹앱이 시간별 기록을 안 줄 때: 5분마다 받은 현재값을 로컬에 쌓아 그래프에 쓴다."""
+    from datetime import timedelta
+    h = json.loads(HIST.read_text()) if HIST.exists() else {}
+    if d["updated"]:
+        for label, t, _ in d["rooms"]:
+            if t is None:
+                continue
+            pts = h.setdefault(label, [])
+            ts = d["updated"].isoformat()
+            if not pts or pts[-1][0] < ts:
+                pts.append([ts, t])
+    cut = (datetime.now() - timedelta(hours=keep_h)).isoformat()
+    h = {k: [p for p in v if p[0] >= cut] for k, v in h.items()}
+    HIST.write_text(json.dumps(h, ensure_ascii=False))
+    return {k: [(datetime.fromisoformat(ts), t) for ts, t in v] for k, v in h.items()}
+
+
 # ---------- 메인 ----------
 def push(host, img, exclusive=False, force=False, dry_run=False):
     state = json.loads(STATE.read_text()) if STATE.exists() else {}
@@ -154,10 +176,16 @@ def main():
         # q=now: sheets/Code.gs v15 doGet 분기. 단독 웹앱(doGet 하나)은 q를 무시하므로 같이 보내도 무방
         url = cfg["url"] + "?" + urllib.parse.urlencode({"q": "now", "t": cfg["token"]})
         with urllib.request.urlopen(url, timeout=30) as r:   # 구글이 302로 넘김 → urllib가 따라감
-            rows = json.loads(r.read().decode())
-        if isinstance(rows, dict):
-            sys.exit(f"웹앱 오류: {rows}")
-        img = farm_screen.render(farm_screen.parse(rows))
+            resp = json.loads(r.read().decode())
+        # 응답: 행 리스트(v15/단독 웹앱) 또는 {"now": 행, "hist": '최근5일_시간별' 행}(v16)
+        if isinstance(resp, dict) and "now" not in resp:
+            sys.exit(f"웹앱 오류: {resp}")
+        rows = resp["now"] if isinstance(resp, dict) else resp
+        d = farm_screen.parse(rows)
+        hist = local_hist(d)
+        if isinstance(resp, dict) and resp.get("hist"):
+            hist = farm_screen.hist_from_rows(resp["hist"])
+        img = farm_screen.render(d, hist=hist)
     elif a.farm:
         import farm_screen
         img = farm_screen.render(farm_screen.parse(json.loads(Path(a.farm).read_text())))
