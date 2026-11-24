@@ -1,7 +1,7 @@
 /*
  * Code.gs — 농막/선반 센서 데이터 수집 Apps Script 웹앱 (SITE 접두사로 여러 시트 공용).
  *
- * ★★ 버전: 2026-11-11 v12  ← 붙여넣기 전에 이 줄 확인! (아래 CODE_VERSION 과 같아야 함) ★★
+ * ★★ 버전: 2026-11-25 v15  ← 붙여넣기 전에 이 줄 확인! (아래 CODE_VERSION 과 같아야 함) ★★
  *   이 버전 요약: SITE 접두사 · mode current(+SSID/IP+배터리 예상일) · avg · hist(upsert) ·
  *                 batt · presence · cmd_pull/ack(+캘린더) · weather(기상청 → 예보·관측·중기·일자료·예보검증 탭) · 멱등 업로드.
  *   배포된 버전 확인법: 브라우저로 /exec?q=weather 를 열면 {"version":"2026-11-11 v12", ...} 가 보임.
@@ -9,6 +9,8 @@
  *   ⚠ 붙여넣은 뒤 SECRET 을 실제 값으로 다시 넣을 것. '새 배포'를 만들면 URL이 바뀌어 Pi 업로드가 모두 끊긴다.
  *
  * 변경 이력:
+ *   v15 (2026-11-25) doGet ?q=now&t=<토큰> — '<SITE>_현재' 탭 A1:H40 표시값을 JSON 배열로 반환(스마트 시계 화면용, smartclock/).
+ *       토큰은 스크립트 속성 CLOCK_TOKEN(프로젝트 설정 > 스크립트 속성). 없거나 틀리면 {"error":"forbidden"}. 다른 요청은 동작 동일.
  *   v14 (2026-11-16) Pi 무응답 감시 watchdog(): '농막_현재' 갱신이 75분 넘게 없으면 메일(6시간마다 재알림, 복구 메일). setupWatchdog() 한 번 실행.
  *   v13 (2026-11-15) mode:summary — Pi 1분 기록의 시간별 요약(히터 kWh·가동분·평균 온습도)을 '농막_시간요약' 탭에 시각 키로 저장. mode:rawfile — 하루 1회 1분 원자료(gzip CSV)를 드라이브 '농막_원자료' 폴더에. driveTest()로 드라이브 권한 승인
  *   v12 (2026-11-11) mode:weather 2단계 키 — mid(→ 중기예보 A1·A3:H9), obs_daily(→ 부여_일별 날짜 키 upsert,
@@ -38,7 +40,7 @@
  * 특징: 중복 제거를 서버에서 처리(멱등). 중복 기준 (센서, 정시 버킷). 시각은 실제 날짜값으로 저장.
  */
 
-var CODE_VERSION = '2026-11-16 v14';   // ← /exec(doGet) 응답·붙여넣기 확인용. 고칠 때마다 갱신.
+var CODE_VERSION = '2026-11-25 v15';   // ← /exec(doGet) 응답·붙여넣기 확인용. 고칠 때마다 갱신.
 var SITE = '농막';                 // ← 장소 접두사. 두 번째 시트(예: 선반)는 '선반' 으로만 바꾸면 됨
 var SECRET = 'CHANGE-ME';          // ← 게이트웨이의 FARMHUT_SECRET 과 동일하게
 var SHEET_NAME = SITE + '_시간별';
@@ -884,6 +886,7 @@ function _fmtDay(d) {
 
 function doGet(e) {
   var p = (e && e.parameter) || {};
+  if (p.q === 'now') return _clockNow(p);
   if (p.q === 'weather') return _json({ ok: true, version: CODE_VERSION, weather_last: _weatherLast() });
   var sh = _sheet();
   var last = sh.getLastRow();
@@ -906,6 +909,15 @@ function doGet(e) {
       .setMimeType(ContentService.MimeType.JAVASCRIPT);
   }
   return _json(out);
+}
+
+// 스마트 시계(smartclock/)용: '<SITE>_현재' 탭 표시값. 토큰은 저장소에 두지 않고 스크립트 속성에만.
+function _clockNow(p) {
+  var tok = PropertiesService.getScriptProperties().getProperty('CLOCK_TOKEN');
+  if (!tok || String(p.t || '') !== tok) return _json({ error: 'forbidden' });
+  var sh = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(SITE + '_현재');
+  if (!sh) return _json({ error: 'no sheet' });
+  return _json(sh.getRange('A1:H40').getDisplayValues());
 }
 
 function _json(obj) {

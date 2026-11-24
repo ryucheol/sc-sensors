@@ -123,3 +123,10 @@ qingping_latest.json
 qingping.log
 sensor_compare.csv
 events.csv
+
+# 스마트 시계(smartclock/): 웹앱 URL·토큰, 상태·로그·생성 그림
+smartclock/secrets/
+smartclock/logs/
+smartclock/.smartclock_state.json
+smartclock/sc_*.jpg
+smartclock/*.png
