@@ -82,7 +82,7 @@
 | Xiaomi LYWSD03MMC × 3 | ₩17,544 ($12.5) |
 | Wi-Fi 스마트플러그(Tuya) | ₩4,650 ($3.3) → Shelly Plug M Gen3 ×2(과열 차단) ₩29,200 주문 |
 | PTC 히터 1.7 kW(3단) | ₩59,900 ($43) |
-| **추가(2026-11)**: GL.iNet Mango(OpenWrt) $31 · Huawei E3372h-607 LTE 동글 ₩31,700 · 알뜰폰 유심 **월 1,900원** | |
+| **추가(2026-11)**: GL.iNet Mango(OpenWrt) $31 · Huawei E3372h-607 LTE 동글 ₩31,700 · 알뜰폰 유심 6GB **월 1,900원** | |
 | pvvx 펌웨어, 기상청 API | 무료 |
 
 ## 7. 디렉토리와 파일
