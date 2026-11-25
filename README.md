@@ -41,7 +41,7 @@
 | 13 | Warm on arrival | 도착 예약 → 예열 시작 계산(지금은 2노드) | `heater_control.py`(`preheat_lead_hours2`), [docs/THERMAL_MODEL.ko.md](docs/THERMAL_MODEL.ko.md) §11 |
 | 14 | Assume that things will fail | 데드맨, 플러그 내장 가드, 고장 감지, SMS | `heater_control.py`, `heater/shelly_hb.sh`, `heater_selftest.py` |
 | 15 | Four ways in, four ways out | 텔레그램·시트·SMS·음성 | [docs/TELEGRAM.ko.md](docs/TELEGRAM.ko.md), `heater/sheet_cmd_poll.py` |
-| 16 | A ₩4,242 clock shows the cabin at home | 스마트 시계에 농막 화면(펌웨어 그대로) | [smartclock/](smartclock/README.md) |
+| 16 | A $3 clock shows the cabin at home | 스마트 시계에 농막 화면(펌웨어 그대로) | [smartclock/](smartclock/README.md) |
 | 17 | Using the public forecast | 기상청 예보·관측, 텃밭 서리 보정 | `weather/`, [docs/KMA_SHEET_PUSH.ko.md](docs/KMA_SHEET_PUSH.ko.md) |
 | 18 | Teaching the sensors to speak every minute | pvvx 플래시, 효과 표 | [docs/PVVX_B16_FLASH.ko.md](docs/PVVX_B16_FLASH.ko.md) |
 | 19 | Let the cabin learn its own physics | 2노드 열모델, 로거 | [docs/THERMAL_MODEL.ko.md](docs/THERMAL_MODEL.ko.md), `heater/predict_log.py` |
