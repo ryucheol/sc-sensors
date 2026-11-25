@@ -131,3 +131,6 @@ smartclock/.smartclock_state.json
 smartclock/sc_*.jpg
 smartclock/*.png
 smartclock/.smartclock_hist.json
+
+# Pi 저전압 기록(notify/power_watch.py)
+power_log.csv

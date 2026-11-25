@@ -1,0 +1,17 @@
+[Unit]
+Description=Pi undervoltage watch (kernel log) -> power_log.csv + Telegram
+After=systemd-journald.service network-online.target
+
+[Service]
+Type=simple
+# /sys/class/hwmon/*/in0_lcrit_alarm 은 일반 사용자도 읽음. 경보 파일이 없을 때 쓰는 커널 로그용으로 journal 그룹만 추가.
+User=ryuch
+SupplementaryGroups=systemd-journal
+WorkingDirectory=/home/ryuch/smart-cabin
+ExecStart=/usr/bin/python3 /home/ryuch/smart-cabin/notify/power_watch.py
+Restart=always
+RestartSec=30
+Nice=10
+
+[Install]
+WantedBy=multi-user.target

@@ -5,6 +5,7 @@
 | `notify/telegram_notify.py` | **송신기**: 메시지 보내기(오프라인 큐·중복 억제) | (라이브러리·CLI) |
 | `notify/telegram_bot.py` | **수신기**: @ryucheol 이 보낸 명령을 실행하고 답장 | `telegram-bot` |
 | `notify/cabin_watch.py` | 자동 경보: 과열·히터 오류·동파 위험 → 송신기 | `cabin-watch` |
+| `notify/power_watch.py` | Pi 전원 저전압(4~6초짜리도) 기록 `power_log.csv` + 알림(30분에 한 번, 그사이 횟수 합산). 설치: `sudo cp systemd/power-watch.service /etc/systemd/system/ && sudo systemctl daemon-reload && sudo systemctl enable --now power-watch` · 확인 `python3 notify/power_watch.py --test` | `power-watch` |
 
 표준 라이브러리만 쓰므로 설치할 패키지가 없다.
 
