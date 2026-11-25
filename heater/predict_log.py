@@ -221,8 +221,9 @@ def push(entries):
     import sheet_cmd_poll as scp
     url, secret = scp.load_env()
     res = scp.post(url, {"secret": secret, "mode": "pred", "rows": sheet_rows(entries)})
-    if not res.get("ok"):
-        print("시트 전송 실패(Code.gs v17 mode:pred 필요):", res)
+    if not res.get("ok") or res.get("mode") != "pred":
+        # v16 이하 웹앱은 mode:pred를 몰라 기본 경로로 빠져 {ok:true, added:0, note:'empty'}를 돌려준다
+        print("시트 전송 실패 — 웹앱이 v17이 아님(배포 관리 → 기존 웹앱 편집 → 새 버전):", res)
         return False
     print("시트 전송:", {k: res.get(k) for k in ("added", "updated")})
     return True
