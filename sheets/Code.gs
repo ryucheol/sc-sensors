@@ -1,7 +1,7 @@
 /*
  * Code.gs — 농막/선반 센서 데이터 수집 Apps Script 웹앱 (SITE 접두사로 여러 시트 공용).
  *
- * ★★ 버전: 2026-11-25 v16  ← 붙여넣기 전에 이 줄 확인! (아래 CODE_VERSION 과 같아야 함) ★★
+ * ★★ 버전: 2026-11-25 v17  ← 붙여넣기 전에 이 줄 확인! (아래 CODE_VERSION 과 같아야 함) ★★
  *   이 버전 요약: SITE 접두사 · mode current(+SSID/IP+배터리 예상일) · avg · hist(upsert) ·
  *                 batt · presence · cmd_pull/ack(+캘린더) · weather(기상청 → 예보·관측·중기·일자료·예보검증 탭) · 멱등 업로드.
  *   배포된 버전 확인법: 브라우저로 /exec?q=weather 를 열면 {"version":"2026-11-11 v12", ...} 가 보임.
@@ -9,6 +9,7 @@
  *   ⚠ 붙여넣은 뒤 SECRET 을 실제 값으로 다시 넣을 것. '새 배포'를 만들면 URL이 바뀌어 Pi 업로드가 모두 끊긴다.
  *
  * 변경 이력:
+ *   v17 (2026-11-25) mode:pred — Pi heater/predict_log.py 의 '밤사이 실내 예측 ↔ 다음 날 실측'을 '<SITE>_실내예측검증' 탭에 대상 시각 키로 저장(덮어쓰기/추가).
  *   v16 (2026-11-25) ?q=now 응답을 {now: 현재 탭, hist: '최근5일_시간별' 머리 2줄 + 끝 40행} 으로(시계 카드의 24시간 그래프용).
  *   v15 (2026-11-25) doGet ?q=now&t=<토큰> — '<SITE>_현재' 탭 A1:H40 표시값을 JSON 배열로 반환(스마트 시계 화면용, smartclock/).
  *       토큰은 스크립트 속성 CLOCK_TOKEN(프로젝트 설정 > 스크립트 속성). 없거나 틀리면 {"error":"forbidden"}. 다른 요청은 동작 동일.
@@ -41,7 +42,7 @@
  * 특징: 중복 제거를 서버에서 처리(멱등). 중복 기준 (센서, 정시 버킷). 시각은 실제 날짜값으로 저장.
  */
 
-var CODE_VERSION = '2026-11-25 v16';   // ← /exec(doGet) 응답·붙여넣기 확인용. 고칠 때마다 갱신.
+var CODE_VERSION = '2026-11-25 v17';   // ← /exec(doGet) 응답·붙여넣기 확인용. 고칠 때마다 갱신.
 var SITE = '농막';                 // ← 장소 접두사. 두 번째 시트(예: 선반)는 '선반' 으로만 바꾸면 됨
 var SECRET = 'CHANGE-ME';          // ← 게이트웨이의 FARMHUT_SECRET 과 동일하게
 var SHEET_NAME = SITE + '_시간별';
@@ -542,6 +543,44 @@ function onEdit(e) {
 
 function calTest() { Logger.log(JSON.stringify(_calDesired())); }
 
+// ── v17: 실내 예측 검증 ─────────────────────────────────────
+var PRED_SHEET = SITE + '_실내예측검증';
+var PRED_HEADER = ['대상 시각', '예측한 때', '그때 1층 °C', '가구 추정 °C', '그때 바깥 °C', '예보 최저 °C',
+  '예측 07시 1층', '실측 07시 1층', '오차(예측−실측)', '예측 최저(히터 없이)', '예측 최저 시각', '실측 최저', '실측 최저 시각', '최저 오차',
+  '예측 히터', '실제 히터', '예측 히터 kWh', '실제 히터 kWh', '도착 예약', '예열 예고(2노드)', '예열 예고(햇빛)'];
+function _predSheet() {
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var sh = ss.getSheetByName(PRED_SHEET);
+  if (!sh) {
+    sh = ss.insertSheet(PRED_SHEET);
+    sh.getRange(1, 1, 1, PRED_HEADER.length).setValues([PRED_HEADER]).setFontWeight('bold');
+    sh.setFrozenRows(1);
+    sh.getRange('A:B').setNumberFormat('yyyy-MM-dd HH:mm');
+  }
+  return sh;
+}
+// rows=[[ 'YYYY-MM-DD 07:00', 'YYYY-MM-DD HH:MM', t1, tmass, to, fcmin, pred07, act07, err07, predFree, predFreeAt, actMin, actMinAt, errMin, predHeat, actHeat, predKwh, actKwh, arrival, arrPred, arrSolar ], ...]
+function _postPred(body) {
+  var rows = body.rows || [];
+  var sh = _predSheet();
+  var last = sh.getLastRow(), idx = {};
+  if (last >= 2) {
+    var keys = sh.getRange(2, 1, last - 1, 1).getValues();
+    for (var i = 0; i < keys.length; i++) if (keys[i][0] instanceof Date) idx[_fmt(keys[i][0])] = i + 2;
+  }
+  var added = 0, updated = 0;
+  for (var j = 0; j < rows.length; j++) {
+    var r = rows[j], d = _kst(r[0]);
+    if (!d) continue;
+    var line = [d, _kst(r[1]) || r[1]].concat(r.slice(2, PRED_HEADER.length));
+    while (line.length < PRED_HEADER.length) line.push('');
+    var row = idx[_fmt(d)];
+    if (row) { sh.getRange(row, 1, 1, line.length).setValues([line]); updated++; }
+    else { sh.appendRow(line); idx[_fmt(d)] = sh.getLastRow(); added++; }
+  }
+  return _json({ ok: true, mode: 'pred', added: added, updated: updated });
+}
+
 // ── v13: 시간 요약 · 원자료 파일 ─────────────────────────────
 function _summarySheet() {
   var ss = SpreadsheetApp.getActiveSpreadsheet();
@@ -670,6 +709,7 @@ function doPost(e) {
     if (body.mode === 'weather') return _postWeather(body);
     if (body.mode === 'summary') return _postSummary(body);
     if (body.mode === 'rawfile') return _postRawFile(body);
+    if (body.mode === 'pred') return _postPred(body);
     var sensor = String(body.sensor || '').trim();
     var records = body.records || [];
     if (!sensor || !records.length) return _json({ ok: true, added: 0, skipped: 0, note: 'empty' });
