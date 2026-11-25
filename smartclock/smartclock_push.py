@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""스마트 날씨 시계(ESP32-C2)에 240x240 그림을 올리는 맥용 스크립트.
+"""스마트 날씨 시계(ESP32-C2)에 240x240 그림을 올리는 스크립트 (맥·리눅스/Pi·윈도우 공용).
 
 시계 웹 UI(/photo)에서 찾은 API:
   GET  /photo/list                      -> {"files":[{name,size,enabled}], total, used, interval}
@@ -14,22 +14,26 @@
 (--exclusive를 주면 슬라이드쇼 체크만 끈다. 파일은 지우지 않음).
 
 플래시 마모를 막으려고 최소 간격 5분, 그림이 직전과 똑같으면 올리지 않음(--force로 둘 다 무시).
+여러 컴퓨터(맥·Pi·윈도우)가 같은 시계를 갱신해도 겹치지 않도록, 이 판단은 시계에 올라가 있는
+sc_ 파일 이름(sc_MMDD_HHMM_<그림해시6>.jpg)을 기준으로 한다 — 다른 컴퓨터가 4분 안에 올렸거나
+같은 그림이 이미 있으면 건너뛴다. 시계가 같은 네트워크에 없으면 한 줄 남기고 조용히 끝낸다.
 
 예:
   python3 smartclock_push.py --title "농막" --line "1층 12.3°C" --line "다락 9.8°C"
   python3 smartclock_push.py --image photo.png --exclusive
   python3 smartclock_push.py --farm farm_now.json
-  python3 smartclock_push.py --farm-url        # 5분마다 launchd로 실행
+  python3 smartclock_push.py --farm-url        # 5분마다 (맥 launchd · Pi cron · 윈도우 작업 스케줄러)
   python3 smartclock_push.py --list
 """
-import argparse, hashlib, io, json, os, sys, time, uuid
+import argparse, hashlib, io, json, os, re, socket, sys, time, uuid
+import urllib.error
 import urllib.request, urllib.parse
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 from PIL import Image, ImageDraw, ImageFont, ImageOps
 
-DEFAULT_HOST = os.environ.get("SMARTCLOCK_HOST", "192.168.0.156")   # DHCP라 바뀔 수 있음
+DEFAULT_HOST = "192.168.0.156"   # DHCP라 바뀔 수 있음 — secrets의 host나 SMARTCLOCK_HOST로 덮어씀
 PREFIX = "sc_"
 SIZE = 240
 from farm_screen import font   # 한글 글꼴 찾기(맥/Pi 공용)
@@ -98,7 +102,7 @@ HIST = Path(__file__).with_name(".smartclock_hist.json")
 def local_hist(d, keep_h=26):
     """웹앱이 시간별 기록을 안 줄 때: 5분마다 받은 현재값을 로컬에 쌓아 그래프에 쓴다."""
     from datetime import timedelta
-    h = json.loads(HIST.read_text()) if HIST.exists() else {}
+    h = json.loads(HIST.read_text(encoding="utf-8")) if HIST.exists() else {}
     if d["updated"]:
         for label, t, _ in d["rooms"]:
             if t is None:
@@ -109,15 +113,51 @@ def local_hist(d, keep_h=26):
                 pts.append([ts, t])
     cut = (datetime.now() - timedelta(hours=keep_h)).isoformat()
     h = {k: [p for p in v if p[0] >= cut] for k, v in h.items()}
-    HIST.write_text(json.dumps(h, ensure_ascii=False))
+    HIST.write_text(json.dumps(h, ensure_ascii=False), encoding="utf-8")
     return {k: [(datetime.fromisoformat(ts), t) for ts, t in v] for k, v in h.items()}
 
 
 # ---------- 메인 ----------
+NAME_RE = re.compile(r"^sc_(\d{4})_(\d{4})(?:_([0-9a-f]{6}))?\.jpg$")
+
+
+def clock_files(info, now=None):
+    """시계의 sc_ 파일 → [(이름, 올린 시각 또는 None, 해시6 또는 None)]. 이름의 MMDD_HHMM을 올해(연말 넘김 보정)로 해석."""
+    now = now or datetime.now()
+    out = []
+    for f in info.get("files", []):
+        m = NAME_RE.match(f["name"])
+        if not f["name"].startswith(PREFIX):
+            continue
+        ts = None
+        if m:
+            try:
+                ts = datetime.strptime(f"{now.year}{m.group(1)}{m.group(2)}", "%Y%m%d%H%M")
+                if ts > now + timedelta(days=1):
+                    ts = ts.replace(year=now.year - 1)
+            except ValueError:
+                ts = None
+        out.append((f["name"], ts, m.group(3) if m else None))
+    return out
+
+
+def skip_reason(files, digest6, now=None, min_s=MIN_INTERVAL_S):
+    """다른 컴퓨터가 올린 것까지 보고 건너뛸 이유(없으면 None)."""
+    now = now or datetime.now()
+    if any(h == digest6 for _, _, h in files):
+        return "같은 그림이 이미 시계에 있음"
+    times = [t for _, t, _ in files if t]
+    if times:
+        age = (now - max(times)).total_seconds()
+        if -120 < age < min_s - 60:   # 컴퓨터 시계 차이 2분까지 허용
+            return f"{age/60:.0f}분 전에 올라간 그림이 있음(다른 컴퓨터 포함)"
+    return None
+
+
 def push(host, img, exclusive=False, force=False, dry_run=False):
-    state = json.loads(STATE.read_text()) if STATE.exists() else {}
+    state = json.loads(STATE.read_text(encoding="utf-8")) if STATE.exists() else {}
     since = time.time() - state.get("last_push", 0)
-    # launchd가 정확히 5분마다 깨우면 몇 초 모자랄 수 있어 1분 여유를 둔다
+    # launchd·cron이 정확히 5분마다 깨우면 몇 초 모자랄 수 있어 1분 여유를 둔다
     if not force and not dry_run and since < MIN_INTERVAL_S - 60:
         print(f"{datetime.now():%m-%d %H:%M} 마지막 업로드 후 {since/60:.0f}분 — 최소 {MIN_INTERVAL_S//60}분 간격이라 생략 (--force로 무시)")
         return
@@ -127,13 +167,24 @@ def push(host, img, exclusive=False, force=False, dry_run=False):
     if not force and not dry_run and digest == state.get("last_hash"):
         print(f"{datetime.now():%m-%d %H:%M} 변화 없음 — 업로드 생략")
         return
-    name = PREFIX + datetime.now().strftime("%m%d_%H%M") + ".jpg"
+    name = f"{PREFIX}{datetime.now():%m%d_%H%M}_{digest[:6]}.jpg"
     if dry_run:
         Path(name).write_bytes(data)
         print(f"[dry-run] {name} ({len(data)} B) 저장만 함")
         return
 
-    info = list_files(host)
+    try:
+        info = list_files(host)
+    except (urllib.error.URLError, socket.timeout, OSError) as e:
+        print(f"{datetime.now():%m-%d %H:%M} 시계({host})에 닿지 않음 — 같은 네트워크가 아니거나 꺼져 있음: {e}")
+        return
+    files = clock_files(info)
+    why = None if force else skip_reason(files, digest[:6])
+    if why:
+        state.update(last_hash=digest)
+        STATE.write_text(json.dumps(state))
+        print(f"{datetime.now():%m-%d %H:%M} {why} — 업로드 생략")
+        return
     free = info["total"] - info["used"]
     if len(data) > free:
         sys.exit(f"시계 저장공간 부족: 필요 {len(data)} B, 여유 {free} B")
@@ -150,9 +201,21 @@ def push(host, img, exclusive=False, force=False, dry_run=False):
     print(f"{datetime.now():%m-%d %H:%M} 업로드 완료: {name} ({len(data)} B)")
 
 
+def load_cfg():
+    """secrets/farm_webapp.json — {"url":…, "token":…, "host":"192.168.0.x"(선택)}. 없으면 빈 dict."""
+    f = Path(__file__).with_name("secrets").joinpath("farm_webapp.json")
+    return json.loads(f.read_text(encoding="utf-8")) if f.exists() else {}
+
+
 def main():
+    for st in (sys.stdout, sys.stderr):   # 윈도우 콘솔(cp949)에서 ✓·° 등으로 죽지 않게
+        try:
+            st.reconfigure(errors="replace")
+        except (AttributeError, ValueError):
+            pass
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("--host", default=DEFAULT_HOST)
+    p.add_argument("--host", default=os.environ.get("SMARTCLOCK_HOST") or load_cfg().get("host") or DEFAULT_HOST,
+                   help="시계 주소 (우선순위: --host > SMARTCLOCK_HOST > secrets/farm_webapp.json의 host > 기본값)")
     p.add_argument("--title")
     p.add_argument("--line", action="append", default=[], help="본문 줄 (여러 번 가능)")
     p.add_argument("--image", help="이미지 파일을 240x240으로 잘라 올림")
@@ -162,7 +225,11 @@ def main():
     p.add_argument("--force", action="store_true", help="최소 간격 무시")
     p.add_argument("--dry-run", action="store_true", help="업로드 없이 jpg만 저장")
     p.add_argument("--list", action="store_true", help="시계 파일 목록 출력")
+    p.add_argument("--log", metavar="FILE", help="출력을 이 파일에 덧붙임(창 없는 pythonw·cron·작업 스케줄러용)")
     a = p.parse_args()
+    if a.log:
+        Path(a.log).parent.mkdir(parents=True, exist_ok=True)
+        sys.stdout = sys.stderr = open(a.log, "a", encoding="utf-8", buffering=1)
 
     if a.list:
         info = list_files(a.host)
@@ -172,7 +239,9 @@ def main():
         return
     if a.farm_url:
         import farm_screen
-        cfg = json.loads(Path(__file__).with_name("secrets").joinpath("farm_webapp.json").read_text())
+        cfg = load_cfg()
+        if not cfg.get("url"):
+            sys.exit("secrets/farm_webapp.json 이 없거나 url이 비어 있습니다 (farm_webapp.json.example 참고)")
         # q=now: sheets/Code.gs v15 doGet 분기. 단독 웹앱(doGet 하나)은 q를 무시하므로 같이 보내도 무방
         url = cfg["url"] + "?" + urllib.parse.urlencode({"q": "now", "t": cfg["token"]})
         with urllib.request.urlopen(url, timeout=30) as r:   # 구글이 302로 넘김 → urllib가 따라감
@@ -188,7 +257,7 @@ def main():
         img = farm_screen.render(d, hist=hist)
     elif a.farm:
         import farm_screen
-        img = farm_screen.render(farm_screen.parse(json.loads(Path(a.farm).read_text())))
+        img = farm_screen.render(farm_screen.parse(json.loads(Path(a.farm).read_text(encoding="utf-8"))))
     elif a.image:
         img = load_image(a.image)
     elif a.title or a.line:

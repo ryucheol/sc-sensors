@@ -3,28 +3,56 @@
 입력은 '농막_현재' 탭 값 그대로(행 리스트). 1열 라벨로 찾으므로 행 순서가 바뀌어도 된다.
 Pi에서는 gspread의 ws.get_values() 결과를, 맥에서는 그 JSON 덤프를 넘기면 된다.
 """
-import re
+import os, re
 from datetime import datetime, timedelta
 from PIL import Image, ImageDraw, ImageFont
 
-# 한글 글꼴 후보: (경로, 굵은 index, 보통 index). 맥 → Pi(fonts-noto-cjk / fonts-nanum) 순.
+# 한글 글꼴 후보: (굵은 글꼴 경로, index, 보통 글꼴 경로, index). 맥 → Pi/리눅스 → 윈도우 순.
+# 환경변수 SMARTCLOCK_FONT 로 글꼴 파일 하나를 직접 지정할 수도 있다(굵기 구분 없이 사용).
 FONTS = [
-    ("/System/Library/Fonts/AppleSDGothicNeo.ttc", 6, 2),
-    ("/usr/share/fonts/opentype/noto/NotoSansCJK-Bold.ttc", 1, 1),
-    ("/usr/share/fonts/truetype/nanum/NanumGothicBold.ttf", 0, 0),
+    ("/System/Library/Fonts/AppleSDGothicNeo.ttc", 6, "/System/Library/Fonts/AppleSDGothicNeo.ttc", 2),
+    ("/usr/share/fonts/opentype/noto/NotoSansCJK-Bold.ttc", 1, "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc", 1),
+    ("/usr/share/fonts/truetype/nanum/NanumGothicBold.ttf", 0, "/usr/share/fonts/truetype/nanum/NanumGothic.ttf", 0),
+    ("C:/Windows/Fonts/malgunbd.ttf", 0, "C:/Windows/Fonts/malgun.ttf", 0),   # 맑은 고딕
 ]
 S = 240
 BG, CARD, FG, SUB = "#0f1419", "#1a222b", "#f2f5f8", "#7f8fa0"
 RED, ORANGE, BLUE, CYAN, GREEN = "#ff5a5f", "#ffad4d", "#4da3ff", "#7fd6e8", "#5fd38d"
 
 
+_FONT_CACHE = {}
+
+
+def _fc_match(bold):
+    """목록에 없을 때(다른 리눅스 등): fontconfig에 한국어 지원 글꼴을 물어본다."""
+    import shutil, subprocess
+    if not shutil.which("fc-match"):
+        return []
+    try:
+        out = subprocess.run(["fc-match", "-f", "%{file}|%{index}", ":lang=ko" + (":weight=bold" if bold else "")],
+                             capture_output=True, text=True, timeout=5).stdout
+        path, _, idx = out.partition("|")
+        return [(path, int(idx or 0))] if path else []
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return []
+
+
 def font(size, bold=True):
-    for path, b, n in FONTS:
+    key = (size, bold)
+    if key in _FONT_CACHE:
+        return _FONT_CACHE[key]
+    cands = [(os.environ["SMARTCLOCK_FONT"], 0)] if os.environ.get("SMARTCLOCK_FONT") else []
+    for bp, bi, rp, ri in FONTS:
+        cands += [(bp, bi), (rp, ri)] if bold else [(rp, ri), (bp, bi)]
+    cands += _fc_match(bold)
+    for path, idx in cands:
         try:
-            return ImageFont.truetype(path, size, index=b if bold else n)
+            f = ImageFont.truetype(path, size, index=idx)
         except OSError:
             continue
-    raise SystemExit("한글 글꼴이 없습니다 (Pi: sudo apt install fonts-noto-cjk)")
+        _FONT_CACHE[key] = f
+        return f
+    raise SystemExit("한글 글꼴이 없습니다 (Pi: sudo apt install fonts-noto-cjk, 또는 SMARTCLOCK_FONT=글꼴파일)")
 
 
 _f = font
