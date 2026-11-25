@@ -30,19 +30,23 @@
 | 2 | The problem | 동파·도착·오프라인 | [HEATER.md](HEATER.md) §개요 |
 | 3 | The cabin | 3층 구조, 센서 위치 | 센서표 §4, [docs/SENSOR_GUIDE.ko.md](docs/SENSOR_GUIDE.ko.md) |
 | 4 | Sense, think, act | 게이트웨이와 제어기는 파일 하나(`latest.json`)로만 결합 | `gateway/passive_gateway.py`, `heater/heater_control.py` |
-| 5–6 | Network / Going online | 폰 핫스팟 → LTE(OpenWrt) → 광랜 | [NETWORK_MIGRATION.md](NETWORK_MIGRATION.md), [docs/WORKLOG_2026-11-08.ko.md](docs/WORKLOG_2026-11-08.ko.md) §6 |
-| 7 | Cheap sensors, quietly listening | 암호화 MiBeacon 복호화, 연결 없음, 1분 갱신 | `passive_gateway.py`, [docs/SENSOR_GUIDE.ko.md](docs/SENSOR_GUIDE.ko.md) |
-| 8 | Every reading lands in a Sheet | 시트 탭·store-and-forward | `Code.gs`, [OPERATIONS.md](OPERATIONS.md) |
-| 9 | A smart plug switches the heater | 전력계로 고장 감지, 3단 인식 | `heater_control.py`(`detect_stage`), [HEATER.md](HEATER.md) |
-| 10 | Three modes, one simple rule | 동파 3/5 · 난방 23/23.5 · 취침 20/21(다락) | `heater_config.json`, `heater_cmd.py` |
-| 11 | Preheating with physics | τ·ln((T_eq−T_in)/(T_eq−T_target)) | `heater_control.py`(`preheat_lead_hours`), `test_heater_logic.py` |
-| 12 | Assume that things will fail | stale→ON, 이중 센서, 데드맨, 백스톱, 고장 감지, 자가점검 | `heater_control.py`, `heater_selftest.py`, `alert_sound.py` |
-| 13 | Tests, simulation, a real measurement | 61개 단위테스트, 시뮬 → 실측 0.4→0.1 | `test_heater_logic.py`, `docs/sim_pred4.py`, `docs/cycle_compare.py` |
-| 14 | Firmware update | pvvx 플래시, 효과 표 | [docs/PVVX_B16_FLASH.ko.md](docs/PVVX_B16_FLASH.ko.md) |
-| 15 | Using the public forecast | 예보 최저 + T_out + P/UA → 단수 조언 | `forecast_fetch.py`, `heater_control.py`(`stage_advice`) |
-| 16 | Let the cabin learn its physics | 2노드 열모델, 로거 3종 | [docs/THERMAL_MODEL.ko.md](docs/THERMAL_MODEL.ko.md), `kma_obs_fetch.py` |
-| 17 | What would you build in Laos? | 냉방·온실·저장고 | — |
-| 18 | Parts and budget | ≈$120–150 + LTE·Shelly 추가분 | §6 |
+| 5 | What changed since the first talk | 오프라인 → 온라인 열흘 | [docs/WORKLOG_2026-11-15.ko.md](docs/WORKLOG_2026-11-15.ko.md) |
+| 6 | How the devices talk today | LTE 동글·Ryufarm Wi‑Fi·Tailscale | [NETWORK_MIGRATION.md](NETWORK_MIGRATION.md), [docs/LTE_DONGLE.ko.md](docs/LTE_DONGLE.ko.md) |
+| 7 | Living on 6 GB a month | 데이터 한도·WAN 가드 | `notify/`, `scripts/farmhut-wan-guard` |
+| 8 | The cabin knows when you are there | 핫스팟·동글로 재실 판정 | `passive_gateway.py`(`GW_PRESENCE_SSID`) |
+| 9 | Cheap sensors, quietly listening | 암호화 MiBeacon 복호화, 연결 없음, 1분 갱신 | `passive_gateway.py`, [docs/SENSOR_GUIDE.ko.md](docs/SENSOR_GUIDE.ko.md) |
+| 10 | Every reading lands in a Google Sheet | 시트 탭·store-and-forward | `sheets/Code.gs`, [docs/SHEET_LAYOUT.ko.md](docs/SHEET_LAYOUT.ko.md) |
+| 11 | A smarter plug switches the heater | Shelly 전력계로 고장 감지, 3단 인식 | `heater/shelly_plug.py`, [docs/SHELLY_PLUG.ko.md](docs/SHELLY_PLUG.ko.md) |
+| 12 | Three modes, one simple rule | 동파 3/5 · 난방 23/23.5 · 취침 20/21(다락) | `heater_config.json`, `heater_cmd.py` |
+| 13 | Warm on arrival | 도착 예약 → 예열 시작 계산(지금은 2노드) | `heater_control.py`(`preheat_lead_hours2`), [docs/THERMAL_MODEL.ko.md](docs/THERMAL_MODEL.ko.md) §11 |
+| 14 | Assume that things will fail | 데드맨, 플러그 내장 가드, 고장 감지, SMS | `heater_control.py`, `heater/shelly_hb.sh`, `heater_selftest.py` |
+| 15 | Four ways in, four ways out | 텔레그램·시트·SMS·음성 | [docs/TELEGRAM.ko.md](docs/TELEGRAM.ko.md), `heater/sheet_cmd_poll.py` |
+| 16 | A ₩4,242 clock shows the cabin at home | 스마트 시계에 농막 화면(펌웨어 그대로) | [smartclock/](smartclock/README.md) |
+| 17 | Using the public forecast | 기상청 예보·관측, 텃밭 서리 보정 | `weather/`, [docs/KMA_SHEET_PUSH.ko.md](docs/KMA_SHEET_PUSH.ko.md) |
+| 18 | Teaching the sensors to speak every minute | pvvx 플래시, 효과 표 | [docs/PVVX_B16_FLASH.ko.md](docs/PVVX_B16_FLASH.ko.md) |
+| 19 | Let the cabin learn its own physics | 2노드 열모델, 로거 | [docs/THERMAL_MODEL.ko.md](docs/THERMAL_MODEL.ko.md), `heater/predict_log.py` |
+| 20 | What would you build in Laos? | 냉방·온실·저장고 | — |
+| 21 | Parts and budget | 부품·예산 | §6 |
 
 ## 3. 실측으로 확인한 것 (2026-11)
 
@@ -120,8 +124,10 @@ smart-cabin/
 | `notify/lte_watch.py` | LTE 자가 복구: eth1로 인터넷 확인, 15분 실패면 동글 재시작(30분 간격·하루 8회)·텔레그램. 테스트 `cd notify && python3 -m unittest test_lte_watch` | cron 5분 |
 | `scripts/farmhut-wan-guard` | Ryufarm 기기 → LTE 차단(nftables): Shelly 상시, Home Mini·Tuya 하루/한 달 한도, `공유` 명령으로 잠깐 열기. 설치 `sudo bash scripts/install_wan_guard.sh`, 매분 `notify/wan_tick.sh` | 부팅 서비스 + cron 매분 |
 | `heater/shelly_hb.sh` | Shelly 동파 가드 하트비트(제어기 살아 있을 때만) + 가드가 멈췄으면 다시 켜고 텔레그램 | cron 매분 |
+| `heater/predict_log.py` | 실내 예측 기록장: 18:05에 2노드로 내일 07시 1층·밤 최저·히터 켜짐 예측, 09:10에 `thermal_log.csv` 실측과 비교 → 시트 `농막_실내예측검증`. 기록 `predict_log.jsonl`. 테스트 `cd heater && python3 -m unittest test_predict_log` | cron 18:05 · 09:10 |
+| `smartclock/smartclock_push.py` | 책상 위 스마트 시계(ESP32-C2)에 농막 화면 그림 업로드 — [smartclock/README.md](smartclock/README.md) | 맥 launchd 5분 |
 | `heater/test_heater_logic.py` | 순수 로직 단위테스트 61개 — `cd heater && python3 -m unittest test_heater_logic` | 어디서나 |
-| `sheets/Code.gs` | Apps Script 웹앱 v12: current/avg/hist/batt/presence/cmd_pull/cmd_ack/weather, 배터리 예상일, `명령` 탭 onEdit, 캘린더 `동지집 도착` 일정 → 도착 명령 | 시트에 붙여넣기 |
+| `sheets/Code.gs` | Apps Script 웹앱 v17: current/avg/hist/batt/presence/cmd_pull/cmd_ack/weather/summary/rawfile/pred, `?q=now`(시계), Pi 무응답 메일, 배터리 예상일, `명령` 탭 onEdit, 캘린더 `동지집 도착` 일정 → 도착 명령 | 시트에 붙여넣기 |
 | `index.html` · `gateway/farmhut_sync.py` · `gateway/current_sync.py` | 폰 웹앱(Web Bluetooth) · PC 동기화 — 초기 경로, 지금은 보조 | GitHub Pages · PC |
 | `heater_config.json` | 임계값·예열·단수·이중화·데드맨 설정(즉시 반영) | 루트 |
 
@@ -148,9 +154,9 @@ smart-cabin/
 
 | 문서 | 내용 |
 |---|---|
-| [docs/smart-cabin-talk.pdf](docs/smart-cabin-talk.pdf) | 특강 슬라이드(영문 20쪽, 11-18 온라인 반영 개정, 원본 [docs/talk/](docs/talk/)) |
+| [docs/smart-cabin-talk.pdf](docs/smart-cabin-talk.pdf) | 특강 슬라이드(영문 21쪽, 11-18 온라인 반영 개정·11-25 책상 모니터 추가, 원본 [docs/talk/](docs/talk/)) |
 | [docs/PVVX_B16_FLASH.ko.md](docs/PVVX_B16_FLASH.ko.md) | 센서 펌웨어 전환: 분석·절차·설정·검증·드리프트 실측 |
-| [docs/THERMAL_MODEL.ko.md](docs/THERMAL_MODEL.ko.md) | 열모델 학습 계획·데이터·성층·습도·우선순위 |
+| [docs/THERMAL_MODEL.ko.md](docs/THERMAL_MODEL.ko.md) | 열모델 학습 계획·데이터·성층·습도·우선순위, 2노드 예열(§11)·실내 예측 기록장(§11-3) |
 | [docs/ENERGY_SAVINGS.ko.md](docs/ENERGY_SAVINGS.ko.md) | 정밀 제어와 전력 절약 정량화 |
 | [docs/WORKLOG_2026-11-08.ko.md](docs/WORKLOG_2026-11-08.ko.md) | 11-08 작업 일지 |
 | [docs/WORKLOG_2026-11-15.ko.md](docs/WORKLOG_2026-11-15.ko.md) | 11-15 농막 작업(시간 요약·원자료·텔레그램) |
