@@ -31,7 +31,7 @@ Pi(농막) ──쓰기──> 구글 시트 '농막_현재' ──doGet ?q=now�
 
 1. `pip3 install pillow`
 2. 시트 Apps Script(`sheets/Code.gs` v16 이상 — `?q=now`가 현재값과 `최근5일_시간별`을 함께 줌)에서 **프로젝트 설정 → 스크립트 속성**에 `CLOCK_TOKEN` 추가(임의의 긴 문자열),
-   **배포 관리 → 기존 웹앱 → 새 버전**으로 배포.
+   **배포 관리 → 기존 웹앱 → 새 버전**으로 배포. 시계와 Pi가 **서로 다른 배포**를 쓰므로 Code.gs를 바꿀 때는 두 배포 모두 새 버전으로 올린다(2026-11-25 Pi 쪽만 Version 20에 남아 `mode:pred`가 안 먹던 일).
 3. `mkdir -m 700 secrets` 후 `farm_webapp.json.example`을 `secrets/farm_webapp.json`으로 복사해 URL·토큰 입력.
 4. 시험: `python3 smartclock_push.py --farm-url --force` → `python3 smartclock_push.py --list`
 5. 자동 갱신: plist 예시의 `<PYTHON3>`·`<REPO>`를 바꿔 `~/Library/LaunchAgents/`에 복사 후 `launchctl load …`.
