@@ -1,6 +1,6 @@
 # 전등 음성·무선 제어 설계 (433 MHz + Pi + Google Home)
 
-> 2026-11-17 시작 · 2026-11-19 확정판. 부품 주문 완료, Pi 코드는 부품 도착 전에 작성 예정.
+> 2026-11-17 시작 · 2026-11-19 확정판 · **11-26 부품 도착(STX882·SRX882S·수신기·리모컨), Pi 코드 `lights/` 작성(§16)**.
 ![전등 무선 제어 구성 — 농막 측면도](lights_layout.png)
 
 > 배치(11-20 확정): 중간층등 = 중간층 천장 가운데 · 다락등1·2 = 다락 맨 오른쪽 천장 매립(ㄱ자, 창 위), **따로 켬(수신기 2)** · 1층 천장등 = 다락 바닥 가운데 아래 · 화장실등·싱크대등 = 메자닌 아래(왼쪽·맨 오른쪽) · 스탠드·홈미니·1층 리모컨 = 1층 오른쪽 · Pi = 메자닌 왼쪽 벽 분전함 아래. 벽 스위치 없음.
@@ -197,3 +197,26 @@ S1·S2 : 비움 (결선 B = 벽 스위치 연결용, 벽 스위치가 없어 쓰
 3. **(모듈 도착)** Pi에 연결 → 모든 리모컨 코드 기록·겹침 확인 → 책상 위에서 수신기 1개로 래치 모드·Pi 흉내·코드 추가 시험.
 4. 등에 설치(§10).
 5. Matterbridge 가상 전등 → Google Home 방 배정 → 1층 음성 → 다락 스피커.
+
+## 16. Pi 코드와 현장 순서 (11-26 작성, 하드웨어 없이 모의 시험만 함)
+
+| 파일 | 내용 |
+|---|---|
+| `lights/ev1527.py` | EV1527 부호화(보내기 펄스)·해독(잡음 속 동기 찾기, 같은 프레임 2번 이상이면 인정, T 측정) |
+| `lights/lights.py` | 명령 `불 …`, 433 송신(pigpio 파형, 프레임 10번 × 3묶음), 수신 듣기, 코드 기록·겹침 경고, 래치 학습 신호, 상태 파일, 묶음(1층·위층·전체), 다락등(Tuya)은 `heater/light_cmd.py`로 |
+| `lights/test_lights.py` | 잡음·흔들림 있는 신호 해독, 명령·묶음·기록·학습 모의 시험 |
+| `systemd/lights-listen.service` | 늘 듣기 → 리모컨으로 켜고 끈 것을 상태에 반영 |
+| `lights_codes.json.example` | 코드 파일 형식(실제 파일은 Pi에만, gitignore) |
+
+명령(텔레그램·시트·문자 공통): `불` · `불 켜 싱크대등` · `불 꺼 1층` · `불 꺼`(전체) · `불 목록` · `불 기록 <등>` · `불 학습 <등>`. **`동파`(떠날 때)를 하면 코드가 있는 등과 다락등을 모두 끈다.**
+
+**금요일 현장 순서**
+1. 납땜: STX882(DATA·VCC·GND + ANT에 스프링), SRX882S(GND·DATA·CS·VCC + ANT). 핀 헤더나 실리콘 전선.
+2. 연결(§9 표): 송신 VCC→핀2(5 V)·GND→6·DATA→11(GPIO17) / 수신 VCC→**핀1(3.3 V)**·CS→3.3 V·GND→9·DATA→13(GPIO27).
+3. Pi: `sudo apt install -y pigpio python3-pigpio && sudo systemctl enable --now pigpiod` → `git pull`
+4. 듣기 시험: `python3 lights/lights.py listen 60` → 리모컨 버튼마다 코드·T가 찍히는지, 리모컨끼리 주소 겹침 없는지.
+5. 책상 위 수신기 1개: 래치 모드 학습(학습 버튼 3번 → A → B) → `불 기록 시험등`(리모컨 A→B) → `불 켜 시험등` / `불 꺼 시험등`으로 Pi가 대신 켜고 끄는지.
+6. 듣기 서비스: `sudo cp systemd/lights-listen.service /etc/systemd/system/ && sudo systemctl daemon-reload && sudo systemctl enable --now lights-listen` → 리모컨으로 켜면 `불` 상태가 '리모컨'으로 바뀌는지.
+7. 등에 설치(§10) 후 등마다 `불 기록 <이름>`, `lights_codes.json`의 `floor`·`groups` 정리, 파일을 Pi 밖에도 백업.
+
+주의: 리모컨 코드는 누구나 흉내 낼 수 있으므로 `lights_codes.json`은 공개 저장소에 올리지 않는다. pigpio가 없으면 명령은 '모의 송신'으로만 답한다.

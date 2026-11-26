@@ -134,3 +134,8 @@ smartclock/.smartclock_hist.json
 
 # Pi 저전압 기록(notify/power_watch.py)
 power_log.csv
+
+# 전등 433 MHz 코드·상태(lights/lights.py) — 리모컨 코드는 흉내 낼 수 있으니 공개 금지
+lights_codes.json
+lights_state.json
+lights_seen.jsonl

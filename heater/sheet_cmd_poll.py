@@ -33,6 +33,7 @@ ALIASES = {
     "아침": "아침", "wake": "아침",
     "시보": "시보", "chime": "시보",
     "다락등": "전등", "다락등2": "전등", "다락불": "전등", "전등": "전등", "light": "전등",
+    "불": "불", "lights": "불", "등": "불",
     "조리": "조리", "요리": "조리", "cook": "조리",
     "환기": "환기", "문열기": "환기", "vent": "환기",
 }
@@ -443,7 +444,7 @@ def run(cmd_text):
     for i, t in enumerate(toks):
         if t.lower() in ALIASES: verb = ALIASES[t.lower()]; word = toks.pop(i); break
     if not verb:
-        return "오류", "알 수 없는 명령 — 난방 / 동파 / 취침 / 도착 HH:MM [내일|날짜] [목표°C] / 도착 취소 / 상태 / 점검 / 기상 / 선풍기 켜|꺼|자동 / 공유 [N시간|N분|끔] / 센서 / 보조 켜|꺼|자동 / 아침 06:30 / 시보 켜|끔 / 다락등 켜|꺼"
+        return "오류", "알 수 없는 명령 — 난방 / 동파 / 취침 / 도착 HH:MM [내일|날짜] [목표°C] / 도착 취소 / 상태 / 점검 / 기상 / 선풍기 켜|꺼|자동 / 공유 [N시간|N분|끔] / 센서 / 보조 켜|꺼|자동 / 아침 06:30 / 시보 켜|끔 / 다락등 켜|꺼 / 불 켜|꺼 <등|1층|전체> / 불 상태"
     if verb == "상태":
         lt = light_status()
         return "완료", status_text() + (" · " + lt if lt else "")
@@ -459,6 +460,13 @@ def run(cmd_text):
         return chime_cmd(toks)
     if verb in ("조리", "환기"):
         return event_cmd(verb, toks)
+    if verb == "불":     # 433 MHz 전등 + 다락등(Tuya) — lights/lights.py (docs/LIGHTS.ko.md)
+        try:
+            lt = _lights()
+            ok, msg = lt.run(toks)
+        except Exception as e:
+            return "오류", "불 명령 실패: %s" % e
+        return ("완료" if ok else "오류"), msg[-600:]
     if verb == "전등":   # Tuya 스위치 모듈(로컬) — tuya-venv에서 light_cmd.py
         if not os.path.exists(VENV_PY): return "오류", "tuya-venv 없음"
         r = subprocess.run([VENV_PY, os.path.join(HERE, "light_cmd.py"), word] + toks, capture_output=True, text=True,
@@ -488,13 +496,28 @@ def run(cmd_text):
                        timeout=60, env=dict(os.environ, PYTHONIOENCODING="utf-8"), cwd=BASE)
     out = (r.stdout + r.stderr).strip()
     if r.returncode != 0: return "오류", out[-600:]
+    if verb == "동파":   # 떠날 때: 등록된 433 등과 다락등 모두 끄기(실패해도 동파 명령은 성공)
+        try:
+            note = _lights().all_off_note()
+            if note: out += "\n" + note
+        except Exception as e:
+            out += "\n불 끄기 실패: %s" % e
     return "완료", (out + "\n" + status_text())[-800:]
+
+
+def _lights():
+    """lights/lights.py 모듈(텔레그램 봇처럼 오래 떠 있는 곳에서도 git pull 반영되게 매번 확인)."""
+    import importlib
+    p = os.path.join(BASE, "lights")
+    if p not in sys.path: sys.path.insert(0, p)
+    import lights
+    return importlib.reload(lights)
 
 
 POLL_MINUTE = 7   # 기본: 매시 7분에 한 번(LTE 절약, 사용자 11-16 결정)
 FAST_EVERY = 2    # 재실(난방·취침) + Wi-Fi 동글 경로면 2분마다 — Claude 음성 대화가 시트에 명령을 적음(사용자 11-21)
 # 시트에서 받는 명령: 도착(캘린더 중계) + 음성 대화용 제어. 공유(데이터)·점검(오래 걸림)·기상은 텔레그램으로만.
-SHEET_VERBS = {"도착", "난방", "동파", "취침", "선풍기", "보조", "조리", "환기", "전등", "시보", "아침", "상태", "센서"}
+SHEET_VERBS = {"도착", "난방", "동파", "취침", "선풍기", "보조", "조리", "환기", "전등", "불", "시보", "아침", "상태", "센서"}
 
 
 def uplink_dev():

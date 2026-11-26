@@ -125,6 +125,7 @@ smart-cabin/
 | `scripts/farmhut-wan-guard` | Ryufarm 기기 → LTE 차단(nftables): Shelly 상시, Home Mini·Tuya 하루/한 달 한도, `공유` 명령으로 잠깐 열기. 설치 `sudo bash scripts/install_wan_guard.sh`, 매분 `notify/wan_tick.sh` | 부팅 서비스 + cron 매분 |
 | `heater/shelly_hb.sh` | Shelly 동파 가드 하트비트(제어기 살아 있을 때만) + 가드가 멈췄으면 다시 켜고 텔레그램 | cron 매분 |
 | `heater/predict_log.py` | 실내 예측 기록장: 18:05에 2노드로 내일 07시 1층·밤 최저·히터 켜짐 예측, 09:10에 `thermal_log.csv` 실측과 비교 → 시트 `농막_실내예측검증`. 기록 `predict_log.jsonl`. 테스트 `cd heater && python3 -m unittest test_predict_log` | cron 18:05 · 09:10 |
+| `lights/lights.py` | 433 MHz 전등(EV1527) 송수신·코드 기록·학습 + 다락등(Tuya) 묶음 제어, 명령 `불 켜|꺼 <등|1층|전체>`, `동파` 때 모두 끔 — [docs/LIGHTS.ko.md](docs/LIGHTS.ko.md) §16. 테스트 `cd lights && python3 -m unittest test_lights` | 명령 시 · `lights-listen` 서비스 |
 | `smartclock/smartclock_push.py` | 책상 위 스마트 시계(ESP32-C2)에 농막 화면 그림 업로드(맥·Pi·윈도우 공용, 여러 대 동시 실행 시 겹침 방지) — [smartclock/README.md](smartclock/README.md) | 맥 launchd · cron · 작업 스케줄러 5분 |
 | `heater/test_heater_logic.py` | 순수 로직 단위테스트 61개 — `cd heater && python3 -m unittest test_heater_logic` | 어디서나 |
 | `sheets/Code.gs` | Apps Script 웹앱 v17: current/avg/hist/batt/presence/cmd_pull/cmd_ack/weather/summary/rawfile/pred, `?q=now`(시계), Pi 무응답 메일, 배터리 예상일, `명령` 탭 onEdit, 캘린더 `동지집 도착` 일정 → 도착 명령 | 시트에 붙여넣기 |
