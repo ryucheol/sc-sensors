@@ -134,6 +134,18 @@ def device():
     return d
 
 
+def aux_log(on, watt, path=None):
+    """매분 한 줄(ts,on,watt) → aux_log.csv. gateway/sheet_summary.py가 시간별 보조 kWh·가동 분으로 묶는다(11-28)."""
+    path = path or os.path.join(BASE, "aux_log.csv")
+    try:
+        new = not os.path.exists(path)
+        with open(path, "a") as f:
+            if new: f.write("ts,on,watt\n")
+            f.write("%s,%d,%.0f\n" % (datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"), 1 if on else 0, watt or 0))
+    except Exception:
+        pass
+
+
 def main(argv):
     dry = "--dry-run" in argv
     c = cfg()
@@ -208,6 +220,7 @@ def main(argv):
     else:
         mine = observe(now, c, actual, w, mine)
     json.dump(mine, open(P["mine"], "w"))
+    aux_log(actual, w)
     json.dump({"updated": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "on": actual, "why": why, "watt": w,
                "heat_ok": mine.get("heat_ok"), "heat_ok_ts": mine.get("heat_ok_ts")},
               open(P["out"], "w", encoding="utf-8"), ensure_ascii=False)

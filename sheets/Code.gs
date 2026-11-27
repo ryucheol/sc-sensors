@@ -62,7 +62,7 @@ var DAILY_SHEET = '부여_일별';       // v12 A날짜 … M비고(빈=확정, 
 var VERIFY_SHEET = '예보검증';       // v12 A시각 B예보기온 C예보습도만 끝에 추가. D~F는 3행 배열수식
 var VERIFY_FORMULA_END = 1000;       //     그 수식이 A3:A1000 범위라 이 행을 넘으면 경고
 var SUMMARY_SHEET = SITE + '_시간요약';  // v13 mode:summary. Pi thermal_log 1분 기록의 시간별 요약(히터 kWh·가동분·평균온습도). 시각 키로 덮어쓰기/추가
-var SUMMARY_HEADER = ['시각', '모드', '히터 kWh', '가동 분', '가동 중 평균 W', '1층 °C', '다락 °C', '외기 °C', '1층 습도', '다락 습도', '외기 습도', '다락−1층', '선풍기 분', '기록 분'];
+var SUMMARY_HEADER = ['시각', '모드', '히터 kWh', '가동 분', '가동 중 평균 W', '1층 °C', '다락 °C', '외기 °C', '1층 습도', '다락 습도', '외기 습도', '다락−1층', '선풍기 분', '기록 분', '보조 kWh', '보조 가동 분'];   // 끝 두 열: 11-28 보조 히터(aux_log.csv)
 var RAW_FOLDER = SITE + '_원자료';       // v13 mode:rawfile. Pi가 하루 1회 보내는 1분 원자료(gzip CSV)를 드라이브 폴더에 저장
 // 컬럼: A시각 B센서 C최고온도 D최저온도 E최고습도 F최저습도 G센서idx H업로드시각
 
@@ -593,10 +593,12 @@ function _summarySheet() {
     sh.getRange(1, 1, 1, SUMMARY_HEADER.length).setValues([SUMMARY_HEADER]).setFontWeight('bold');
     sh.setFrozenRows(1);
     sh.getRange('A:A').setNumberFormat('yyyy-MM-dd HH:mm');
+  } else if (sh.getLastColumn() < SUMMARY_HEADER.length) {   // 열이 늘었으면 머리글만 끝에 덧붙임(기존 열 위치 그대로)
+    sh.getRange(1, 1, 1, SUMMARY_HEADER.length).setValues([SUMMARY_HEADER]).setFontWeight('bold');
   }
   return sh;
 }
-// rows=[[ 'YYYY-MM-DD HH:00', mode, kwh, on_min, avg_w_on, t1, t2, to, h1, h2, ho, delta, fan_min, n ], ...]
+// rows=[[ 'YYYY-MM-DD HH:00', mode, kwh, on_min, avg_w_on, t1, t2, to, h1, h2, ho, delta, fan_min, n, aux_kwh, aux_min ], ...]
 function _postSummary(body) {
   var rows = body.rows || [];
   var sh = _summarySheet();

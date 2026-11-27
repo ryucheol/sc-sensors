@@ -139,3 +139,6 @@ power_log.csv
 lights_codes.json
 lights_state.json
 lights_seen.jsonl
+
+# 보조 히터 1분 기록(heater/aux_control.py)
+aux_log.csv

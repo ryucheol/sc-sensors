@@ -4,6 +4,7 @@
 
 1) 시간 요약 → 시트 '농막_시간요약'
    thermal_log.csv(1분 간격: ts,mode,relay,watt,volt,t1,h1,t2,h2,to,ho,t_ctl,delta,fan)를 정시 단위로 묶어
+   (aux_log.csv 가 있으면 보조 히터 kWh·가동 분을 끝 두 열에 붙여)
    히터 kWh(실측 W × 실제 간격, 간격은 최대 5분으로 자름)·가동 분·가동 중 평균 W·평균 온습도·다락−1층·선풍기 분·기록 분.
    끝난 시간만 보낸다(지금 시간은 다음 실행에서). 보낸 마지막 시각을 상태 파일에 남겨 이어서 보내고,
    인터넷이 없으면 상태를 안 바꿔 다음 실행에서 재시도(store-and-forward). 시트는 시각 키로 덮어쓰므로 중복 안전.
@@ -47,6 +48,34 @@ def read_log(path=LOG_CSV):
             rows.append(r)
     rows.sort(key=lambda r: r["_t"])
     return rows
+
+
+AUX_CSV = os.path.join(BASE, "aux_log.csv")
+
+
+def aux_hourly(rows, start=None, end=None):
+    """보조 히터 1분 기록(ts,on,watt) → {정시: (kWh, 가동 분)}. 기록이 없는 시간은 키가 없다(=모름, 0과 구분)."""
+    out = {}
+    for i, r in enumerate(rows):
+        t = r["_t"]; hr = t.replace(minute=0, second=0, microsecond=0)
+        if (start and hr < start) or (end and hr >= end):
+            continue
+        nxt = rows[i + 1]["_t"] if i + 1 < len(rows) else None
+        dur = max(min((nxt - t).total_seconds(), MAX_GAP_S) if nxt else 60.0, 0.0)
+        w = fnum(r.get("watt")) or 0.0
+        on = (r.get("on") or "0").strip() in ("1", "True", "true")
+        kwh, mins = out.get(hr, (0.0, 0.0))
+        out[hr] = (kwh + (w * dur / 3600.0 if on else 0.0) / 1000.0, mins + (dur / 60.0 if on else 0.0))
+    return {k: (round(v[0], 3), round(min(v[1], 60.0), 1)) for k, v in out.items()}
+
+
+def add_aux(summ, aux):
+    """요약 행 끝에 보조 kWh·가동 분 두 칸을 붙인다(기존 열 위치는 그대로 — 기계 탭 열 순서 유지)."""
+    for r in summ:
+        hr = dt.datetime.strptime(r[0], "%Y-%m-%d %H:00")
+        k = aux.get(hr)
+        r.extend([k[0], k[1]] if k else ["", ""])
+    return summ
 
 
 def hourly(rows, start=None, end=None):
@@ -139,6 +168,8 @@ def main(argv):
     else:
         start = rows[0]["_t"].replace(minute=0, second=0, microsecond=0)
     summ = hourly(rows, start, now_hr)
+    if os.path.exists(AUX_CSV):
+        add_aux(summ, aux_hourly(read_log(AUX_CSV), start, now_hr))
     print("시간 요약 %d행 (%s ~ %s)" % (len(summ), summ[0][0] if summ else "-", summ[-1][0] if summ else "-"))
     if dry:
         for r in summ[-5:]:

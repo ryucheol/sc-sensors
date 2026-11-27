@@ -55,6 +55,20 @@ class Hourly(unittest.TestCase):
         self.assertAlmostEqual(out[0][12], 15.0)
 
 
+class Aux(unittest.TestCase):
+    def test_aux_kwh_minutes_and_unknown_hour(self):
+        t0 = dt.datetime(2026, 11, 28, 5, 0, 0)
+        aux = [{"_t": t0 + dt.timedelta(minutes=m), "on": "1" if m < 30 else "0", "watt": "480" if m < 30 else "0"} for m in range(60)]
+        aux.append({"_t": t0 + dt.timedelta(hours=1), "on": "0", "watt": "0"})
+        h = ss.aux_hourly(aux, None, t0 + dt.timedelta(hours=2))
+        self.assertEqual(h[t0], (0.24, 30.0))                 # 480 W × 0.5 h
+        rows = [mk(t0 + dt.timedelta(minutes=m)) for m in range(120)] + [mk(t0 + dt.timedelta(hours=2))]
+        summ = ss.add_aux(ss.hourly(rows, None, t0 + dt.timedelta(hours=2)), {t0: h[t0]})
+        self.assertEqual(summ[0][-2:], [0.24, 30.0])
+        self.assertEqual(summ[1][-2:], ["", ""])              # 보조 기록이 없는 시간 = 빈칸(0과 구분)
+        self.assertEqual(len(summ[0]), 16)
+
+
 class RawDay(unittest.TestCase):
     def test_gzip_day_only(self):
         d0 = dt.datetime(2026, 11, 14, 23, 58)
