@@ -580,6 +580,7 @@ function _postPred(body) {
     if (row) { sh.getRange(row, 1, 1, line.length).setValues([line]); updated++; }
     else { sh.appendRow(line); idx[_fmt(d)] = sh.getLastRow(); added++; }
   }
+  if (added) sh.getRange(2, 1, sh.getLastRow() - 1, 2).setNumberFormat('yyyy-MM-dd HH:mm');   // appendRow는 열 서식을 안 따름
   return _json({ ok: true, mode: 'pred', added: added, updated: updated });
 }
 
