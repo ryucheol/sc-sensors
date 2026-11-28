@@ -53,10 +53,35 @@ def run(tv, allc):
     if tv.status and tv.status.app_id == "84912283":
         tv.quit_app(); time.sleep(3)
     d = DashCastController(); tv.register_handler(d)
-    d.load_url(URL, force=True, reload_seconds=0)
-    time.sleep(4)
-    print("캐스트: %s → %s (앱 %s)" % (URL, tv.cast_info.friendly_name, tv.status.display_name if tv.status else "?"))
-    return 0
+    # 다시 띄운 직후 보낸 주소를 놓치면 TV에 "Waiting for address"만 남는다(11-28) →
+    # 페이지가 열리면 보내는 비콘(/api/beacon, 로드 1.5초 뒤)이 안 오면 주소를 한 번 더 보낸다
+    for k in range(3):
+        t0 = time.time()
+        d.load_url(URL, force=True, reload_seconds=0)
+        if page_loaded(tv.cast_info.host, t0, 20):
+            print("캐스트: %s → %s (화면 열림 확인%s)" % (URL, tv.cast_info.friendly_name, "" if k == 0 else ", 재전송 %d회" % k))
+            return 0
+    print("캐스트 보냄: %s → %s (화면 열림 확인 못 함 — TV에 Waiting for address면 다시 실행)" % (URL, tv.cast_info.friendly_name))
+    return 3
+
+
+BEACON = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "tv_dash_beacon.log")
+
+
+def page_loaded(host, since, timeout):
+    """since 뒤에 host가 보낸 비콘이 tv_dash_beacon.log에 생기면 True."""
+    end = time.time() + timeout
+    while time.time() < end:
+        time.sleep(1)
+        try:
+            if os.path.getmtime(BEACON) >= since:
+                with open(BEACON, encoding="utf-8") as f:
+                    last = f.readlines()[-1]
+                if (" %s " % host) in last:
+                    return True
+        except Exception:
+            pass
+    return False
 
 
 if __name__ == "__main__":
