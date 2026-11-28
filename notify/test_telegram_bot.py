@@ -119,5 +119,28 @@ class Bind(unittest.TestCase):
             self.assertEqual(bot.bind("nobody", urlopen=api), 1)
 
 
+class TvCommand(unittest.TestCase):
+    def test_normalize_and_args(self):
+        self.assertEqual(bot.normalize("/tv"), "TV")
+        self.assertEqual(bot.normalize("tv 끔"), "TV 끔")
+        self.assertEqual(bot.normalize("티비"), "TV")
+        self.assertEqual(bot.tv_args("TV"), [])
+        self.assertEqual(bot.tv_args("TV 켜"), [])
+        self.assertEqual(bot.tv_args("TV 끔"), ["--stop"])
+
+    def test_cast_reply(self):
+        class R:
+            def __init__(s, code, out): s.returncode, s.stdout = code, out
+        seen = []
+        ok = bot.tv_cast("TV", run=lambda a, **k: (seen.append(a), R(0, "캐스트: x → 1층"))[1])
+        self.assertTrue(ok.startswith("✅ 캐스트"))
+        self.assertNotIn("--stop", seen[0])
+        bad = bot.tv_cast("TV", run=lambda a, **k: R(2, "TV를 찾지 못함"))
+        self.assertTrue(bad.startswith("⚠ TV TV를 찾지"))
+        off = bot.tv_cast("TV 끔", run=lambda a, **k: (seen.append(a), R(0, "닫음: 1층"))[1])
+        self.assertEqual(seen[-1][-1], "--stop")
+        self.assertNotIn("8080", off)
+
+
 if __name__ == "__main__":
     unittest.main()

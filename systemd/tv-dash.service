@@ -1,0 +1,12 @@
+[Unit]
+Description=Farmhut TV dashboard (read-only, http://10.42.0.1:8080)
+After=network-online.target
+
+[Service]
+WorkingDirectory=/home/ryuch/smart-cabin
+ExecStart=/usr/bin/python3 /home/ryuch/smart-cabin/dashboard/tv_dash.py
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=default.target

@@ -1,0 +1,292 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>동지집 난방</title>
+<style>
+  :root {
+    --bg: #0d1117; --panel: #161b22; --line: #30363d; --fg: #e6edf3; --dim: #8b949e;
+    --heat: #ff7b39; --floor: #ffb347; --attic: #c58cff; --out: #58a6ff; --ok: #3fb950; --warn: #f0b429; --bad: #f85149;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--fg);
+    font-family: "Noto Sans KR", "Malgun Gothic", "Apple SD Gothic Neo", system-ui, sans-serif; overflow: hidden; }
+  #wrap { position: absolute; inset: 1.6vw; display: grid; gap: 1.2vw;
+    grid-template-columns: 1.25fr 1fr; grid-template-rows: auto minmax(0,1.1fr) minmax(0,1fr); transition: transform 2s; }
+  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 1vw; padding: 1.2vw 1.6vw; min-width: 0; }
+  .lbl { color: var(--dim); font-size: 1.25vw; }
+  header { grid-column: 1 / 3; display: flex; align-items: baseline; justify-content: space-between; }
+  #clock { font-size: 4.2vw; font-weight: 700; letter-spacing: .05em; font-variant-numeric: tabular-nums; }
+  #date { font-size: 1.6vw; color: var(--dim); margin-left: 1.2vw; }
+  #upd { font-size: 1.2vw; color: var(--dim); text-align: right; }
+  #upd.stale { color: var(--warn); }
+
+  /* 온도 */
+  #temps { display: block; }
+  .t { text-align: left; }
+  .t .v { font-size: 6vw; font-weight: 700; line-height: 1.05; font-variant-numeric: tabular-nums; }
+  .t .v small { font-size: 2.4vw; font-weight: 400; color: var(--dim); }
+  .t .s { font-size: 1.35vw; color: var(--dim); margin-top: .2vw; }
+  .t.stale .v { color: var(--dim); }
+  #floor .v { color: var(--floor); } #attic .v { color: var(--attic); } #out .v { color: var(--out); }
+  #air { grid-column: 1 / 4; display: flex; gap: 2.5vw; font-size: 1.6vw; color: var(--dim); border-top: 1px solid var(--line); padding-top: .8vw; }
+  #air b { color: var(--fg); font-size: 2vw; font-variant-numeric: tabular-nums; }
+  #air .ai { white-space: nowrap; }
+
+  /* 히터 */
+  #heater { overflow: hidden; }
+  #heater > .fit { display: flex; flex-direction: column; gap: .5vw; }
+  .panel { overflow: hidden; }
+  #modeRow { display: flex; align-items: center; gap: 1.2vw; }
+  #mode { font-size: 3vw; font-weight: 700; line-height: 1.1; }
+  #target { font-size: 1.7vw; color: var(--dim); }
+  #lamp { width: 3vw; height: 3vw; border-radius: 50%; background: #333; flex: none; }
+  #lamp.on { background: var(--heat); box-shadow: 0 0 2vw var(--heat); }
+  #heatTxt { font-size: 2vw; }
+  .row { display: flex; gap: 2vw; font-size: 1.6vw; color: var(--dim); flex-wrap: wrap; }
+  .row b { color: var(--fg); }
+  .chip { display: inline-block; padding: .15vw .8vw; border-radius: .6vw; border: 1px solid var(--line); }
+  .chip.on { border-color: var(--heat); color: var(--heat); }
+  #note { font-size: 1.5vw; color: var(--warn); min-height: 1.8vw; }
+
+  /* 그래프·예보 */
+  #chartP { grid-column: 1 / 2; display: flex; flex-direction: column; }
+  #chartBox { flex: 1; position: relative; min-height: 0; }
+  #chart { position: absolute; left: 0; top: 0; width: 100%; height: 100%; }
+  #legend { display: flex; gap: 1.6vw; font-size: 1.2vw; color: var(--dim); }
+  #legend i { display: inline-block; width: 1.4vw; height: .35vw; vertical-align: middle; margin-right: .4vw; }
+  #fcP { grid-column: 2 / 3; }
+  #fcP { display: flex; flex-direction: column; justify-content: space-between; }
+  #fc { display: grid; grid-template-columns: repeat(7, 1fr); gap: .4vw; margin-top: .6vw; text-align: center; }
+  #fc .h { font-size: 1.6vw; color: var(--dim); }
+  #fc .tt { font-size: 3.4vw; font-weight: 700; line-height: 1.25; font-variant-numeric: tabular-nums; }
+  #fc .sk { font-size: 1.35vw; color: var(--dim); white-space: nowrap; }
+  #fc .rain { color: var(--out); }
+  #daily { margin-top: 1.2vw; font-size: 1.7vw; flex-wrap: wrap; row-gap: .4vw; border-top: 1px solid var(--line); padding-top: 1vw; color: var(--dim); display: flex; gap: 1.2vw; justify-content: space-around; }
+  #daily span { white-space: nowrap; }
+  #daily b { color: var(--fg); }
+</style>
+</head>
+<body>
+<div id="wrap">
+  <header>
+    <div><span id="clock">--:--</span><span id="date"></span></div>
+    <div id="upd">불러오는 중…</div>
+  </header>
+
+  <section class="panel" id="temps">
+    <div class="t" id="floor"><div class="lbl">1층</div><div class="v">--</div><div class="s"></div></div>
+    <div class="t" id="attic"><div class="lbl">다락</div><div class="v">--</div><div class="s"></div></div>
+    <div class="t" id="out"><div class="lbl">바깥</div><div class="v">--</div><div class="s"></div></div>
+    <div id="air"></div>
+  </section>
+
+  <section class="panel" id="heater">
+    <div class="lbl">난방</div>
+    <div id="modeRow"><div id="lamp"></div><div><div id="mode">--</div><div id="target"></div></div></div>
+    <div id="heatTxt"></div>
+    <div class="row" id="rowA"></div>
+    <div class="row" id="rowB"></div>
+    <div id="note"></div>
+  </section>
+
+  <section class="panel" id="chartP">
+    <div id="legend">
+      <span><i style="background:var(--floor)"></i>1층</span>
+      <span><i style="background:var(--attic)"></i>다락</span>
+      <span><i style="background:var(--out)"></i>바깥</span>
+      <span><i style="background:var(--heat);opacity:.35;height:1vw"></i>히터 켜짐</span>
+      <span style="margin-left:auto">지난 24시간</span>
+    </div>
+    <div id="chartBox"><canvas id="chart"></canvas></div>
+  </section>
+
+  <section class="panel" id="fcP">
+    <div class="lbl" id="fcLbl">예보 (부여 내산)</div>
+    <div id="fc"></div>
+    <div id="daily"></div>
+  </section>
+</div>
+
+<script>
+var MODE = { comfort: "난방", sleep: "취침", frost: "동파 방지" };
+var SRC = { cmd: "명령", arrival: "도착 예약", preheat: "예열", noshow: "미도착 복귀", backstop: "자동 복귀", "default": "기본" };
+var SKY = { 1: "맑음", 2: "구름조금", 3: "구름많음", 4: "흐림" };
+var PTY = { 1: "비", 2: "비/눈", 3: "눈", 4: "소나기", 5: "빗방울", 6: "진눈깨비", 7: "눈날림" };
+var last = null;
+
+function $(id) { return document.getElementById(id); }
+function pad(n) { return (n < 10 ? "0" : "") + n; }
+function hm(ts) { var d = new Date(ts * 1000); return pad(d.getHours()) + ":" + pad(d.getMinutes()); }
+function f1(v) { return (v === null || v === undefined || isNaN(v)) ? "--" : (Math.round(v * 10) / 10).toFixed(1); }
+function ago(sec) { if (sec < 90) return "방금"; if (sec < 3600) return Math.round(sec / 60) + "분 전"; return Math.round(sec / 3600) + "시간 전"; }
+
+function tick() {
+  var d = new Date(), wd = "일월화수목금토";
+  $("clock").textContent = pad(d.getHours()) + ":" + pad(d.getMinutes());
+  $("date").textContent = (d.getMonth() + 1) + "월 " + d.getDate() + "일 (" + wd[d.getDay()] + ")";
+}
+
+function temp(id, s, now) {
+  var el = $(id);
+  if (!s || s.temp === undefined) { el.querySelector(".v").textContent = "--"; return; }
+  var age = now - (s.time_ms || 0) / 1000;
+  el.classList.toggle("stale", age > 600);
+  el.querySelector(".v").innerHTML = f1(s.temp) + "<small>°C</small>";
+  el.querySelector(".s").textContent = "습도 " + Math.round(s.hum) + "%" + (age > 600 ? " · " + ago(age) : "");
+}
+
+function render(d) {
+  last = d;
+  var now = d.now, h = d.heater || {}, st = d.state || {}, s = d.sensors || {};
+  temp("floor", s["내부1층"], now); temp("attic", s["다락"], now); temp("out", s["바깥외부"] || s["바닥외부"], now);
+
+  var q = d.qingping || {}, air = [];
+  if (q.co2 !== undefined) {
+    var qa = now - (q.ts || 0);
+    var co2c = q.co2 >= 1500 ? "var(--bad)" : q.co2 >= 1000 ? "var(--warn)" : "var(--fg)";
+    air.push('CO₂ <b style="color:' + co2c + '">' + q.co2 + '</b> ppm');
+    air.push('테이블 <b>' + f1(q.temp) + '</b>°C · ' + Math.round(q.hum) + '%');
+    if (qa > 1800) air.push('(칭핑 ' + ago(qa) + ')');
+  }
+  if (h.delta_attic_floor !== null && h.delta_attic_floor !== undefined) air.push('다락−1층 <b>' + f1(h.delta_attic_floor) + '</b>°C');
+  $("air").innerHTML = air.map(function (a) { return '<span class="ai">' + a + '</span>'; }).join("");
+
+  var mode = st.mode || h.mode;
+  $("mode").textContent = MODE[mode] || mode || "--";
+  $("target").textContent = (st.on !== undefined && st.on !== null ? f1(st.on) + "~" + f1(st.off) + "°C" : "") +
+    (st.source ? " · " + (SRC[st.source] || st.source) : "") + (st.since ? " · " + hm(st.since) + "부터" : "");
+  var on = !!h.relay;
+  $("lamp").classList.toggle("on", on);
+  $("heatTxt").innerHTML = on ? '<b style="color:var(--heat)">가동 중</b> ' + Math.round(h.watt || 0) + " W" + (h.stage ? " (" + h.stage + "단)" : "")
+                              : '<span style="color:var(--dim)">대기</span>' + (h.stage ? ' <span style="color:var(--dim);font-size:1.5vw">· ' + h.stage + "단 설정</span>" : "");
+  var aux = d.aux || {}, fan = d.fan || {};
+  $("rowA").innerHTML = '<span class="chip' + (aux.on ? " on" : "") + '">보조 히터 ' + (aux.on ? "켜짐 " + Math.round(aux.watt || 0) + "W" : "꺼짐") + '</span>' +
+                        '<span class="chip' + (fan.on ? " on" : "") + '">선풍기 ' + (fan.on ? "켜짐" : "꺼짐") + '</span>';
+  $("rowB").innerHTML = '<span>오늘 <b>' + f1(h.today_kwh) + '</b> kWh' + (h.t_mass !== null && h.t_mass !== undefined ? ' · 벽·가구 <b>' + f1(h.t_mass) + '</b>°C' : "") + '</span>';
+
+  var note = [];
+  if (h.arrival && h.arrival.ts) {
+    var a = h.arrival;
+    note.push("도착 예약 " + hm(a.ts) + " · " + f1(a.target) + "°C" + (h.arrival_start_pred || h.arrival_start_est ? " · 예열 " + hm(h.arrival_start_pred || h.arrival_start_est) + " 시작 예정" : ""));
+  }
+  if (h.heater_ok === false) note.push("⚠ 히터 응답 없음");
+  if (h.manual) note.push("수동: " + (typeof h.manual === "string" ? h.manual : JSON.stringify(h.manual)));
+  $("note").textContent = note.join("  ·  ");
+
+  var up = h.updated ? Date.parse(h.updated.replace(" ", "T")) / 1000 : 0;
+  var stale = !up || now - up > 300;
+  $("upd").textContent = (stale ? "⚠ 제어 상태 " + (up ? ago(now - up) : "없음") : "제어 갱신 " + (h.updated || "").slice(11, 16)) + " · 30초마다 새로고침";
+  $("upd").classList.toggle("stale", stale);
+
+  var fc = (d.forecast || {}).hourly || [], html = "";
+  var pick = fc.filter(function (x, i) { return i % 2 === 0; }).slice(0, 7);
+  pick.forEach(function (x) {
+    var hr = new Date(x.ms).getHours();
+    var sk = x.pty > 0 ? '<span class="rain">' + (PTY[x.pty] || "강수") + " " + (x.pop || 0) + "%</span>" : (SKY[x.sky] || "");
+    html += '<div><div class="h">' + hr + '시</div><div class="tt">' + Math.round(x.tmp) + '°</div><div class="sk">' + sk + '</div></div>';
+  });
+  $("fc").innerHTML = html || '<div class="h" style="grid-column:1/8">예보 없음</div>';
+  var dl = (d.forecast || {}).daily || {}, keys = Object.keys(dl).sort().slice(0, 4), dh = "";
+  keys.forEach(function (k) {
+    var v = dl[k], m = parseInt(k.slice(4, 6), 10), dd = parseInt(k.slice(6, 8), 10);
+    dh += "<span>" + m + "/" + dd + " <b>" + (v.tmn !== undefined ? Math.round(v.tmn) + "°" : "") + (v.tmn !== undefined && v.tmx !== undefined ? " / " : "") + (v.tmx !== undefined ? Math.round(v.tmx) + "°" : "") + "</b></span>";
+  });
+  $("daily").innerHTML = dh;
+  drawChart(d.series || [], now);
+  fitPanels();
+  setTimeout(beacon, 1500);
+}
+
+function fitPanels() {
+  ["temps", "heater", "fcP"].forEach(function (id) {
+    var p = $(id), inner = p.querySelector(".fit");
+    if (!inner) {
+      inner = document.createElement("div"); inner.className = "fit";
+      if (id === "temps") inner.style.cssText = "display:grid;grid-template-columns:repeat(3,1fr);gap:1vw;align-content:start";
+      if (id === "fcP") inner.style.cssText = "display:flex;flex-direction:column;justify-content:space-between;height:100%";
+      while (p.firstChild) inner.appendChild(p.firstChild);
+      p.appendChild(inner);
+    }
+    inner.style.zoom = 1;
+    var cs = getComputedStyle(p), avail = p.clientHeight - parseFloat(cs.paddingTop) - parseFloat(cs.paddingBottom);
+    var need = inner.scrollHeight;
+    if (need > avail + 1) inner.style.zoom = Math.max(0.6, avail / need);
+  });
+}
+
+var beaconSent = 0;
+function beacon() {
+  if (Date.now() - beaconSent < 600000) return; beaconSent = Date.now();
+  var info = { w: innerWidth, h: innerHeight, dpr: window.devicePixelRatio, ua: navigator.userAgent.slice(0, 120),
+    doc: document.documentElement.scrollWidth + "x" + document.documentElement.scrollHeight, p: {} };
+  ["temps", "heater", "chartP", "fcP"].forEach(function (id) {
+    var p = $(id), f = p.querySelector(".fit") || p, r = p.getBoundingClientRect();
+    info.p[id] = [Math.round(r.left), Math.round(r.top), Math.round(r.width), Math.round(r.height), f.scrollWidth, f.scrollHeight, p.clientWidth, p.clientHeight, f.style.zoom || ""].join(",");
+  });
+  var x = new XMLHttpRequest(); x.open("GET", "/api/beacon?" + encodeURIComponent(JSON.stringify(info))); x.send();
+}
+
+function drawChart(rows, now) {
+  var c = $("chart"), dpr = window.devicePixelRatio || 1;
+  var W = c.clientWidth, H = c.clientHeight; if (W < 10 || H < 10) return;
+  c.width = W * dpr; c.height = H * dpr;
+  var g = c.getContext("2d"); g.setTransform(dpr, 0, 0, dpr, 0, 0); g.clearRect(0, 0, W, H);
+  var fs = Math.max(14, W / 48); g.font = fs + "px sans-serif";
+  var L = fs * 3, R = fs * 0.8, T = fs * 0.6, B = fs * 1.8, pw = W - L - R, ph = H - T - B;
+  var t0 = now - 24 * 3600, lo = 99, hi = -99;
+  rows.forEach(function (r) { [1, 2, 3].forEach(function (k) { if (r[k] !== null) { lo = Math.min(lo, r[k]); hi = Math.max(hi, r[k]); } }); });
+  if (lo > hi) { lo = 0; hi = 25; }
+  lo = Math.floor(lo / 5) * 5; hi = Math.ceil(hi / 5) * 5; if (hi - lo < 10) hi = lo + 10;
+  function X(ts) { return L + (ts - t0) / (24 * 3600) * pw; }
+  function Y(v) { return T + (hi - v) / (hi - lo) * ph; }
+  var cs = getComputedStyle(document.documentElement);
+  function col(n) { return cs.getPropertyValue(n).trim(); }
+  // 히터 켜짐 띠
+  g.fillStyle = col("--heat"); g.globalAlpha = 0.18;
+  for (var i = 0; i < rows.length; i++) if (rows[i][4]) {
+    var x1 = X(rows[i][0]), x2 = i + 1 < rows.length ? X(rows[i + 1][0]) : X(now);
+    g.fillRect(x1, T, Math.max(1, x2 - x1), ph);
+  }
+  g.globalAlpha = 1;
+  // 격자
+  g.strokeStyle = col("--line"); g.fillStyle = col("--dim"); g.lineWidth = 1; g.textAlign = "right"; g.textBaseline = "middle";
+  for (var v = lo; v <= hi; v += 5) { g.beginPath(); g.moveTo(L, Y(v)); g.lineTo(W - R, Y(v)); g.stroke(); g.fillText(v + "°", L - fs * 0.4, Y(v)); }
+  g.textAlign = "center"; g.textBaseline = "top";
+  var h0 = new Date(t0 * 1000); h0.setMinutes(0, 0, 0);
+  for (var t = h0.getTime() / 1000 + 3600; t <= now; t += 3600) {
+    var hr = new Date(t * 1000).getHours();
+    if (hr % 3 === 0) { g.fillText(hr + "시", X(t), T + ph + fs * 0.4); g.beginPath(); g.moveTo(X(t), T); g.lineTo(X(t), T + ph); g.globalAlpha = .4; g.stroke(); g.globalAlpha = 1; }
+  }
+  // 선
+  [[1, "--floor", 3], [2, "--attic", 2.2], [3, "--out", 2.2]].forEach(function (s) {
+    g.strokeStyle = col(s[1]); g.lineWidth = s[2]; g.lineJoin = "round"; g.beginPath(); var pen = false, prev = 0;
+    rows.forEach(function (r) {
+      var v = r[s[0]]; if (v === null || r[0] - prev > 1800) pen = false; prev = r[0];
+      if (v === null) return;
+      if (!pen) { g.moveTo(X(r[0]), Y(v)); pen = true; } else g.lineTo(X(r[0]), Y(v));
+    });
+    g.stroke();
+  });
+}
+
+function load() {
+  var x = new XMLHttpRequest();
+  x.open("GET", "/api/status?" + Date.now());
+  x.timeout = 15000;
+  x.onload = function () { if (x.status === 200) { try { render(JSON.parse(x.responseText)); } catch (e) { $("upd").textContent = "표시 오류: " + e; } } };
+  x.onerror = x.ontimeout = function () { $("upd").textContent = "⚠ Pi 연결 안 됨 — 다시 시도 중"; $("upd").classList.add("stale"); };
+  x.send();
+}
+
+// 번인 방지: 10분마다 몇 픽셀씩 위치를 옮김. 6시간마다 페이지 새로 읽기(코드 갱신 반영)
+var shifts = [[0, 0], [4, 3], [-3, 4], [3, -4], [-4, -3]], si = 0;
+setInterval(function () { si = (si + 1) % shifts.length; $("wrap").style.transform = "translate(" + shifts[si][0] + "px," + shifts[si][1] + "px)"; }, 600000);
+setTimeout(function () { location.reload(); }, 6 * 3600 * 1000);
+window.addEventListener("resize", function () { if (last) { drawChart(last.series || [], last.now); fitPanels(); } });
+tick(); setInterval(tick, 1000);
+load(); setInterval(load, 30000);
+</script>
+</body>
+</html>

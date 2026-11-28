@@ -34,11 +34,11 @@ ALWAYS_OK = ("상태", "경보", "도움", "현황", "센서")                  
 
 SLASH = {"start": "도움", "help": "도움", "status": "상태", "heat": "난방", "frost": "동파", "sleep": "취침",
          "arrive": "도착", "check": "점검", "weather": "기상", "alarms": "경보", "alarm": "경보",
-         "fan": "선풍기", "share": "공유", "sensors": "센서", "aux": "보조", "wake": "아침", "chime": "시보", "light": "다락등", "lights": "불"}
-WORDS = {"도움": "도움", "도움말": "도움", "help": "도움", "?": "도움", "경보": "경보", "알람": "경보"}
+         "fan": "선풍기", "share": "공유", "sensors": "센서", "aux": "보조", "wake": "아침", "chime": "시보", "light": "다락등", "lights": "불", "tv": "TV"}
+WORDS = {"도움": "도움", "도움말": "도움", "help": "도움", "?": "도움", "경보": "경보", "알람": "경보", "tv": "TV", "티비": "TV"}
 BOT_COMMANDS = [("status", "지금 상태"), ("sensors", "센서 온도·습도"), ("alarms", "켜진 경보"), ("heat", "난방 [ON] [OFF]"),
                 ("frost", "동파 [ON]"), ("sleep", "취침 [ON]"), ("arrive", "도착 HH:MM [내일] / 도착 취소"),
-                ("fan", "선풍기 켜|꺼|자동"), ("aux", "보조히터 켜|꺼|자동"), ("wake", "아침 난방 예약 06:00 [온도] / 끔"), ("share", "공유 [1시간] [100MB] / 끔 / 상태"), ("chime", "시보 켜|끔"), ("light", "다락등 켜|꺼"), ("lights", "불 켜|꺼 <등|1층|전체> / 불 상태"),
+                ("fan", "선풍기 켜|꺼|자동"), ("aux", "보조히터 켜|꺼|자동"), ("wake", "아침 난방 예약 06:00 [온도] / 끔"), ("share", "공유 [1시간] [100MB] / 끔 / 상태"), ("chime", "시보 켜|끔"), ("light", "다락등 켜|꺼"), ("lights", "불 켜|꺼 <등|1층|전체> / 불 상태"), ("tv", "TV 대시보드 켜|끔"),
                 ("check", "히터 점검"), ("weather", "기상청 → 시트 갱신"), ("help", "도움말")]
 
 HELP = """🏠 동지집 봇 명령 (Pi 터미널에서도 같음. 시트 '명령' 탭은 캘린더 도착 중계만)
@@ -59,10 +59,11 @@ HELP = """🏠 동지집 봇 명령 (Pi 터미널에서도 같음. 시트 '명�
 • 다락등 / 다락등 켜 / 다락등 꺼 — 다락등2(Tuya 스위치, Google Home 음성·리모컨과 같은 등)
 • 불 / 불 켜 싱크대등 / 불 꺼 1층 / 불 꺼(전체) / 불 목록 — 433 MHz 전등 + 다락등. 동파(떠날 때)면 모두 끔
   불 기록 <등> — 리모컨 켜기→끄기 버튼을 눌러 코드 저장 · 불 학습 <등> — 수신기 학습 버튼 3번 직후 보내기
+• TV / TV 끔 — 거실 TV(구글 TV)에 난방 대시보드 캐스트 / 닫기 (TV가 꺼져 있으면 실패)
 • 시보 / 시보 켜 / 시보 끔 — Home Mini 시각·실내온도 안내(난방 모드 07~22시 정각·30분)
 • 조리 / 환기 — 열모델 학습에서 뺄 구간 기록(기본 조리 60분·환기 20분)
   예: 조리 40분 / 조리 끝 / 환기 12:30~12:50(지난 구간) / 조리 목록
-/로 시작해도 됩니다: /status /sensors /heat 25 /arrive 16:00 /fan /aux /wake /share /chime /light /lights"""
+/로 시작해도 됩니다: /status /sensors /heat 25 /arrive 16:00 /fan /aux /wake /share /chime /light /lights /tv"""
 
 
 def log(msg):
@@ -124,11 +125,36 @@ def load_scp():
     return scp
 
 
+CAST_PY = os.path.expanduser("~/cast-venv/bin/python")
+TV_CAST = os.path.join(REPO, "dashboard", "tv_cast.py")
+TV_OFF = ("끔", "꺼", "끄기", "off", "닫기", "중지")
+
+
+def tv_args(cmd):
+    """'TV' / 'TV 켜' → [] (띄우기), 'TV 끔' → ['--stop'] (순수)."""
+    rest = cmd.split(" ", 1)[1].strip().lower() if " " in cmd else ""
+    return ["--stop"] if rest in TV_OFF else []
+
+
+def tv_cast(cmd, run=None):
+    """TV 대시보드 캐스트/닫기. tv_cast.py 출력 마지막 줄을 답장으로."""
+    import subprocess
+    run = run or subprocess.run
+    try:
+        r = run([CAST_PY, TV_CAST] + tv_args(cmd), capture_output=True, text=True, timeout=80, cwd=REPO)
+        out = ((r.stdout or "").strip().splitlines() or [""])[-1]
+        if r.returncode == 0: return "✅ " + (out or "완료") + ("" if tv_args(cmd) else "\n화면: http://10.42.0.1:8080")
+        return "⚠ TV " + (out or ("실패(코드 %s)" % r.returncode))
+    except Exception as e:
+        return "⚠ TV 캐스트 실패: %s" % e
+
+
 def execute(cmd):
     """명령 실행 → 답장 문구. 히터 명령은 시트 폴러와 같은 잠금 안에서."""
     verb = cmd.split(" ", 1)[0]
     if verb == "도움": return HELP
     if verb == "경보": return alarms_text()
+    if verb.upper() == "TV": return tv_cast(cmd)
     scp = load_scp()
     with open(CMD_LOCK, "a") as lk:
         fcntl.flock(lk, fcntl.LOCK_EX)
