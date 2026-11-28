@@ -69,13 +69,13 @@ class Toggle(unittest.TestCase):
 class Texts(unittest.TestCase):
     def test_rounds_to_slot_and_temp(self):
         self.assertEqual(a.chime_texts(D(2026, 11, 14, 15, 27), 21.5, every=20),
-                         ["오후 세 시 이십 분입니다.", "실내 이십일 점 오도."])
+                         ["오후 세 시 이십 분입니다.", "일층 이십일 점 오도."])
 
     def test_no_temp_when_stale(self):
         self.assertEqual(a.chime_texts(D(2026, 11, 14, 8, 1), None), ["오전 여덟 시입니다."])
 
     def test_negative_temp(self):
-        self.assertEqual(a.chime_texts(D(2026, 11, 14, 8, 0), -1.5)[1], "실내 영하 일 점 오도.")
+        self.assertEqual(a.chime_texts(D(2026, 11, 14, 8, 0), -1.5)[1], "일층 영하 일 점 오도.")
 
 
 
