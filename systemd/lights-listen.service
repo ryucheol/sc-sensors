@@ -1,11 +1,8 @@
 [Unit]
-Description=433 MHz remote listener (lights) -> lights_state.json
-After=pigpiod.service
-Wants=pigpiod.service
+Description=433 MHz remote listener (lights) -> lights_state.json  [user service, lgpio]
 
 [Service]
 Type=simple
-User=ryuch
 WorkingDirectory=/home/ryuch/smart-cabin
 ExecStart=/usr/bin/python3 /home/ryuch/smart-cabin/lights/lights.py daemon
 Restart=always
@@ -13,4 +10,4 @@ RestartSec=30
 Nice=10
 
 [Install]
-WantedBy=multi-user.target
+WantedBy=default.target

@@ -16,9 +16,10 @@ Pi 터미널 전용:
   lights_codes.json  등 이름 → 켜기·끄기 코드, T(µs), 층.  예: lights_codes.json.example
   lights_state.json  등마다 마지막 상태 {on, ts, src}
   lights_seen.jsonl  들은 신호 기록(최근 500줄)
-하드웨어: STX882(GPIO17 송신, 5 V) · SRX882S(GPIO27 수신, 3.3 V, CS→3.3 V). pigpiod 필요
-  (sudo apt install -y pigpio python3-pigpio && sudo systemctl enable --now pigpiod)
-pigpio가 없거나 LIGHTS_DRY=1 이면 보내지 않고 무엇을 보낼지만 출력(모의).
+  python3 lights/lights.py loop [코드hex]  송신기→수신기 자가 시험(둘 다 연결됐는지·파형 맞는지)
+하드웨어: STX882(GPIO17 송신, 5 V) · SRX882S(GPIO27 수신, 3.3 V, CS→3.3 V).
+GPIO 라이브러리: lgpio(데몬·sudo 불필요, gpio 그룹이면 됨 — Debian 13엔 pigpiod 패키지가 없음, 11-28) → 없으면 pigpio.
+둘 다 없거나 LIGHTS_DRY=1 이면 보내지 않고 무엇을 보낼지만 출력(모의).
 """
 import json, os, sys, time, subprocess
 
@@ -126,24 +127,65 @@ def set_state(names, on, src, now=None, path=None):
 
 # ---------- 하드웨어 ----------
 class Radio:
-    """pigpio 송수신. pigpio·데몬이 없으면 dry=True(보내지 않고 출력만)."""
+    """433 MHz 송수신. lgpio(우선) 또는 pigpio. 둘 다 안 되면 dry=True(보내지 않고 출력만)."""
+    GLITCH_US = 80                      # 이보다 짧은 잡음은 무시
+
     def __init__(self, dry=None):
-        self.pi, self.dry = None, bool(os.environ.get("LIGHTS_DRY")) if dry is None else dry
+        self.pi = self.h = None; self.backend = None
+        self.dry = bool(os.environ.get("LIGHTS_DRY")) if dry is None else dry
         if not self.dry:
             try:
-                import pigpio
-                self.pigpio = pigpio
-                self.pi = pigpio.pi()
-                if not self.pi.connected:
-                    self.pi, self.dry = None, True
-            except ImportError:
-                self.dry = True
-        self.why = "" if not self.dry else "(모의: pigpio/pigpiod 없음 또는 LIGHTS_DRY)"
+                import lgpio
+                self.lg = lgpio; self.h = lgpio.gpiochip_open(0); self.backend = "lgpio"
+            except Exception:
+                try:
+                    import pigpio
+                    self.pigpio = pigpio; self.pi = pigpio.pi()
+                    if self.pi.connected: self.backend = "pigpio"
+                    else: self.pi = None
+                except ImportError:
+                    pass
+            if not self.backend: self.dry = True
+        self.why = "" if not self.dry else "(모의: lgpio/pigpio 없음 또는 LIGHTS_DRY)"
 
+    def close(self):
+        try:
+            if self.h is not None: self.lg.gpiochip_close(self.h); self.h = None
+        except Exception:
+            pass
+
+    # ── 송신 ──
     def send(self, code, t_us):
-        pulses = ev.burst(code, t_us, REPEATS)
         if self.dry:
             return "모의 송신 %s T=%dµs" % (ev.fmt(code), t_us)
+        if self.backend == "lgpio":
+            self._send_lgpio(code, t_us)
+        else:
+            self._send_pigpio(code, t_us)
+        return "송신 %s" % ev.fmt(code)
+
+    def _send_lgpio(self, code, t_us):
+        lg, h, g = self.lg, self.h, TX_GPIO
+        lg.gpio_claim_output(h, g, 0)
+        sync = [(1, t_us), (0, ev.SYNC_LOW * t_us)]
+        fr = ev.frame(code, t_us)
+        P = lambda pl: [lg.pulse(1 if lvl else 0, 1, d) for lvl, d in pl]
+        try:
+            for k in range(BURSTS):
+                chunks = [P(sync)] + [P(fr)] * REPEATS          # 프레임 단위로 큐에 넣는다(큐 크기 한도)
+                for c in chunks:
+                    while lg.tx_room(h, g, lg.TX_WAVE) < 1:          # 큐 칸 = 파형 개수(펄스 수 아님, 최대 10)
+                        time.sleep(0.002)
+                    lg.tx_wave(h, g, c)
+                while lg.tx_busy(h, g, lg.TX_WAVE):
+                    time.sleep(0.005)
+                if k < BURSTS - 1:
+                    time.sleep(BURST_GAP)
+        finally:
+            lg.gpio_write(h, g, 0); lg.gpio_free(h, g)
+
+    def _send_pigpio(self, code, t_us):
+        pulses = ev.burst(code, t_us, REPEATS)
         pg, pi, g = self.pigpio, self.pi, TX_GPIO
         pi.set_mode(g, pg.OUTPUT); pi.write(g, 0)
         pi.wave_clear()
@@ -158,28 +200,56 @@ class Radio:
                     time.sleep(BURST_GAP)
         finally:
             pi.wave_delete(wid); pi.write(g, 0)
-        return "송신 %s" % ev.fmt(code)
 
-    def listen(self, seconds, on_code=None):
-        """seconds 동안 들은 확인된 코드 [(code, T)]. on_code(code, T)는 들을 때마다 호출. 모의면 빈 목록."""
-        if self.dry:
-            return []
+    # ── 수신 ──
+    def _start_rx(self, buf):
+        """수신 콜백 시작 → 정지 함수. buf에 (방금 끝난 구간 레벨, µs)를 쌓는다."""
+        last = [None]
+        if self.backend == "lgpio":
+            lg, h, g = self.lg, self.h, RX_GPIO
+            lg.gpio_claim_alert(h, g, lg.BOTH_EDGES, lg.SET_PULL_DOWN)
+            try:
+                lg.gpio_set_debounce_micros(h, g, self.GLITCH_US)
+            except Exception:
+                pass
+
+            def cb(chip, gpio, level, ts_ns):
+                if level > 1: return                        # 2 = 감시 시간 초과 알림
+                if last[0] is not None:
+                    buf.append((1 - level, (ts_ns - last[0]) // 1000))
+                last[0] = ts_ns
+            c = lg.callback(h, g, lg.BOTH_EDGES, cb)
+
+            def stop():
+                c.cancel()
+                try: lg.gpio_free(h, g)
+                except Exception: pass
+            return stop
         pg, pi, g = self.pigpio, self.pi, RX_GPIO
         pi.set_mode(g, pg.INPUT); pi.set_pull_up_down(g, pg.PUD_DOWN)
-        pi.set_glitch_filter(g, 80)          # 80 µs보다 짧은 잡음 무시
-        buf, last = [], [None]
+        pi.set_glitch_filter(g, self.GLITCH_US)
 
-        def cb(gpio, level, tick):
+        def cb2(gpio, level, tick):
             if last[0] is not None:
-                buf.append((1 - level, pg.tickDiff(last[0], tick)))   # 방금 끝난 구간의 레벨과 길이
+                buf.append((1 - level, pg.tickDiff(last[0], tick)))
             last[0] = tick
-        c = pi.callback(g, pg.EITHER_EDGE, cb)
+        c2 = pi.callback(g, pg.EITHER_EDGE, cb2)
+        return c2.cancel
+
+    def listen(self, seconds, on_code=None, stats=None):
+        """seconds 동안 들은 확인된 코드 [(code, T)]. on_code(code, T)는 들을 때마다 호출. 모의면 빈 목록.
+           stats(dict)를 주면 받은 변화 수(edges)를 채운다(잡음·배선 진단)."""
+        if self.dry:
+            return []
+        buf = []
+        stop = self._start_rx(buf)
         found, seen_at = [], {}
         end = time.time() + seconds if seconds else None
         try:
             while end is None or time.time() < end:
                 time.sleep(0.25)
                 chunk, buf[:] = buf[:], []
+                if stats is not None: stats["edges"] = stats.get("edges", 0) + len(chunk)
                 for code, t in ev.confirmed(ev.decode(chunk)):
                     if time.time() - seen_at.get(code, 0) < 1.0:   # 한 번 누름의 반복은 한 번으로
                         seen_at[code] = time.time(); continue
@@ -187,8 +257,30 @@ class Radio:
                     found.append((code, t))
                     if on_code: on_code(code, t)
         finally:
-            c.cancel()
+            stop()
         return found
+
+
+def loop_test(code=0x5A5A51, t_us=350, radio=None):
+    """송신기 → 수신기 자가 시험(같은 Pi). 반환 (ok, 문구)."""
+    import threading
+    radio = radio or Radio()
+    if radio.dry:
+        return False, "시험 불가 %s" % radio.why
+    st = {}
+    heard = []
+    th = threading.Thread(target=lambda: heard.extend(radio.listen(4.0, stats=st)))
+    th.start(); time.sleep(0.8)
+    t0 = time.time(); radio.send(code, t_us); dt = time.time() - t0
+    th.join()
+    got = [(c, t) for c, t in heard if c == code]
+    noise = st.get("edges", 0)
+    if got:
+        return True, "✅ 수신 확인 %s T=%dµs(보낸 T=%d) · 송신 %.2f초 · 4초간 변화 %d개" % (ev.fmt(code), got[0][1], t_us, dt, noise)
+    other = ", ".join(ev.fmt(c) for c, _ in heard) or "없음"
+    hint = ("수신기에서 변화가 거의 없음 → 수신기 배선(GPIO27·3.3V·GND·CS) 확인" if noise < 50 else
+            "수신기는 신호를 받는데 해독 실패 → 송신기 배선(GPIO17·5V·GND)·안테나 확인")
+    return False, "⚠ 못 받음 (다른 코드: %s) · 4초간 변화 %d개 — %s" % (other, noise, hint)
 
 
 # ---------- 동작 ----------
@@ -257,7 +349,7 @@ def record(name, cfg, radio=None, timeout=30, path=None):
     """리모컨 켜기 → 끄기 버튼 두 코드를 받아 저장."""
     radio = radio or Radio()
     if radio.dry:
-        return False, "기록하려면 Pi에 수신기(SRX882S)와 pigpiod가 필요합니다 %s" % radio.why
+        return False, "기록하려면 Pi에 수신기(SRX882S)와 lgpio가 필요합니다 %s" % radio.why
     got = []
     deadline = time.time() + timeout
     while len(got) < 2 and time.time() < deadline:
@@ -374,6 +466,10 @@ def main(argv):
         return 0
     if argv and argv[0] == "daemon":
         return daemon()
+    if argv and argv[0] == "loop":
+        code = int(argv[1], 16) if len(argv) > 1 else 0x5A5A51
+        ok, msg = loop_test(code)
+        print(msg); return 0 if ok else 1
     if argv and argv[0] in ("불", "light", "lights"):
         argv = argv[1:]
     ok, msg = run(argv)
