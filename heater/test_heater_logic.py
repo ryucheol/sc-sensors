@@ -8,6 +8,7 @@ CFG = json.load(open(os.path.join(os.path.dirname(os.path.dirname(os.path.realpa
 # 운영 설정에서 금요일 예열을 꺼도(11-14) 예열 로직 자체는 시험한다 → 테스트는 켠 상태로 고정
 CFG["preheat"]["enabled"] = True
 CFG["preheat"]["model"] = "1node"   # 이 파일은 1노드 로직을 시험(2노드는 test_preheat2)
+CFG["preheat"]["ua_w_per_k"] = 47     # 로직 시험용 고정값(운영 설정은 11-28 재피팅 뒤 60)
 FRI = datetime.datetime(2026, 11, 6)   # 금요일(weekday 4)
 assert FRI.weekday() == 4
 

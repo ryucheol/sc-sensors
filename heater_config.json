@@ -29,7 +29,7 @@
     "tau_hours": 12.0,
     "heat_tau_hours": 6.3,
     "heat_eff": 0.62,
-    "ua_w_per_k": 47,
+    "ua_w_per_k": 60,
     "heater_watts": 1740,
     "margin": 1.1,
     "max_lead_hours": 12,
