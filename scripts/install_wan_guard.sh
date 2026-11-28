@@ -27,6 +27,7 @@ e4:ae:e4:fa:ee:bd  5   30   # Tuya_Fan (클라우드 연결 유지·앱 예비 �
 d8:fc:92:29:b7:58  5   30   # Tuya_SecondaryHeater
 20:f1:b2:39:9f:af  5   30   # Tuya_AtticLight (Google Home 음성·앱 제어)
 20:f1:b2:39:9d:bf  5   30   # Tuya_SpareRelay (USB 5V 전원, 220V 전원 단자 고장)
+e8:b8:53:75:d5:c9  30  200  # TCL_TV (동글일 때 대시보드 캐스트 정도만, 유튜브는 한도에서 끊김)
 EOF
 fi
 chmod 0644 /etc/farmhut/wan_quota
